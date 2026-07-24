@@ -1,0 +1,5 @@
+-- v23: No Supabase schema update needed.
+-- This update changes React UI/logic only:
+-- 1) POS quotations can be converted from Documents into a POS sales invoice draft.
+-- 2) Saving the invoice marks the source quotation as converted and links it to the invoice.
+-- 3) Trade-in and Job customer suggestion dropdowns close when clicking elsewhere.

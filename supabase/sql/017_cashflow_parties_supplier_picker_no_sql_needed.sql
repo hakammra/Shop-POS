@@ -1,0 +1,3 @@
+-- v17: customer/supplier page restructure, cashflow page filters/manual movement,
+-- and purchase supplier/profile searchable picker.
+-- No database schema change is required if you already ran up to 016.

@@ -1,0 +1,3 @@
+-- v5 stock page filters update
+-- No database changes are required.
+-- This file is only a note so you know v5 does not need to be run in Supabase.

@@ -1,0 +1,2 @@
+-- v12 UI-only update.
+-- No Supabase SQL changes are needed for collapsible category trees or live search behavior.
