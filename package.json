@@ -11,10 +11,11 @@
   "dependencies": {
     "@supabase/supabase-js": "latest",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "react": "latest",
     "react-dom": "latest",
+    "vite": "latest",
     "xlsx": "latest"
-  },
-  "devDependencies": {}
+  }
 }
