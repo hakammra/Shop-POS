@@ -525,6 +525,12 @@ export default function App() {
   }, [activeStaff?.id, visibleNavItems.map((item) => item.key).join('|')]);
 
   const currentPage = visibleNavItems.find((item) => item.key === activePage) || visibleNavItems[0] || NAV_ITEMS[0];
+  const mobileQuickNav = visibleNavItems.filter((item) => ['pos', 'documents', 'cod_orders', 'jobs'].includes(item.key));
+
+  useEffect(() => {
+    document.body.classList.toggle('mobile-navigation-open', sidebarOpen);
+    return () => document.body.classList.remove('mobile-navigation-open');
+  }, [sidebarOpen]);
 
   if (loadingSession) return <FullScreenMessage title="Loading" message="Checking login session..." />;
   if (!session) return <AuthScreen />;
@@ -548,6 +554,7 @@ export default function App() {
 
   return (
     <div className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
+      <button type="button" className={`mobile-nav-scrim ${sidebarOpen ? 'visible' : ''}`} aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />
       <aside className={`${sidebarOpen ? 'sidebar open' : 'sidebar'} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="brand-block">
           <AppLogo className="brand-logo" />
@@ -557,6 +564,7 @@ export default function App() {
           </div>
         </div>
 
+        <button type="button" className="mobile-nav-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}>Close</button>
         <nav className="nav-list">
           {visibleNavItems.map((item, index) => (
             <div className="nav-entry" key={item.key}>
@@ -578,6 +586,7 @@ export default function App() {
 
       <main className="main-panel">
         <header className="topbar">
+          <button className="mobile-menu mobile-only-menu" aria-label="Open navigation" aria-expanded={sidebarOpen} title="Navigation" onClick={() => setSidebarOpen((current) => !current)}>Menu</button>
           <button className="mobile-menu always-show" title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>☰</button>
           <div>
             <h2>{currentPage.label}</h2>
@@ -605,6 +614,10 @@ export default function App() {
         {activePage === 'customers_suppliers' && <CustomersSuppliersPage />}
         {activePage === 'online_orders' && <OnlineOrdersPage />}
         {activePage === 'settings' && <SettingsPage activeStaff={activeStaff} appSettings={appSettings} autoLockMinutes={securityState.auto_lock_minutes || 5} onSettingsSaved={setAppSettings} onAutoLockChanged={(minutes) => setSecurityState((current) => ({ ...current, auto_lock_minutes: minutes }))} />}
+        <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
+          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span>{item.icon}</span><strong>{item.label === 'COD Orders' ? 'COD' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
+          <button type="button" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
+        </nav>
       </main>
     </div>
   );
@@ -800,6 +813,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const returnLookupRequestRef = useRef(0);
   const [posLeftPercent, setPosLeftPercent] = useState(() => Number(window.localStorage.getItem('computer_shop_pos_split_left_percent') || 52));
   const [isResizingPos, setIsResizingPos] = useState(false);
+  const [mobilePosPanel, setMobilePosPanel] = useState('products');
 
   const activeBill = bills.find((bill) => bill.id === activeBillId) || bills[0] || emptyBill();
   const selectedCustomer = customers.find((row) => row.id === activeBill.customerId);
@@ -1112,6 +1126,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     if (added) {
       setSelectedPosProduct(null);
       setPosProductDraft({ qty: 1, unitPrice: 0 });
+      setMobilePosPanel('bill');
     }
   }
 
@@ -1162,6 +1177,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     });
     updateActiveBill({ items: [...activeBill.items, ...nextItems], selectedItemId: nextItems[0]?.id || '' });
     setAssemblyPreview(null);
+    setMobilePosPanel('bill');
     setMessage(`${assembly.name} added with ${components.length} separate component lines and ${money(assemblyDiscountTotal)} allocated discount.`);
   }
 
@@ -1708,12 +1724,17 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         </form>
       )}
 
+      <div className="pos-mobile-panel-tabs" role="tablist" aria-label="POS workspace">
+        <button type="button" role="tab" aria-selected={mobilePosPanel === 'products'} className={mobilePosPanel === 'products' ? 'active' : ''} onClick={() => setMobilePosPanel('products')}><span>Products</span><small>Find and add items</small></button>
+        <button type="button" role="tab" aria-selected={mobilePosPanel === 'bill'} className={mobilePosPanel === 'bill' ? 'active' : ''} onClick={() => setMobilePosPanel('bill')}><span>Current Bill</span><small>{activeBill.items.length} item{activeBill.items.length === 1 ? '' : 's'} Â· {money(total)}</small></button>
+      </div>
+
       <div
         ref={posGridRef}
         className="pos-grid pos-grid-v16 resizable-pos-grid"
         style={{ '--pos-left': `${posLeftPercent}%`, '--pos-right': `${100 - posLeftPercent}%` }}
       >
-        <div className="panel-card bill-panel left-bill-panel">
+        <div className={`panel-card bill-panel left-bill-panel ${mobilePosPanel === 'bill' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
           <div className="pos-line-toolbar">
             <button className="secondary-button" onClick={() => removeItem()}>Delete</button>
           </div>
@@ -1781,7 +1802,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <span />
         </button>
 
-        <div className="panel-card product-search-panel right-product-panel pos-category-panel">
+        <div className={`panel-card product-search-panel right-product-panel pos-category-panel ${mobilePosPanel === 'products' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
           <div className="pos-search-bar">
             <input className="pos-search-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products by code, name, or barcode" autoFocus />
             <span>⌕</span>
