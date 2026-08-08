@@ -3,23 +3,88 @@ import { supabase } from './lib/supabaseClient';
 import * as XLSX from 'xlsx';
 
 const NAV_ITEMS = [
-  { key: 'pos', label: 'POS', icon: '▦', group: 'Checkout' },
-  { key: 'dashboard', label: 'Dashboard', icon: '▤', group: 'Checkout' },
-  { key: 'cod_orders', label: 'COD Orders', icon: '\uD83D\uDE9A', group: 'Orders & Service' },
-  { key: 'online_orders', label: 'Online Orders', icon: '◉', group: 'Orders & Service' },
-  { key: 'jobs', label: 'Jobs & Repairs', icon: '⌁', group: 'Orders & Service' },
-  { key: 'documents', label: 'Documents', icon: '▰', group: 'Records & Stock' },
-  { key: 'customers_suppliers', label: 'Customers & Suppliers', icon: '♟', group: 'Records & Stock' },
-  { key: 'products', label: 'Products', icon: '◇', group: 'Records & Stock' },
-  { key: 'stock', label: 'Stock', icon: '▣', group: 'Records & Stock' },
-  { key: 'warranty', label: 'Warranty', icon: '◆', group: 'Records & Stock' },
-  { key: 'cashflow', label: 'Cashflow', icon: '↕', group: 'Finance & Reports' },
-  { key: 'reports', label: 'Reporting', icon: '▥', group: 'Finance & Reports' },
-  { key: 'payment_types', label: 'Payment Types', icon: '▭', group: 'Settings' },
-  { key: 'users_security', label: 'Users & Security', icon: '⚿', group: 'Settings' },
-  { key: 'my_company', label: 'My Company', icon: '▦', group: 'Settings' },
-  { key: 'backups', label: 'Backups & Restore', icon: '↺', group: 'Settings' }
+  { key: 'pos', label: 'POS', icon: '▦', group: 'Checkout', permission: 'pos_sales' },
+  { key: 'dashboard', label: 'Dashboard', icon: '▤', group: 'Checkout', permission: 'view_dashboard' },
+  { key: 'cod_orders', label: 'COD Orders', icon: '\uD83D\uDE9A', group: 'Orders & Service', permission: 'manage_cod_orders' },
+  { key: 'online_orders', label: 'Online Orders', icon: '◉', group: 'Orders & Service', permission: 'manage_online_orders' },
+  { key: 'jobs', label: 'Jobs & Repairs', icon: '⌁', group: 'Orders & Service', permission: 'manage_jobs' },
+  { key: 'documents', label: 'Documents', icon: '▰', group: 'Records & Stock', permission: 'view_documents' },
+  { key: 'customers_suppliers', label: 'Customers & Suppliers', icon: '♟', group: 'Records & Stock', permission: 'manage_parties' },
+  { key: 'products', label: 'Products', icon: '◇', group: 'Records & Stock', permission: 'manage_products' },
+  { key: 'stock', label: 'Stock', icon: '▣', group: 'Records & Stock', permission: 'view_stock' },
+  { key: 'warranty', label: 'Warranty', icon: '◆', group: 'Records & Stock', permission: 'manage_warranty' },
+  { key: 'cashflow', label: 'Cashflow', icon: '↕', group: 'Finance & Reports', permission: 'manage_cashflow' },
+  { key: 'reports', label: 'Reporting', icon: '▥', group: 'Finance & Reports', permission: 'view_reports' },
+  { key: 'accounting', label: 'Accounting', icon: 'Σ', group: 'Finance & Reports', adminOnly: true },
+  { key: 'settings', label: 'Settings', icon: '⚙', group: 'Settings', adminOnly: true }
 ];
+
+const STAFF_PERMISSION_GROUPS = [
+  {
+    label: 'Checkout',
+    items: [
+      { key: 'pos_sales', label: 'Use POS and save sales', default: true },
+      { key: 'change_sale_price', label: 'Override item selling prices', default: false },
+      { key: 'apply_discounts', label: 'Apply bill and item discounts', default: false },
+      { key: 'process_returns', label: 'Process returns and exchanges', default: false },
+      { key: 'void_sales', label: 'Void open bills', default: true },
+      { key: 'create_quotes', label: 'Create quotations', default: true },
+      { key: 'view_dashboard', label: 'View dashboard totals', default: false }
+    ]
+  },
+  {
+    label: 'Orders and service',
+    items: [
+      { key: 'manage_cod_orders', label: 'Manage COD orders', default: true },
+      { key: 'manage_online_orders', label: 'Manage online orders', default: true },
+      { key: 'manage_jobs', label: 'Manage jobs and repairs', default: true },
+      { key: 'manage_warranty', label: 'Manage warranty claims', default: true }
+    ]
+  },
+  {
+    label: 'Records and inventory',
+    items: [
+      { key: 'view_documents', label: 'View and print documents', default: true },
+      { key: 'manage_inventory_documents', label: 'Create/edit purchases, transit, trade-ins and adjustments', default: false },
+      { key: 'delete_documents', label: 'Delete supported documents', default: false },
+      { key: 'manage_parties', label: 'Manage customers, suppliers and their payments', default: true },
+      { key: 'manage_products', label: 'Add, edit and deactivate products', default: false },
+      { key: 'view_stock', label: 'View stock quantities and values', default: true }
+    ]
+  },
+  {
+    label: 'Finance',
+    items: [
+      { key: 'manage_cashflow', label: 'View and add cashflow entries', default: false },
+      { key: 'view_reports', label: 'View profit, payment and sales reports', default: false }
+    ]
+  }
+];
+
+const DEFAULT_STAFF_PERMISSIONS = Object.fromEntries(
+  STAFF_PERMISSION_GROUPS.flatMap((group) => group.items).map((permission) => [permission.key, permission.default])
+);
+const POS_DEVICE_TOKEN_KEY = 'computer_shop_trusted_device_token_v38';
+const APP_LOGO_URL = '/gslogo.jpeg';
+
+function getOrCreateDeviceToken() {
+  let token = window.localStorage.getItem(POS_DEVICE_TOKEN_KEY);
+  if (!token) {
+    token = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    window.localStorage.setItem(POS_DEVICE_TOKEN_KEY, token);
+  }
+  return token;
+}
+
+function browserDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || 'Computer';
+  const browser = /Edg\//.test(navigator.userAgent) ? 'Edge' : /Chrome\//.test(navigator.userAgent) ? 'Chrome' : /Firefox\//.test(navigator.userAgent) ? 'Firefox' : 'Browser';
+  return `${platform} • ${browser}`;
+}
+
+function staffCan(staff, permission) {
+  return !!staff && (staff.role === 'admin' || staff.permissions?.[permission] === true);
+}
 
 const DOCUMENT_TYPES = [
   { value: '', label: 'All document types' },
@@ -35,6 +100,7 @@ const DOCUMENT_TYPES = [
   { value: 'supplier_payment', label: 'Supplier Payment' },
   { value: 'expense', label: 'Expense' },
   { value: 'other_income', label: 'Other Income' },
+  { value: 'account_transfer', label: 'Account Transfer' },
   { value: 'online_order', label: 'Online Order' },
   { value: 'cod_order', label: 'COD Order' }
 ];
@@ -47,7 +113,7 @@ const DOCUMENT_QUICK_FILTERS = [
   { value: 'quotation', label: 'Quotes' }
 ];
 
-const PAYMENT_OPTIONS = ['Cash', 'Card', 'Bank', 'Credit'];
+const PAYMENT_OPTIONS = ['Cash', 'Card', 'Bank 1', 'Bank 2', 'Credit'];
 
 const WARRANTY_CLAIM_STATUSES = [
   { value: 'received', label: 'Received' },
@@ -76,6 +142,58 @@ const STOCK_FILTERS = [
 const DOCUMENT_DRAFT_TABS_KEY = 'computer_shop_document_draft_tabs_v18';
 const POS_DRAFTS_KEY = 'computer_shop_pos_bill_drafts_v16';
 const QUOTE_TO_POS_KEY = 'computer_shop_quote_to_pos_invoice_v23';
+const REALTIME_SYNC_EVENT = 'shop-pos:database-change';
+const REALTIME_TABLES = [
+  'documents',
+  'document_items',
+  'customers',
+  'suppliers',
+  'products',
+  'stock_balances',
+  'stock_movements',
+  'categories',
+  'brands',
+  'payment_methods',
+  'cashflow_entries',
+  'company_settings',
+  'app_settings',
+  'product_assemblies',
+  'product_assembly_items',
+  'warranty_records',
+  'warranty_claims',
+  'warranty_claim_events',
+  'accounting_accounts',
+  'accounting_journal_entries',
+  'accounting_journal_lines',
+  'accounting_opening_balances',
+  'accounting_settings'
+];
+
+function useRealtimeRefresh(tables, refresh, debounceMs = 280) {
+  const refreshRef = useRef(refresh);
+  const tableKey = tables.join('|');
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
+    const watchedTables = new Set(tableKey.split('|').filter(Boolean));
+    let timeoutId = 0;
+    const handleDatabaseChange = (event) => {
+      const detail = event.detail || {};
+      if (!watchedTables.has(detail.table)) return;
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => refreshRef.current?.(detail), debounceMs);
+    };
+
+    window.addEventListener(REALTIME_SYNC_EVENT, handleDatabaseChange);
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener(REALTIME_SYNC_EVENT, handleDatabaseChange);
+    };
+  }, [tableKey, debounceMs]);
+}
 
 const emptyBill = (name = 'Bill 1') => ({
   id: crypto.randomUUID(),
@@ -140,8 +258,17 @@ const DEFAULT_COMPANY_SETTINGS = {
   show_payment_movements: false
 };
 
+const DEFAULT_APP_SETTINGS = {
+  id: true,
+  allow_negative_pos_stock: false,
+  show_pos_stock_badges: true,
+  confirm_pos_sale: false,
+  default_payment_method_id: '',
+  updated_at: null
+};
+
 function companyLogoUrl(settings) {
-  if (!settings?.logo_path) return '';
+  if (!settings?.logo_path) return APP_LOGO_URL;
   const publicUrl = supabase.storage.from('company-assets').getPublicUrl(settings.logo_path).data.publicUrl || '';
   return settings.updated_at ? `${publicUrl}?v=${encodeURIComponent(settings.updated_at)}` : publicUrl;
 }
@@ -150,6 +277,12 @@ async function fetchCompanySettings() {
   const { data, error } = await supabase.from('company_settings').select('*').eq('id', true).maybeSingle();
   if (error) throw error;
   return { ...DEFAULT_COMPANY_SETTINGS, ...(data || {}) };
+}
+
+async function fetchAppSettings() {
+  const { data, error } = await supabase.rpc('get_app_settings_v41');
+  if (error) throw error;
+  return { ...DEFAULT_APP_SETTINGS, ...(data || {}), default_payment_method_id: data?.default_payment_method_id || '' };
 }
 
 function fmtDate(value) {
@@ -184,6 +317,10 @@ function InfoTip({ text }) {
       <span className="info-tip-content" role="tooltip">{text}</span>
     </span>
   );
+}
+
+function AppLogo({ className = '' }) {
+  return <span className={`${className} app-logo-mark`.trim()}><img src={APP_LOGO_URL} alt="Computer Shop logo" /></span>;
 }
 
 function QuickCustomerModal({ initialName = '', alsoSupplier = false, onClose, onCreated }) {
@@ -233,6 +370,13 @@ export default function App() {
   const [loadingSession, setLoadingSession] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [securityState, setSecurityState] = useState(null);
+  const [securityLoading, setSecurityLoading] = useState(false);
+  const [securityError, setSecurityError] = useState('');
+  const [activeStaff, setActiveStaff] = useState(null);
+  const [realtimeStatus, setRealtimeStatus] = useState('paused');
+  const [appSettings, setAppSettings] = useState(DEFAULT_APP_SETTINGS);
+  const deviceToken = useMemo(() => getOrCreateDeviceToken(), []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -247,6 +391,44 @@ export default function App() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  async function loadSecurityState() {
+    if (!session?.user?.id) return;
+    setSecurityLoading(true);
+    setSecurityError('');
+    const { data, error } = await supabase.rpc('get_pos_security_state_v38', { p_device_token: deviceToken });
+    setSecurityLoading(false);
+    if (error) {
+      setSecurityError(`${error.message}. Run Supabase migrations 038 and 039.`);
+      setSecurityState(null);
+      setActiveStaff(null);
+      return;
+    }
+    setSecurityState(data || {});
+    setActiveStaff(data?.active_staff || null);
+  }
+
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setSecurityState(null);
+      setActiveStaff(null);
+      setSecurityError('');
+      return;
+    }
+    loadSecurityState();
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    if (!session?.user?.id) { setAppSettings(DEFAULT_APP_SETTINGS); return; }
+    fetchAppSettings().then(setAppSettings).catch(() => setAppSettings(DEFAULT_APP_SETTINGS));
+  }, [session?.user?.id]);
+
+  useRealtimeRefresh(['app_settings'], () => {
+    if (session?.user?.id) {
+      fetchAppSettings().then(setAppSettings).catch(() => {});
+      loadSecurityState();
+    }
+  });
+
   useEffect(() => {
     if (!session?.user?.id) return;
     // Fallback for projects where pg_cron is unavailable. This RPC is
@@ -254,16 +436,121 @@ export default function App() {
     supabase.rpc('ensure_daily_app_backup_v31').then(() => {});
   }, [session?.user?.id]);
 
-  const currentPage = NAV_ITEMS.find((item) => item.key === activePage) || NAV_ITEMS[0];
+  async function lockPos() {
+    await supabase.rpc('lock_pos_staff_session_v38');
+    setActiveStaff(null);
+    setSecurityState((current) => ({ ...(current || {}), active_staff: null }));
+  }
+
+  async function logoutDevice() {
+    await supabase.rpc('lock_pos_staff_session_v38');
+    await supabase.auth.signOut();
+  }
+
+  useEffect(() => {
+    if (!activeStaff?.id) return undefined;
+    let lastActivityAt = Date.now();
+    let lastServerTouchAt = Date.now();
+    let lockStarted = false;
+    const autoLockMs = Math.max(Number(securityState?.auto_lock_minutes || 5), 1) * 60 * 1000;
+
+    const registerActivity = () => {
+      lastActivityAt = Date.now();
+      if (Date.now() - lastServerTouchAt >= 45000) {
+        lastServerTouchAt = Date.now();
+        supabase.rpc('touch_pos_staff_session_v38').then(({ error }) => {
+          if (error && !lockStarted) {
+            lockStarted = true;
+            setActiveStaff(null);
+            setSecurityState((current) => ({ ...(current || {}), active_staff: null }));
+          }
+        });
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      if (!lockStarted && Date.now() - lastActivityAt >= autoLockMs) {
+        lockStarted = true;
+        lockPos();
+      }
+    }, 1000);
+    window.addEventListener('pointerdown', registerActivity, { passive: true });
+    window.addEventListener('keydown', registerActivity);
+    window.addEventListener('touchstart', registerActivity, { passive: true });
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('pointerdown', registerActivity);
+      window.removeEventListener('keydown', registerActivity);
+      window.removeEventListener('touchstart', registerActivity);
+    };
+  }, [activeStaff?.id, securityState?.auto_lock_minutes]);
+
+  useEffect(() => {
+    if (!session?.user?.id || !activeStaff?.id) {
+      setRealtimeStatus('paused');
+      return undefined;
+    }
+
+    setRealtimeStatus('connecting');
+    const channel = supabase.channel(`shop-pos-live-${crypto.randomUUID()}`);
+    REALTIME_TABLES.forEach((table) => {
+      channel.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
+        window.dispatchEvent(new CustomEvent(REALTIME_SYNC_EVENT, {
+          detail: {
+            table,
+            eventType: payload.eventType,
+            committedAt: payload.commit_timestamp || new Date().toISOString()
+          }
+        }));
+      });
+    });
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') setRealtimeStatus('live');
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setRealtimeStatus('error');
+      else if (status === 'CLOSED') setRealtimeStatus('paused');
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session?.user?.id, activeStaff?.id]);
+
+  const visibleNavItems = useMemo(() => NAV_ITEMS.filter((item) => (
+    item.adminOnly ? activeStaff?.role === 'admin' : staffCan(activeStaff, item.permission)
+  )), [activeStaff]);
+
+  useEffect(() => {
+    if (!activeStaff || !visibleNavItems.length) return;
+    if (!visibleNavItems.some((item) => item.key === activePage)) setActivePage(visibleNavItems[0].key);
+  }, [activeStaff?.id, visibleNavItems.map((item) => item.key).join('|')]);
+
+  const currentPage = visibleNavItems.find((item) => item.key === activePage) || visibleNavItems[0] || NAV_ITEMS[0];
 
   if (loadingSession) return <FullScreenMessage title="Loading" message="Checking login session..." />;
   if (!session) return <AuthScreen />;
+  if (securityLoading && !securityState) return <FullScreenMessage title="Security" message="Checking this device..." />;
+  if (securityError) return <SecurityLoadError message={securityError} onRetry={loadSecurityState} onLogout={() => supabase.auth.signOut()} />;
+  if (!securityState?.device_trusted || !activeStaff) {
+    return (
+      <PosSecurityGate
+        session={session}
+        state={securityState || {}}
+        deviceToken={deviceToken}
+        onRefresh={loadSecurityState}
+        onUnlocked={(staff) => {
+          setActiveStaff(staff);
+          setSecurityState((current) => ({ ...(current || {}), active_staff: staff }));
+        }}
+        onLogout={() => supabase.auth.signOut()}
+      />
+    );
+  }
 
   return (
     <div className={sidebarCollapsed ? "app-shell sidebar-collapsed" : "app-shell"}>
       <aside className={`${sidebarOpen ? 'sidebar open' : 'sidebar'} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="brand-block">
-          <div className="brand-logo">CS</div>
+          <AppLogo className="brand-logo" />
           <div>
             <h1>Computer Shop</h1>
             <p>LKR • No Tax</p>
@@ -271,9 +558,9 @@ export default function App() {
         </div>
 
         <nav className="nav-list">
-          {NAV_ITEMS.map((item, index) => (
+          {visibleNavItems.map((item, index) => (
             <div className="nav-entry" key={item.key}>
-              {(index === 0 || NAV_ITEMS[index - 1].group !== item.group) && <div className="nav-section-label">{item.group}</div>}
+              {(index === 0 || visibleNavItems[index - 1].group !== item.group) && <div className="nav-section-label">{item.group}</div>}
               <button
                 className={activePage === item.key ? 'nav-item active' : 'nav-item'}
                 onClick={() => {
@@ -294,16 +581,19 @@ export default function App() {
           <button className="mobile-menu always-show" title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>☰</button>
           <div>
             <h2>{currentPage.label}</h2>
-            <p>{session.user.email}</p>
+            <p>Trusted device</p>
           </div>
-          <button className="secondary-button" onClick={() => supabase.auth.signOut()}>
-            Logout
-          </button>
+          <div className="topbar-session-actions">
+            <div className={`realtime-sync-badge ${realtimeStatus}`} title="Automatically refreshes shared changes from other devices"><span className="realtime-sync-dot" /><strong>{realtimeStatus === 'live' ? 'Live sync' : realtimeStatus === 'connecting' ? 'Connecting' : realtimeStatus === 'error' ? 'Sync retrying' : 'Sync paused'}</strong></div>
+            <div className="active-operator-badge"><span className="operator-dot" /><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
+            <button className="secondary-button" onClick={lockPos}>Lock / Switch</button>
+            <button className="secondary-button" onClick={logoutDevice}>Logout Device</button>
+          </div>
         </header>
 
-        {activePage === 'pos' && <POSScreen />}
+        {activePage === 'pos' && <POSScreen permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} appSettings={appSettings} />}
         {activePage === 'dashboard' && <Dashboard />}
-        {activePage === 'documents' && <DocumentsPage onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
+        {activePage === 'documents' && <DocumentsPage permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
         {activePage === 'cod_orders' && <CodOrdersPage />}
         {activePage === 'jobs' && <JobsPage />}
         {activePage === 'products' && <ProductsPage />}
@@ -311,21 +601,125 @@ export default function App() {
         {activePage === 'warranty' && <WarrantyPage />}
         {activePage === 'reports' && <ReportsPage />}
         {activePage === 'cashflow' && <CashflowPage />}
+        {activePage === 'accounting' && <AccountingPage activeStaff={activeStaff} />}
         {activePage === 'customers_suppliers' && <CustomersSuppliersPage />}
         {activePage === 'online_orders' && <OnlineOrdersPage />}
-        {activePage === 'payment_types' && <PaymentTypesPage />}
-        {activePage === 'users_security' && <UsersSecurityPage />}
-        {activePage === 'my_company' && <MyCompanyPage />}
-        {activePage === 'backups' && <BackupsPage />}
+        {activePage === 'settings' && <SettingsPage activeStaff={activeStaff} appSettings={appSettings} autoLockMinutes={securityState.auto_lock_minutes || 5} onSettingsSaved={setAppSettings} onAutoLockChanged={(minutes) => setSecurityState((current) => ({ ...current, auto_lock_minutes: minutes }))} />}
       </main>
     </div>
+  );
+}
+
+function SecurityLoadError({ message, onRetry, onLogout }) {
+  return (
+    <div className="security-screen">
+      <div className="security-card">
+        <div className="security-mark">!</div>
+        <h1>Security setup needed</h1>
+        <p>{message}</p>
+        <div className="security-actions"><button className="primary-button" onClick={onRetry}>Try Again</button><button className="secondary-button" onClick={onLogout}>Logout</button></div>
+      </div>
+    </div>
+  );
+}
+
+function PosSecurityGate({ session, state, deviceToken, onRefresh, onUnlocked, onLogout }) {
+  const [staffRows, setStaffRows] = useState([]);
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [fullName, setFullName] = useState(session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || 'Owner');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const deviceName = browserDeviceName();
+
+  useEffect(() => {
+    if (!state.device_trusted) return;
+    supabase.rpc('list_pos_unlock_staff_v38', { p_device_token: deviceToken }).then(({ data, error: listError }) => {
+      if (listError) setError(listError.message);
+      else {
+        setStaffRows(data || []);
+        setSelectedStaffId((current) => current || data?.[0]?.id || '');
+      }
+    });
+  }, [state.device_trusted, deviceToken]);
+
+  async function completeInitialSetup(event) {
+    event.preventDefault();
+    if (pin !== confirmPin) { setError('PIN confirmation does not match.'); return; }
+    setBusy(true); setError('');
+    const { error: setupError } = await supabase.rpc('bootstrap_pos_security_v38', {
+      p_full_name: fullName.trim(), p_pin: pin, p_device_token: deviceToken, p_device_name: deviceName
+    });
+    setBusy(false);
+    if (setupError) setError(setupError.message); else { setPin(''); setConfirmPin(''); await onRefresh(); }
+  }
+
+  async function trustDevice(event) {
+    event.preventDefault();
+    if (state.admin_pin_required && pin !== confirmPin) { setError('PIN confirmation does not match.'); return; }
+    setBusy(true); setError('');
+    const { error: trustError } = await supabase.rpc('trust_current_pos_device_v38', {
+      p_device_token: deviceToken, p_device_name: deviceName, p_admin_pin: state.admin_pin_required ? pin : null
+    });
+    setBusy(false);
+    if (trustError) setError(trustError.message); else { setPin(''); setConfirmPin(''); await onRefresh(); }
+  }
+
+  async function unlock(event) {
+    event.preventDefault();
+    if (!selectedStaffId) { setError('Select a user.'); return; }
+    setBusy(true); setError('');
+    const { data, error: unlockError } = await supabase.rpc('unlock_pos_staff_v38', {
+      p_device_token: deviceToken, p_staff_id: selectedStaffId, p_pin: pin
+    });
+    setBusy(false);
+    if (unlockError) { setError(unlockError.message); setPin(''); }
+    else onUnlocked(data);
+  }
+
+  if (state.setup_required) {
+    return (
+      <div className="security-screen"><form className="security-card" onSubmit={completeInitialSetup}>
+        <AppLogo className="security-mark security-logo" /><h1>Set up the owner</h1><p>This email account will authorize trusted devices. Create your personal 4-digit admin PIN.</p>
+        {error && <div className="error-box">{error}</div>}
+        <label>Admin name<input value={fullName} onChange={(e) => setFullName(e.target.value)} required /></label>
+        <div className="security-pin-pair"><label>4-digit PIN<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} required /></label><label>Confirm PIN<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))} required /></label></div>
+        <button className="primary-button security-primary" disabled={busy}>{busy ? 'Setting up...' : 'Set Up Trusted Device'}</button>
+        <button type="button" className="link-button" onClick={onLogout}>Use another email login</button>
+      </form></div>
+    );
+  }
+
+  if (!state.device_trusted) {
+    return (
+      <div className="security-screen"><form className="security-card" onSubmit={trustDevice}>
+        <div className="security-mark">✓</div><h1>Trust this device</h1><p>{deviceName}</p><small>After this one-time email login, active users can unlock this browser using their personal PIN.</small>
+        {error && <div className="error-box">{error}</div>}
+        {!state.can_trust_device && <div className="error-box">This email is not linked to an active admin. Sign in with the owner email that completed security setup.</div>}
+        {state.admin_pin_required && <div className="security-pin-pair"><label>New 4-digit admin PIN<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} required /></label><label>Confirm PIN<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={confirmPin} onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))} required /></label></div>}
+        <button className="primary-button security-primary" disabled={busy || !state.can_trust_device}>{busy ? 'Please wait...' : 'Trust This Device'}</button>
+        <button type="button" className="link-button" onClick={onLogout}>Logout</button>
+      </form></div>
+    );
+  }
+
+  return (
+    <div className="security-screen"><form className="security-card unlock-card" onSubmit={unlock}>
+      <div className="security-lock-heading"><AppLogo className="security-mark security-logo" /><div><h1>Who is using the POS?</h1><p>{state.device_name || deviceName} · Locks after {state.auto_lock_minutes || 5} minutes inactive</p></div></div>
+      {error && <div className="error-box">{error}</div>}
+      <div className="staff-unlock-grid">{staffRows.map((staff) => <button type="button" key={staff.id} className={selectedStaffId === staff.id ? 'staff-unlock-option selected' : 'staff-unlock-option'} onClick={() => { setSelectedStaffId(staff.id); setPin(''); setError(''); }}><span>{staff.full_name.slice(0, 1).toUpperCase()}</span><strong>{staff.full_name}</strong><small>{staff.role === 'admin' ? 'Admin' : 'Staff'}</small></button>)}</div>
+      {!staffRows.length && <div className="muted-box">No users with PINs are available. Unlock with the admin after setting a PIN.</div>}
+      <label className="unlock-pin-label">4-digit PIN<input autoFocus type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="••••" required /></label>
+      <button className="primary-button security-primary" disabled={busy || !selectedStaffId || pin.length !== 4}>{busy ? 'Checking...' : 'Unlock POS'}</button>
+      <button type="button" className="link-button" onClick={onLogout}>Logout trusted device</button>
+    </form></div>
   );
 }
 
 function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState('login');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -334,21 +728,18 @@ function AuthScreen() {
     setBusy(true);
     setMessage('');
 
-    const result =
-      mode === 'login'
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+    const result = await supabase.auth.signInWithPassword({ email, password });
 
     if (result.error) setMessage(result.error.message);
-    else if (mode === 'signup') setMessage('Account created. Check email confirmation settings in Supabase if login does not happen immediately.');
     setBusy(false);
   }
 
   return (
     <div className="auth-screen">
       <form className="auth-card" onSubmit={handleSubmit}>
+        <AppLogo className="auth-logo" />
         <h1>Computer Shop POS</h1>
-        <p>Login to continue.</p>
+        <p>Use the owner email and password to authorize this browser. Daily users will unlock it with their PIN.</p>
 
         <label>Email</label>
         <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
@@ -359,11 +750,7 @@ function AuthScreen() {
         {message && <div className="notice">{message}</div>}
 
         <button className="primary-button" disabled={busy}>
-          {busy ? 'Please wait...' : mode === 'login' ? 'Login' : 'Sign up'}
-        </button>
-
-        <button type="button" className="link-button" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-          {mode === 'login' ? 'Need a test account? Sign up' : 'Already have account? Login'}
+          {busy ? 'Please wait...' : 'Login'}
         </button>
       </form>
     </div>
@@ -373,7 +760,9 @@ function AuthScreen() {
 
 
 
-function POSScreen() {
+function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_APP_SETTINGS } = {}) {
+  const can = (permission) => isAdmin || permissions?.[permission] === true;
+  const allowNegativeStock = appSettings.allow_negative_pos_stock === true;
   const savedBills = safeReadJson(POS_DRAFTS_KEY, null);
   const initialBills = Array.isArray(savedBills?.bills) && savedBills.bills.length ? savedBills.bills : [emptyBill()];
   const [bills, setBills] = useState(initialBills);
@@ -414,10 +803,16 @@ function POSScreen() {
 
   const activeBill = bills.find((bill) => bill.id === activeBillId) || bills[0] || emptyBill();
   const selectedCustomer = customers.find((row) => row.id === activeBill.customerId);
-  const visiblePaymentMethods = paymentMethods.filter((method) => (
-    !method.name.toLowerCase().includes('store credit')
-    && (selectedCustomer || method.is_paid_method !== false)
-  ));
+  const visiblePaymentMethods = paymentMethods
+    .filter((method) => (
+      !method.name.toLowerCase().includes('store credit')
+      && (selectedCustomer || method.is_paid_method !== false)
+    ))
+    .sort((a, b) => {
+      if (a.id === appSettings.default_payment_method_id) return -1;
+      if (b.id === appSettings.default_payment_method_id) return 1;
+      return a.name.localeCompare(b.name);
+    });
   const currentOutstanding = selectedCustomer ? numberValue(selectedCustomer.due_balance) - numberValue(selectedCustomer.store_credit_balance) : 0;
   const paymentLines = Array.isArray(activeBill.paymentLines) ? activeBill.paymentLines : [];
 
@@ -467,6 +862,18 @@ function POSScreen() {
     loadPaymentMethods();
     fetchCompanySettings().then(setCompanySettings).catch(() => {});
   }, []);
+
+  useRealtimeRefresh(['products', 'stock_balances', 'stock_movements', 'categories', 'product_assemblies', 'product_assembly_items'], () => {
+    loadCategories();
+    loadProducts();
+    loadPosAssemblies();
+  });
+  useRealtimeRefresh(['documents', 'document_items', 'customers', 'cashflow_entries'], () => {
+    loadCustomers();
+    if (showReturnLookup) loadReturnInvoiceOptions();
+  });
+  useRealtimeRefresh(['payment_methods'], loadPaymentMethods);
+  useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
 
   useEffect(() => {
     const rawQuote = window.localStorage.getItem(QUOTE_TO_POS_KEY);
@@ -626,11 +1033,11 @@ function POSScreen() {
 
   function openPosProductPicker(product) {
     const trackInventory = product.track_inventory !== false;
-    const availableQty = Math.max(Number(product.available_qty || 0), 0);
+    const availableQty = Number(product.available_qty || 0);
     const alreadyInCart = activeBill.items
       .filter((item) => item.product_id === product.product_id && !item.isReturn && Number(item.qty || 0) > 0)
       .reduce((sum, item) => sum + Number(item.qty || 0), 0);
-    if (trackInventory && availableQty - alreadyInCart <= 0) {
+    if (!allowNegativeStock && trackInventory && availableQty - alreadyInCart <= 0) {
       setMessage(`${product.item_code || product.name}: maximum available quantity is ${availableQty}.`);
       return;
     }
@@ -641,21 +1048,21 @@ function POSScreen() {
 
   function addProduct(product, requestedQty = 1, requestedUnitPrice = null) {
     const trackInventory = product.track_inventory !== false;
-    const availableQty = Math.max(Number(product.available_qty || 0), 0);
-    if (trackInventory && availableQty <= 0) {
+    const availableQty = Number(product.available_qty || 0);
+    if (!allowNegativeStock && trackInventory && availableQty <= 0) {
       setMessage(`${product.item_code || product.name} has no available stock.`);
       return;
     }
     const alreadyInCart = activeBill.items
       .filter((item) => item.product_id === product.product_id && !item.isReturn && Number(item.qty || 0) > 0)
       .reduce((sum, item) => sum + Number(item.qty || 0), 0);
-    const remainingQty = trackInventory ? Math.max(availableQty - alreadyInCart, 0) : Number.POSITIVE_INFINITY;
-    if (trackInventory && remainingQty <= 0) {
+    const remainingQty = trackInventory && !allowNegativeStock ? Math.max(availableQty - alreadyInCart, 0) : Number.POSITIVE_INFINITY;
+    if (!allowNegativeStock && trackInventory && remainingQty <= 0) {
       setMessage(`${product.item_code || product.name}: maximum available quantity is ${availableQty}.`);
       return false;
     }
     const cleanRequestedQty = Math.max(Number(requestedQty || 0), 0);
-    const qty = trackInventory ? Math.min(cleanRequestedQty, remainingQty) : cleanRequestedQty;
+    const qty = trackInventory && !allowNegativeStock ? Math.min(cleanRequestedQty, remainingQty) : cleanRequestedQty;
     const unitPrice = Number(requestedUnitPrice ?? product.selling_price ?? 0);
     if (qty <= 0) {
       setMessage('Quantity must be greater than zero.');
@@ -674,7 +1081,7 @@ function POSScreen() {
       const nextQty = Number(existing.qty || 0) + qty;
       updateItem(existing.id, { qty: nextQty, availableQty, trackInventory });
       updateActiveBill({ selectedItemId: existing.id });
-      if (trackInventory && cleanRequestedQty > remainingQty) setMessage(`${product.item_code || product.name}: quantity limited to available stock (${availableQty}).`);
+      if (!allowNegativeStock && trackInventory && cleanRequestedQty > remainingQty) setMessage(`${product.item_code || product.name}: quantity limited to available stock (${availableQty}).`);
       return true;
     }
     const item = recalcItem({
@@ -694,7 +1101,7 @@ function POSScreen() {
       lineTotal: unitPrice * qty
     });
     updateActiveBill({ items: [...activeBill.items, item], selectedItemId: item.id });
-    if (trackInventory && cleanRequestedQty > remainingQty) setMessage(`${product.item_code || product.name}: quantity limited to available stock (${availableQty}).`);
+    if (!allowNegativeStock && trackInventory && cleanRequestedQty > remainingQty) setMessage(`${product.item_code || product.name}: quantity limited to available stock (${availableQty}).`);
     return true;
   }
 
@@ -711,7 +1118,7 @@ function POSScreen() {
   function addAssemblyToCart(assembly) {
     const components = Array.isArray(assembly?.components) ? assembly.components : [];
     if (!components.length) { setMessage('This assembly has no components.'); return; }
-    const shortages = components.filter((component) => {
+    const shortages = allowNegativeStock ? [] : components.filter((component) => {
       if (component.track_inventory === false) return false;
       const alreadyInCart = activeBill.items.filter((item) => item.product_id === component.product_id && !item.isReturn && Number(item.qty || 0) > 0).reduce((sum, item) => sum + Number(item.qty || 0), 0);
       return alreadyInCart + numberValue(component.qty) > numberValue(component.available_qty);
@@ -769,7 +1176,7 @@ function POSScreen() {
   function updateItem(itemId, patch) {
     const currentItem = activeBill.items.find((item) => item.id === itemId);
     let safePatch = patch;
-    if (currentItem && currentItem.trackInventory !== false && Object.prototype.hasOwnProperty.call(patch, 'qty') && Number(patch.qty) >= 0 && !currentItem.isReturn) {
+    if (!allowNegativeStock && currentItem && currentItem.trackInventory !== false && Object.prototype.hasOwnProperty.call(patch, 'qty') && Number(patch.qty) >= 0 && !currentItem.isReturn) {
       const availableQty = Number(currentItem.availableQty ?? products.find((product) => product.product_id === currentItem.product_id)?.available_qty ?? Infinity);
       const otherQty = activeBill.items
         .filter((item) => item.id !== itemId && item.product_id === currentItem.product_id && !item.isReturn && Number(item.qty || 0) > 0)
@@ -856,6 +1263,7 @@ function POSScreen() {
   }
 
   async function addInvoiceReturns(exchangeSameItem = false) {
+    if (!can('process_returns')) { setMessage('The active user does not have permission to process returns.'); return; }
     const chosen = returnItems.filter((row) => row.selected && numberValue(row.returnQty) > 0 && numberValue(row.returnQty) <= numberValue(row.remainingQty));
     if (!chosen.length) { setMessage('Select at least one return item and quantity.'); return; }
     if (activeBill.customerId && returnInvoice.customer_id && activeBill.customerId !== returnInvoice.customer_id) { setMessage('This bill already belongs to a different customer. Open a new bill for this return.'); return; }
@@ -902,6 +1310,7 @@ function POSScreen() {
   }
 
   function voidCurrentBill() {
+    if (!can('void_sales')) { setMessage('The active user does not have permission to void bills.'); return; }
     const hasDraftContent = activeBill.items.length > 0 || paymentLines.length > 0 || numberValue(activeBill.cartDiscountValue) !== 0;
     if (hasDraftContent && !window.confirm('Void this unsaved bill? Its items, discounts, and payment lines will be removed.')) return;
     closeBill();
@@ -1056,6 +1465,7 @@ function POSScreen() {
   }
 
   async function saveCurrentBillAsQuotation() {
+    if (!can('create_quotes')) { setMessage('The active user does not have permission to create quotations.'); return; }
     setMessage('');
     if (!activeBill.items.length) {
       setMessage('Add at least one item before saving quotation.');
@@ -1123,6 +1533,7 @@ function POSScreen() {
       setShowCustomerPanel(true);
       return;
     }
+    if (appSettings.confirm_pos_sale && !window.confirm(`Save this invoice for ${money(total)}?`)) return;
 
     setSaving(true);
     const payload = {
@@ -1153,11 +1564,18 @@ function POSScreen() {
       direction: line.direction || 'in'
     }));
 
-    const { data, error } = await supabase.rpc('save_pos_invoice_v37', {
+    let { data, error } = await supabase.rpc('save_pos_invoice_v41', {
       p_header: payload,
       p_items: itemsPayload,
       p_payments: paymentPayload
     });
+    if (error && /save_pos_invoice_v41|schema cache|could not find the function/i.test(error.message || '')) {
+      ({ data, error } = await supabase.rpc('save_pos_invoice_v37', {
+        p_header: payload,
+        p_items: itemsPayload,
+        p_payments: paymentPayload
+      }));
+    }
     if (error) {
       setSaving(false);
       setMessage(error.message);
@@ -1210,7 +1628,11 @@ function POSScreen() {
       : `Outstanding balance: ${currentOutstanding < 0 ? '-' : ''}${money(Math.abs(currentOutstanding))}`
     : 'Walk-in customer';
 
-  const quickMethods = ['Cash', 'Bank', 'Credit'].map((name) => paymentMethodByName(name)).filter(Boolean);
+  const primaryBankMethod = visiblePaymentMethods.find((method) => method.name.trim().toLowerCase() === 'bank 1')
+    || visiblePaymentMethods.find((method) => method.name.trim().toLowerCase() === 'bank')
+    || visiblePaymentMethods.find((method) => method.name.toLowerCase().includes('bank'));
+  const quickMethods = [paymentMethodByName('Cash'), primaryBankMethod, paymentMethodByName('Credit')]
+    .filter((method, index, rows) => method && rows.findIndex((row) => row?.id === method.id) === index);
   const currentTarget = currentBillTarget();
   const remainingCurrent = Math.max(currentTarget.amount - paymentLineTotal(), 0);
   const modalNet = paymentNetForBalance(paymentDraft);
@@ -1230,11 +1652,11 @@ function POSScreen() {
           <span className="pos-command-label">Sale</span>
           <div className="pos-command-buttons">
             <button className="pos-action" onClick={() => document.querySelector('.pos-search-input')?.focus()}>⌕<span>Search</span></button>
-            <button className="pos-action" onClick={() => setShowCustomerPanel(!showCustomerPanel)}>♙<span>Customer</span></button>
-            <button className="pos-action" onClick={() => updateActiveBill({ cartDiscountType: activeBill.cartDiscountType === 'amount' ? 'percent' : 'amount' })}>%<span>Discount</span></button>
+            <button className="pos-action" disabled={!can('manage_parties')} title={!can('manage_parties') ? 'Permission required to add customers' : ''} onClick={() => setShowCustomerPanel(!showCustomerPanel)}>♙<span>Customer</span></button>
+            <button className="pos-action" disabled={!can('apply_discounts')} title={!can('apply_discounts') ? 'Permission required' : ''} onClick={() => updateActiveBill({ cartDiscountType: activeBill.cartDiscountType === 'amount' ? 'percent' : 'amount' })}>%<span>Discount</span></button>
             <button className="pos-action" onClick={addBill}>＋<span>New Sale</span></button>
-            <button className="pos-action" onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
-            <button className="pos-action" onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
+            <button className="pos-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
+            <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
             <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : 'Save Sale'}</span></button>
           </div>
         </div>
@@ -1260,7 +1682,7 @@ function POSScreen() {
           ))}
           <button className="tab add-tab" onClick={addBill}>+ New Bill</button>
         </div>
-        <button className="danger-button void-bill-button" onClick={voidCurrentBill}>Void Bill</button>
+        <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
       </div>
 
       <div className="pos-customer-strip pos-customer-strip-v16">
@@ -1310,11 +1732,11 @@ function POSScreen() {
                   <b>{money(item.lineTotal)}</b>
                 </div>
                 <div className="bill-card-controls compact-controls">
-                  <label>Qty<input type="number" max={!item.isReturn && item.trackInventory !== false && Number.isFinite(Number(item.availableQty)) ? item.availableQty : undefined} value={item.qty} onFocus={selectAllText} onChange={(e) => updateItem(item.id, { qty: Number(e.target.value) })} /></label>
-                  <label>Price<input type="number" value={item.unitPrice} onFocus={selectAllText} onChange={(e) => updateItem(item.id, { unitPrice: Number(e.target.value) })} /></label>
-                  <label>Disc.<input type="number" value={item.discountValue} onFocus={selectAllText} onChange={(e) => updateItem(item.id, { discountValue: Number(e.target.value) })} /></label>
+                  <label>Qty<input type="number" max={!allowNegativeStock && !item.isReturn && item.trackInventory !== false && Number.isFinite(Number(item.availableQty)) ? item.availableQty : undefined} value={item.qty} onFocus={selectAllText} onChange={(e) => updateItem(item.id, { qty: Number(e.target.value) })} /></label>
+                  <label>Price<input type="number" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={item.unitPrice} onFocus={selectAllText} onChange={(e) => updateItem(item.id, { unitPrice: Number(e.target.value) })} /></label>
+                  <label>Disc.<input type="number" disabled={!can('apply_discounts')} value={item.discountValue} onFocus={selectAllText} onChange={(e) => updateItem(item.id, { discountValue: Number(e.target.value) })} /></label>
                   <label>Type
-                    <select value={item.discountType} onChange={(e) => updateItem(item.id, { discountType: e.target.value })}>
+                    <select disabled={!can('apply_discounts')} value={item.discountType} onChange={(e) => updateItem(item.id, { discountType: e.target.value })}>
                       <option value="amount">Amount</option>
                       <option value="percent">%</option>
                     </select>
@@ -1336,11 +1758,11 @@ function POSScreen() {
 
           <div className="checkout-box aronium-total-box">
             <div className="discount-row">
-              <select value={activeBill.cartDiscountType} onChange={(e) => updateActiveBill({ cartDiscountType: e.target.value })}>
+              <select disabled={!can('apply_discounts')} value={activeBill.cartDiscountType} onChange={(e) => updateActiveBill({ cartDiscountType: e.target.value })}>
                 <option value="amount">Bill discount amount</option>
                 <option value="percent">Bill discount %</option>
               </select>
-              <input type="number" value={activeBill.cartDiscountValue} onFocus={selectAllText} onChange={(e) => updateActiveBill({ cartDiscountValue: Number(e.target.value) })} />
+              <input type="number" disabled={!can('apply_discounts')} value={activeBill.cartDiscountValue} onFocus={selectAllText} onChange={(e) => updateActiveBill({ cartDiscountValue: Number(e.target.value) })} />
             </div>
             <SummaryLine label="Subtotal" value={money(subtotal)} />
             <SummaryLine label="Discount" value={money(cartDiscount)} />
@@ -1394,7 +1816,7 @@ function POSScreen() {
             {products.map((product) => {
               const availableQty = Number(product.available_qty || 0);
               const trackInventory = product.track_inventory !== false;
-              const unavailable = trackInventory && availableQty <= 0;
+              const unavailable = !allowNegativeStock && trackInventory && availableQty <= 0;
               return (
                 <button
                   key={product.product_id}
@@ -1405,9 +1827,9 @@ function POSScreen() {
                 >
                   <span className="pos-product-name">{product.name}</span>
                   <strong className="pos-product-price">{money(product.selling_price)}</strong>
-                  <small className={`pos-product-stock ${!trackInventory ? 'non-stock' : availableQty <= 0 ? 'empty' : availableQty <= 2 ? 'low' : ''}`}>
-                    {!trackInventory ? 'Non-stock · Always available' : availableQty > 0 ? `Available: ${availableQty}` : 'No stock'}
-                  </small>
+                  {appSettings.show_pos_stock_badges !== false && <small className={`pos-product-stock ${!trackInventory ? 'non-stock' : availableQty <= 0 ? 'empty' : availableQty <= 2 ? 'low' : ''}`}>
+                    {!trackInventory ? 'Non-stock · Always available' : availableQty > 0 ? `Available: ${availableQty}` : availableQty < 0 ? `Stock: ${availableQty}` : 'No stock'}
+                  </small>}
                 </button>
               );
             })}
@@ -1462,8 +1884,8 @@ function POSScreen() {
         <form className="modal-card item-entry-modal" onSubmit={confirmPosProduct}>
           <div className="item-entry-heading"><div><span>Add to current bill</span><h3>{selectedPosProduct.name}</h3><p>{selectedPosProduct.item_code || 'Product'} · {selectedPosProduct.track_inventory === false ? 'Non-stock item' : `Available ${numberValue(selectedPosProduct.available_qty)}`}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Close</button></div>
           <div className="item-entry-fields">
-            <label>Selling price<input type="number" min="0" step="0.01" value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus /></label>
-            <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} /></label>
+            <label>Selling price<input type="number" min="0" step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price')} /></label>
+            <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false || allowNegativeStock ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} autoFocus={!can('change_sale_price')} /></label>
           </div>
           <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button><button type="submit" className="primary-button">Add Item</button></div>
@@ -1475,7 +1897,7 @@ function POSScreen() {
           <div className="section-title-row assembly-form-title"><div><h3>{assemblyPreview.assembly_code} · {assemblyPreview.name}</h3><p>Review every component before adding the complete build.</p></div><button className="secondary-button" onClick={() => setAssemblyPreview(null)}>Close</button></div>
           <div className="assembly-preview-summary"><StatCard label="Listed component total" value={money(assemblyPreview.component_price)} /><StatCard label="Assembly discount" value={money(assemblyPreview.discount_amount)} /><StatCard label="Final package price" value={money(assemblyPreview.selling_price)} /><StatCard label="Buildable now" value={numberValue(assemblyPreview.buildable_qty)} /></div>
           <div className="table-wrap"><table><thead><tr><th>Code</th><th>Component</th><th>Required</th><th>Available</th><th>Unit price</th></tr></thead><tbody>{(assemblyPreview.components || []).map((component) => <tr key={component.product_id} className={numberValue(component.available_qty) < numberValue(component.qty) ? 'low-stock-row' : ''}><td>{component.item_code}</td><td>{component.name}</td><td>{numberValue(component.qty)}</td><td>{numberValue(component.available_qty)}</td><td>{money(component.selling_price)}</td></tr>)}</tbody></table></div>
-          <div className="modal-actions"><button className="secondary-button" onClick={() => setAssemblyPreview(null)}>Cancel</button><button className="primary-button" disabled={numberValue(assemblyPreview.buildable_qty) <= 0} onClick={() => addAssemblyToCart(assemblyPreview)}>Add Complete Build</button></div>
+          <div className="modal-actions"><button className="secondary-button" onClick={() => setAssemblyPreview(null)}>Cancel</button><button className="primary-button" disabled={!allowNegativeStock && numberValue(assemblyPreview.buildable_qty) <= 0} onClick={() => addAssemblyToCart(assemblyPreview)}>Add Complete Build</button></div>
         </div>
       </div>}
 
@@ -1591,38 +2013,37 @@ function Dashboard() {
   const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0 });
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    async function loadStats() {
-      setError('');
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+  useEffect(() => { loadStats(); }, []);
+  useRealtimeRefresh(['products', 'customers', 'suppliers', 'documents', 'cashflow_entries'], loadStats);
 
-      const [productsRes, customersRes, suppliersRes, docsRes, cashRes] = await Promise.all([
-        supabase.from('products').select('id', { count: 'exact', head: true }),
-        supabase.from('customers').select('id', { count: 'exact', head: true }),
-        supabase.from('suppliers').select('id', { count: 'exact', head: true }),
-        supabase.from('documents').select('id', { count: 'exact', head: true }).neq('document_type', 'cod_order'),
-        supabase.from('cashflow_entries').select('entry_type, amount').gte('created_at', todayStart.toISOString())
-      ]);
+  async function loadStats() {
+    setError('');
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
 
-      const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error;
-      if (firstError) {
-        setError(firstError.message);
-        return;
-      }
+    const [productsRes, customersRes, suppliersRes, docsRes, cashRes] = await Promise.all([
+      supabase.from('products').select('id', { count: 'exact', head: true }),
+      supabase.from('customers').select('id', { count: 'exact', head: true }),
+      supabase.from('suppliers').select('id', { count: 'exact', head: true }),
+      supabase.from('documents').select('id', { count: 'exact', head: true }).neq('document_type', 'cod_order'),
+      supabase.from('cashflow_entries').select('entry_type, amount').gte('created_at', todayStart.toISOString())
+    ]);
 
-      setStats({
-        products: productsRes.count || 0,
-        customers: customersRes.count || 0,
-        suppliers: suppliersRes.count || 0,
-        documents: docsRes.count || 0,
-        cashIn: (cashRes.data || []).filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0),
-        cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0)
-      });
+    const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error;
+    if (firstError) {
+      setError(firstError.message);
+      return;
     }
 
-    loadStats();
-  }, []);
+    setStats({
+      products: productsRes.count || 0,
+      customers: customersRes.count || 0,
+      suppliers: suppliersRes.count || 0,
+      documents: docsRes.count || 0,
+      cashIn: (cashRes.data || []).filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0)
+    });
+  }
 
   return (
     <section className="page-section">
@@ -1644,7 +2065,17 @@ function Dashboard() {
   );
 }
 
-function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
+function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
+  const can = (permission) => isAdmin || permissions?.[permission] === true;
+  const canManageDocumentType = (type) => {
+    if (['purchase', 'stock_in_transit', 'stock_adjustment', 'trade_in'].includes(type)) return can('manage_inventory_documents');
+    if (type === 'quotation') return can('create_quotes');
+    if (type === 'job') return can('manage_jobs');
+    if (type === 'cod_order') return can('manage_cod_orders');
+    if (['customer_payment', 'supplier_payment'].includes(type)) return can('manage_parties');
+    if (['expense', 'other_income'].includes(type)) return can('manage_cashflow');
+    return false;
+  };
   const [documents, setDocuments] = useState([]);
   const [selected, setSelected] = useState(null);
   const [items, setItems] = useState([]);
@@ -1654,7 +2085,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [documentTabs, setDocumentTabs] = useState(() => {
     const savedTabs = safeReadJson(DOCUMENT_DRAFT_TABS_KEY, []);
-    const draftTabs = Array.isArray(savedTabs) ? savedTabs.filter((tab) => tab.id && (tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document')) : [];
+    const draftTabs = Array.isArray(savedTabs) ? savedTabs.filter((tab) => tab.id && (tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document') && canManageDocumentType(tab.documentType || tab.document?.document_type)) : [];
     return [{ id: 'view', kind: 'view', label: 'View documents' }, ...draftTabs];
   });
   const [activeDocumentTabId, setActiveDocumentTabId] = useState('view');
@@ -1667,6 +2098,16 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
     loadDocumentFilterParties();
     fetchCompanySettings().then(setCompanySettings).catch(() => {});
   }, []);
+
+  useRealtimeRefresh(['documents', 'document_items', 'payment_methods', 'cashflow_entries'], () => {
+    loadDocuments(true);
+    if (selected?.id) selectDocument(selected);
+  });
+  useRealtimeRefresh(['customers', 'suppliers'], () => {
+    loadDocumentFilterParties();
+    loadDocuments(true);
+  });
+  useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
 
   useEffect(() => {
     const timeout = setTimeout(() => loadDocuments(), 300);
@@ -1686,9 +2127,9 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
     window.localStorage.setItem(DOCUMENT_DRAFT_TABS_KEY, JSON.stringify(draftTabs));
   }, [documentTabs]);
 
-  async function loadDocuments() {
+  async function loadDocuments(preserveSelection = false) {
     setError('');
-    setMessage('');
+    if (!preserveSelection) setMessage('');
 
     let matchingDocumentIds = null;
     if (filters.product.trim()) {
@@ -1715,7 +2156,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
 
     let query = supabase
       .from('documents')
-      .select('id, document_no, job_no, job_status, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason')
+      .select('id, document_no, job_no, job_status, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason')
       .neq('document_type', 'cod_order')
       .order('document_date', { ascending: false })
       .order('created_at', { ascending: false })
@@ -1738,21 +2179,26 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
     const customerIds = [...new Set(filtered.map((doc) => doc.customer_id).filter(Boolean))];
     const supplierIds = [...new Set(filtered.map((doc) => doc.supplier_id).filter(Boolean))];
     const paymentIds = [...new Set(filtered.map((doc) => doc.payment_method_id).filter(Boolean))];
+    const staffIds = [...new Set(filtered.flatMap((doc) => [doc.created_by_staff_id, doc.updated_by_staff_id]).filter(Boolean))];
 
-    const [customerLookupRes, supplierLookupRes, paymentLookupRes] = await Promise.all([
+    const [customerLookupRes, supplierLookupRes, paymentLookupRes, staffLookupRes] = await Promise.all([
       customerIds.length ? supabase.from('customers').select('id, name').in('id', customerIds) : Promise.resolve({ data: [] }),
       supplierIds.length ? supabase.from('suppliers').select('id, name').in('id', supplierIds) : Promise.resolve({ data: [] }),
-      paymentIds.length ? supabase.from('payment_methods').select('id, name').in('id', paymentIds) : Promise.resolve({ data: [] })
+      paymentIds.length ? supabase.from('payment_methods').select('id, name').in('id', paymentIds) : Promise.resolve({ data: [] }),
+      staffIds.length ? supabase.from('staff_directory_v38').select('id, full_name').in('id', staffIds) : Promise.resolve({ data: [] })
     ]);
 
     const customerMap = new Map((customerLookupRes.data || []).map((row) => [row.id, row.name]));
     const supplierMap = new Map((supplierLookupRes.data || []).map((row) => [row.id, row.name]));
     const paymentMap = new Map((paymentLookupRes.data || []).map((row) => [row.id, row.name]));
+    const staffMap = new Map((staffLookupRes.data || []).map((row) => [row.id, row.full_name]));
 
     filtered = filtered.map((doc) => ({
       ...doc,
       party_name: customerMap.get(doc.customer_id) || supplierMap.get(doc.supplier_id) || doc.recipient_name || '',
-      payment_method_name: paymentMap.get(doc.payment_method_id) || ''
+      payment_method_name: paymentMap.get(doc.payment_method_id) || '',
+      user_name: staffMap.get(doc.created_by_staff_id) || '',
+      updated_by_name: staffMap.get(doc.updated_by_staff_id) || ''
     }));
 
     if (filters.customer.trim()) {
@@ -1765,10 +2211,19 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
         return paidStatus === filters.paid;
       });
     }
+    if (filters.user.trim()) {
+      const userKey = filters.user.trim().toLowerCase();
+      filtered = filtered.filter((doc) => `${doc.user_name || ''} ${doc.updated_by_name || ''}`.toLowerCase().includes(userKey));
+    }
 
     setDocuments(filtered);
-    setSelected(null);
-    setItems([]);
+    if (preserveSelection) {
+      setSelected((current) => current ? filtered.find((row) => row.id === current.id) || null : null);
+      setItems((current) => selected?.id && filtered.some((row) => row.id === selected.id) ? current : []);
+    } else {
+      setSelected(null);
+      setItems([]);
+    }
   }
 
   async function loadDocumentFilterParties() {
@@ -1869,6 +2324,10 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
 
   function openAddDocument(type) {
     setShowAddMenu(false);
+    if (!canManageDocumentType(type)) {
+      setError('The active user does not have permission to create this document type.');
+      return;
+    }
     if (type === 'customer_payment' || type === 'supplier_payment') {
       onOpenParties?.();
       return;
@@ -1948,6 +2407,10 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
       setError('Full tab editing is available for Purchase, Stock in Transit, Quotation, and COD Order documents.');
       return;
     }
+    if (!canManageDocumentType(selected.document_type)) {
+      setError('The active user does not have permission to edit this document.');
+      return;
+    }
     const existing = documentTabs.find((tab) => tab.kind === 'edit_document' && tab.document?.id === selected.id);
     if (existing) {
       setActiveDocumentTabId(existing.id);
@@ -1964,6 +2427,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
   }
 
   async function convertTransitToPurchase() {
+    if (!can('manage_inventory_documents')) { setError('Inventory-document permission required.'); return; }
     if (!selected || selected.document_type !== 'stock_in_transit') return;
     if (!window.confirm(`Convert ${selected.document_no} to Purchase and add the items to inventory?`)) return;
     setBusyAction(true);
@@ -1979,6 +2443,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
   }
 
   async function convertQuotationToInvoice() {
+    if (!can('pos_sales')) { setError('POS sales permission required.'); return; }
     if (!selected || selected.document_type !== 'quotation') return;
     setBusyAction(true);
     setError('');
@@ -2010,6 +2475,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
   }
 
   async function applySelectedDocumentStock() {
+    if (!can('manage_inventory_documents')) { setError('Inventory-document permission required.'); return; }
     if (!selected || !['purchase', 'stock_in_transit'].includes(selected.document_type)) return;
     const rpcName = selected.document_type === 'purchase' ? 'post_purchase_document' : 'post_stock_in_transit_document';
     if (!window.confirm(`Apply stock updates for ${selected.document_no}?`)) return;
@@ -2024,6 +2490,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
   }
 
   async function deleteSelectedDocument() {
+    if (!can('delete_documents')) { setError('Document deletion permission required.'); return; }
     if (!selected) {
       setError('Select a document first.');
       return;
@@ -2061,10 +2528,10 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
     <section className="documents-screen">
       <div className="action-toolbar">
         <div className="toolbar-menu-wrap">
-          <button className="toolbar-button bright" onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
+          <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
           {showAddMenu && (
             <div className="add-menu">
-              {DOCUMENT_TYPES.filter((type) => type.value && type.value !== 'cod_order').map((type) => (
+              {DOCUMENT_TYPES.filter((type) => type.value && type.value !== 'cod_order' && canManageDocumentType(type.value)).map((type) => (
                 <button key={type.value} onClick={() => openAddDocument(type.value)}>{type.label}</button>
               ))}
             </div>
@@ -2073,11 +2540,11 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
         <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(true)}><span>▣</span>Print</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
         <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
-        <button className="toolbar-button" disabled={!selected} onClick={openEditDocument}><span>✎</span>Edit</button>
-        <button className="toolbar-button" disabled={!selected || busyAction} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
-        <button className="toolbar-button" disabled={!canApplyStock || busyAction} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
-        <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
-        <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
+        <button className="toolbar-button" disabled={!selected || !canManageDocumentType(selected?.document_type)} onClick={openEditDocument}><span>✎</span>Edit</button>
+        <button className="toolbar-button" disabled={!selected || busyAction || !can('delete_documents')} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
+        <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
+        <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
+        <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
       </div>
 
       <div className="document-tabbar">
@@ -2168,6 +2635,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
                 <th>Document Type</th>
                 <th>Paid</th>
                 <th>Customer / Supplier</th>
+                <th>Created by</th>
                 <th>Date</th>
                 <th>Payment</th>
                 <th>Total</th>
@@ -2186,6 +2654,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
                     <td>{documentTypeLabel(document.document_type)}</td>
                     <td>{paidStatusLabel(document)}</td>
                     <td>{name}</td>
+                    <td>{document.user_name || '-'}</td>
                     <td>{fmtDate(document.document_date || document.created_at)}</td>
                     <td>{document.payment_method_name || '-'}</td>
                     <td>{money(document.total_amount)}</td>
@@ -2193,7 +2662,7 @@ function DocumentsPage({ onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } 
                   </tr>
                 );
               })}
-              {documents.length === 0 && <EmptyRow colSpan={11} text="No documents found." />}
+              {documents.length === 0 && <EmptyRow colSpan={12} text="No documents found." />}
             </tbody>
           </table>
         }
@@ -3315,6 +3784,7 @@ function JobsPage() {
   const [error, setError] = useState('');
 
   useEffect(() => { loadJobs(); }, []);
+  useRealtimeRefresh(['documents', 'customers'], () => loadJobs(selectedId));
 
   async function loadJobs(preferredId = '') {
     setLoading(true);
@@ -4036,6 +4506,147 @@ function safePdfFilename(value) {
   return String(value || 'document').replace(/[^a-z0-9_.-]+/gi, '-').replace(/^-+|-+$/g, '') || 'document';
 }
 
+function cashflowReportRangeLabel(filters = {}) {
+  const range = cashflowDateRange(filters.datePreset, filters.dateFrom, filters.dateTo);
+  const inclusiveEnd = range.end ? new Date(range.end.getTime() - 1) : null;
+  if (range.start && inclusiveEnd) return `${fmtDate(range.start)} - ${fmtDate(inclusiveEnd)}`;
+  if (range.start) return `From ${fmtDate(range.start)}`;
+  if (inclusiveEnd) return `Up to ${fmtDate(inclusiveEnd)}`;
+  return 'All time';
+}
+
+function cashflowReportFilename(filters = {}) {
+  const range = cashflowDateRange(filters.datePreset, filters.dateFrom, filters.dateTo);
+  const datePart = (value) => value ? localDateInput(value) : '';
+  const inclusiveEnd = range.end ? new Date(range.end.getTime() - 1) : null;
+  if (range.start || inclusiveEnd) return safePdfFilename(`Cashflow_${datePart(range.start) || 'Start'}_${datePart(inclusiveEnd) || 'Today'}`);
+  return 'Cashflow_All_Time';
+}
+
+async function createCashflowReportPdf(entries = [], filters = {}, companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
+  const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+  const settings = { ...DEFAULT_COMPANY_SETTINGS, ...(companySettings || {}) };
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 7;
+  const rows = [...entries].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const externalRows = rows.filter((row) => row.documents?.document_type !== 'account_transfer');
+  const cashIn = externalRows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0);
+  const cashOut = externalRows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0);
+  const nonCash = rows.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + numberValue(row.amount), 0);
+  const rangeLabel = cashflowReportRangeLabel(filters);
+  const typeLabel = filters.type === 'cash_in' ? 'Cash in' : filters.type === 'cash_out' ? 'Cash out' : filters.type === 'non_cash' ? 'Non-cash' : 'All cash types';
+  const documentLabel = filters.documentType === 'all' ? 'All documents' : documentTypeLabel(filters.documentType);
+  const paymentLabel = filters.paymentMethodId === 'all' ? 'All payment types' : rows.find((row) => row.payment_method_id === filters.paymentMethodId)?.payment_methods?.name || 'Selected payment type';
+  const filterDetails = [typeLabel, documentLabel, paymentLabel, filters.search?.trim() ? `Search: ${filters.search.trim()}` : ''].filter(Boolean).join(' | ');
+
+  let logoData = '';
+  const logoUrl = companyLogoUrl(settings);
+  if (logoUrl) {
+    try { logoData = await imageUrlToDataUrl(logoUrl); } catch { logoData = ''; }
+  }
+  let companyX = margin;
+  if (logoData) {
+    const logoFormat = logoData.startsWith('data:image/png') ? 'PNG' : logoData.startsWith('data:image/webp') ? 'WEBP' : 'JPEG';
+    pdf.addImage(logoData, logoFormat, margin, margin, 14, 14, undefined, 'FAST');
+    companyX += 18;
+  }
+  pdf.setTextColor(23, 32, 42);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(12);
+  pdf.text(String(settings.shop_name || 'Computer Shop'), companyX, margin + 4);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(5.8);
+  const companyLines = [settings.header_subtitle, settings.address, [settings.phone, settings.email].filter(Boolean).join(' | ')].filter(Boolean);
+  if (companyLines.length) pdf.text(pdf.splitTextToSize(companyLines.join('\n'), 65), companyX, margin + 7.5);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(10.5);
+  pdf.text('CASHFLOW STATEMENT', pageWidth - margin, margin + 4, { align: 'right' });
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(6.5);
+  pdf.text(rangeLabel, pageWidth - margin, margin + 8, { align: 'right' });
+  pdf.setDrawColor(22, 136, 189);
+  pdf.setLineWidth(.65);
+  pdf.line(margin, margin + 17, pageWidth - margin, margin + 17);
+  pdf.setTextColor(78, 91, 100);
+  pdf.setFontSize(5.2);
+  pdf.text(pdf.splitTextToSize(filterDetails, pageWidth - margin * 2), margin, margin + 21);
+
+  const summaryY = margin + 25;
+  const summaryGap = 2;
+  const summaryWidth = (pageWidth - margin * 2 - summaryGap * 3) / 4;
+  [
+    ['Cash In', money(cashIn)],
+    ['Cash Out', money(cashOut)],
+    ['Net Cashflow', signedMoney(cashIn - cashOut)],
+    ['Non-cash', money(nonCash)]
+  ].forEach(([label, value], index) => {
+    const x = margin + index * (summaryWidth + summaryGap);
+    pdf.setFillColor(index === 2 ? 232 : 245, index === 2 ? 246 : 247, index === 2 ? 251 : 248);
+    pdf.setDrawColor(index === 2 ? 22 : 215, index === 2 ? 136 : 221, index === 2 ? 189 : 226);
+    pdf.rect(x, summaryY, summaryWidth, 12, 'FD');
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(5.2);
+    pdf.setTextColor(82, 96, 105);
+    pdf.text(label, x + 2, summaryY + 3.3);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(6.5);
+    pdf.setTextColor(23, 32, 42);
+    pdf.text(pdf.splitTextToSize(value, summaryWidth - 4), x + 2, summaryY + 8);
+  });
+
+  const tableRows = rows.map((entry) => {
+    const type = entry.entry_type === 'cash_in' ? 'In' : entry.entry_type === 'cash_out' ? 'Out' : 'Non-cash';
+    const account = entry.payment_methods?.name || entry.account_name || '-';
+    const amountPrefix = entry.entry_type === 'cash_out' ? '-' : entry.entry_type === 'cash_in' ? '+' : '';
+    return [
+      new Date(entry.created_at).toLocaleString('en-LK', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }),
+      type,
+      account,
+      entry.documents?.document_no || '-',
+      entry.description || '-',
+      `${amountPrefix}${money(entry.amount)}`
+    ];
+  });
+  autoTable(pdf, {
+    startY: summaryY + 15,
+    head: [['Date', 'Type', 'Account', 'Document', 'Description', 'Amount']],
+    body: tableRows.length ? tableRows : [['-', '-', '-', '-', 'No cashflow entries match these filters.', '-']],
+    margin: { left: margin, right: margin, bottom: 12 },
+    showHead: 'everyPage',
+    rowPageBreak: 'avoid',
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 5.8, cellPadding: 1.35, overflow: 'linebreak', textColor: [23, 32, 42], lineColor: [214, 221, 226], lineWidth: .12, valign: 'middle' },
+    headStyles: { fillColor: [30, 43, 52], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 5.7 },
+    alternateRowStyles: { fillColor: [248, 250, 251] },
+    columnStyles: {
+      0: { cellWidth: 21 },
+      1: { cellWidth: 13 },
+      2: { cellWidth: 19 },
+      3: { cellWidth: 19 },
+      4: { cellWidth: 'auto' },
+      5: { cellWidth: 25, halign: 'right', fontStyle: 'bold' }
+    }
+  });
+
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setDrawColor(214, 221, 226);
+    pdf.setLineWidth(.15);
+    pdf.line(margin, pageHeight - 8, pageWidth - margin, pageHeight - 8);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(5.5);
+    pdf.setTextColor(100, 112, 120);
+    pdf.text(`Generated ${new Date().toLocaleString('en-LK')}`, margin, pageHeight - 4.5);
+    pdf.text(`Page ${page} of ${pageCount}`, pageWidth - margin, pageHeight - 4.5, { align: 'right' });
+  }
+  if (options.output === 'blob') return pdf.output('blob');
+  pdf.save(`${cashflowReportFilename(filters)}.pdf`);
+  return null;
+}
+
 const DEFAULT_INVOICE_POLICY = `Warranty: Duration is shown beside each item. Warranty is void if the sticker is broken, removed or tampered with, or for physical damage and chip burns.
 Returns: Valid returns within 7 days are eligible for exchange or refund when the item is in its original, unaltered condition.
 After 7 days: Faulty items within warranty may be replaced or exchanged for items of equal value. No cash refunds.`;
@@ -4260,6 +4871,14 @@ function printableCompanyHeader(settings, documentTitle, documentNo) {
   return `<div class="brand-row"><div class="brand-block-print">${logoUrl ? `<img class="brand-logo-print" src="${escapePrintHtml(logoUrl)}" alt="Logo">` : ''}<div class="brand-copy"><h1>${escapePrintHtml(company.shop_name || 'Computer Shop')}</h1><p>${escapePrintHtml(contactLines.join('\n'))}</p></div></div><div class="doc-heading"><h2>${escapePrintHtml(documentTitle)}</h2><strong>${escapePrintHtml(documentNo || '')}</strong></div></div>`;
 }
 
+function showPdfBlobPreview(popup, blob, title, autoPrint = false) {
+  const pdfUrl = URL.createObjectURL(blob);
+  popup.document.open();
+  popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapePrintHtml(title)}</title><style>*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:Arial;background:#222}.pdf-preview-toolbar{height:58px;display:flex;align-items:center;justify-content:center;gap:10px;background:#20252a;border-bottom:1px solid #42484d}.pdf-preview-toolbar button{min-width:110px;padding:10px 16px;border:0;border-radius:4px;background:#1688bd;color:#fff;font-weight:800;cursor:pointer}.pdf-preview-toolbar button.secondary{background:#4a535a}.pdf-frame{display:block;width:100%;height:calc(100% - 58px);border:0;background:#d8dde1}</style></head><body><div class="pdf-preview-toolbar"><button id="printPdf">Print</button><button class="secondary" onclick="window.close()">Close Preview</button></div><iframe id="pdfFrame" class="pdf-frame" src="${escapePrintHtml(pdfUrl)}" title="${escapePrintHtml(title)}"></iframe><script>const frame=document.getElementById('pdfFrame');const printPdf=()=>{try{frame.contentWindow.focus();frame.contentWindow.print();}catch(error){window.print();}};document.getElementById('printPdf').onclick=printPdf;${autoPrint ? "frame.onload=()=>setTimeout(printPdf,350);" : ''}</script></body></html>`);
+  popup.document.close();
+  window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 300000);
+}
+
 async function printAccountingDocument(document, items = [], flows = [], companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
   if (!document) return;
   const popup = options.popup || window.open('', '_blank', 'width=920,height=980');
@@ -4272,13 +4891,9 @@ async function printAccountingDocument(document, items = [], flows = [], company
     popup.document.write('<!doctype html><title>Preparing PDF</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing the exact PDF preview...</body>');
     popup.document.close();
     const blob = await downloadAccountingDocumentPdf(document, items, flows, companySettings, { output: 'blob' });
-    const pdfUrl = URL.createObjectURL(blob);
     const title = `${document.document_no} - ${documentTypeLabel(document.document_type)}`;
     const shouldAutoPrint = options.autoPrint !== false;
-    popup.document.open();
-    popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapePrintHtml(title)}</title><style>*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:Arial;background:#222}.pdf-preview-toolbar{height:58px;display:flex;align-items:center;justify-content:center;gap:10px;background:#20252a;border-bottom:1px solid #42484d}.pdf-preview-toolbar button{min-width:110px;padding:10px 16px;border:0;border-radius:4px;background:#1688bd;color:#fff;font-weight:800;cursor:pointer}.pdf-preview-toolbar button.secondary{background:#4a535a}.pdf-frame{display:block;width:100%;height:calc(100% - 58px);border:0;background:#d8dde1}</style></head><body><div class="pdf-preview-toolbar"><button id="printPdf">Print</button><button class="secondary" onclick="window.close()">Close Preview</button></div><iframe id="pdfFrame" class="pdf-frame" src="${escapePrintHtml(pdfUrl)}" title="${escapePrintHtml(title)}"></iframe><script>const frame=document.getElementById('pdfFrame');const printPdf=()=>{try{frame.contentWindow.focus();frame.contentWindow.print();}catch(error){window.print();}};document.getElementById('printPdf').onclick=printPdf;${shouldAutoPrint ? "frame.onload=()=>setTimeout(printPdf,350);" : ''}</script></body></html>`);
-    popup.document.close();
-    window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 300000);
+    showPdfBlobPreview(popup, blob, title, shouldAutoPrint);
   } catch (printError) {
     popup.document.open();
     popup.document.write(`<!doctype html><title>Print failed</title><body style="font-family:Arial;padding:30px"><h2>Could not prepare PDF preview</h2><p>${escapePrintHtml(printError.message || String(printError))}</p></body>`);
@@ -4287,37 +4902,265 @@ async function printAccountingDocument(document, items = [], flows = [], company
   }
 }
 
-function printCodDocument(order, items, mode = 'label', companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
-  if (!order) return;
-  const popup = options.popup || window.open('', '_blank', 'width=820,height=900');
-  if (!popup) {
-    window.alert('Allow pop-ups for this site to print COD labels and bills.');
-    return;
-  }
+async function createCodLabelsPdf(orders = [], companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
+  const { jsPDF } = await import('jspdf');
   const settings = { ...DEFAULT_COMPANY_SETTINGS, ...(companySettings || {}) };
-  const itemRows = (items || []).map((item) => `
-    <tr>
-      ${settings.show_item_code ? `<td>${escapePrintHtml(item.item_code || '')}</td>` : ''}
-      <td class="description-cell">${escapePrintHtml(item.description || '')}</td>
-      <td class="num">${escapePrintHtml(Number(item.qty || 0))}</td>
-      <td class="num">${escapePrintHtml(money(item.unit_price))}</td>
-      <td class="num">${escapePrintHtml(money(item.line_total))}</td>
-    </tr>`).join('');
-  const title = mode === 'label' ? 'COD ORDER LABEL' : 'COD ORDER BILL';
-  const body = mode === 'label' ? `${printableCompanyHeader(settings, title, order.document_no)}
-    <div class="label-recipient">
-      <h1>${escapePrintHtml(order.recipient_name || 'Customer')}</h1>
-      <div class="label-phone">${escapePrintHtml(order.delivery_phone || '')}</div>
-      <div class="label-address">${escapePrintHtml(order.delivery_address || '').replace(/\n/g, '<br>')}</div>
-      <div class="label-info"><span>COD Amount</span><strong>${escapePrintHtml(money(order.cod_collect_amount || order.total_amount))}</strong></div>
-      <div class="label-info"><span>Courier</span><strong>${escapePrintHtml(order.delivery_service || '-')}</strong></div>
-      <div class="label-tracking">Tracking: ${escapePrintHtml(order.tracking_number || 'Not assigned')}</div>
-    </div>` : `${printableCompanyHeader(settings, title, order.document_no)}
-    <div class="document-meta"><div><span>Date</span><strong>${escapePrintHtml(fmtDate(order.document_date || order.created_at))}</strong></div><div><span>Customer</span><strong>${escapePrintHtml(order.recipient_name || '')}</strong><small>${escapePrintHtml(order.delivery_phone || '')}</small></div><div><span>Delivery address</span><strong>${escapePrintHtml(order.delivery_address || '')}</strong></div><div><span>Courier and tracking</span><strong>${escapePrintHtml(order.delivery_service || '-')}</strong><small>${escapePrintHtml(order.tracking_number || 'Not assigned')}</small></div></div>
-    <table><thead><tr>${settings.show_item_code ? '<th>Code</th>' : ''}<th>Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th></tr></thead><tbody>${itemRows}</tbody></table>
-    <div class="totals-print"><div><span>Order total</span><strong>${escapePrintHtml(money(order.total_amount))}</strong></div><div class="grand"><span>COD to collect</span><strong>${escapePrintHtml(money(order.cod_collect_amount || order.total_amount))}</strong></div></div>
-    ${order.notes ? `<div class="notes-print"><strong>Notes:</strong> ${escapePrintHtml(order.notes)}</div>` : ''}${settings.invoice_footer ? `<div class="terms-print">${escapePrintHtml(settings.invoice_footer)}</div>` : ''}<div class="print-footer">Generated from ${escapePrintHtml(settings.shop_name || 'Computer Shop')} POS</div>`;
-  writePrintWindow(popup, `${title} ${order.document_no}`, body, settings, options.autoPrint !== false);
+  const printableOrders = (orders || []).filter(Boolean);
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const pagePadding = 5;
+  const slotHeight = (pageHeight - pagePadding * 2) / 3;
+  const contentWidth = pageWidth - pagePadding * 2;
+
+  printableOrders.forEach((order, index) => {
+    if (index > 0 && index % 3 === 0) pdf.addPage('a5', 'portrait');
+    const slot = index % 3;
+    const y = pagePadding + slot * slotHeight;
+    const boxY = y + 1.2;
+    const boxHeight = slotHeight - 2.4;
+    const headerHeight = 11;
+    const middleX = pagePadding + contentWidth / 2;
+    const fromName = settings.shop_name || 'Computer Shop';
+    const fromAddress = settings.address || '-';
+    const fromPhone = settings.phone || '-';
+    const toName = order.recipient_name || 'Customer';
+    const toAddress = order.delivery_address || '-';
+    const toPhone = order.delivery_phone || '-';
+    const tracking = order.tracking_number || 'Not assigned';
+    const courier = order.delivery_service || 'Courier pending';
+
+    pdf.setDrawColor(45, 52, 57);
+    pdf.setLineWidth(.35);
+    pdf.rect(pagePadding, boxY, contentWidth, boxHeight);
+    pdf.setFillColor(244, 247, 248);
+    pdf.rect(pagePadding, boxY, contentWidth, headerHeight, 'F');
+    pdf.line(pagePadding, boxY + headerHeight, pageWidth - pagePadding, boxY + headerHeight);
+    pdf.line(middleX, boxY + headerHeight, middleX, boxY + boxHeight);
+
+    pdf.setTextColor(23, 32, 42);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(7.8);
+    pdf.text(`COD ${String(order.document_no || '')}`, pagePadding + 2.5, boxY + 4.4);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(5.8);
+    pdf.text(`${courier} | Tracking: ${tracking}`, pagePadding + 2.5, boxY + 8.1);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(8.2);
+    pdf.text(money(order.cod_collect_amount || order.total_amount), pageWidth - pagePadding - 2.5, boxY + 5.7, { align: 'right' });
+
+    const addressTop = boxY + headerHeight + 4;
+    const columnWidth = contentWidth / 2 - 6;
+    const drawAddress = (label, name, address, phone, x) => {
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(5.4);
+      pdf.setTextColor(88, 100, 108);
+      pdf.text(label, x, addressTop);
+      pdf.setTextColor(23, 32, 42);
+      pdf.setFontSize(8.2);
+      pdf.text(pdf.splitTextToSize(String(name), columnWidth).slice(0, 2), x, addressTop + 4.2);
+      const nameLines = pdf.splitTextToSize(String(name), columnWidth).slice(0, 2).length;
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(7.1);
+      const addressLines = pdf.splitTextToSize(String(address), columnWidth).slice(0, 6);
+      const addressY = addressTop + 4.2 + nameLines * 3.4;
+      pdf.text(addressLines, x, addressY);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7.2);
+      pdf.text(String(phone), x, Math.min(addressY + addressLines.length * 3.15 + 2.5, boxY + boxHeight - 3));
+    };
+    drawAddress('FROM', fromName, fromAddress, fromPhone, pagePadding + 3);
+    drawAddress('TO', toName, toAddress, toPhone, middleX + 3);
+
+    if (slot < 2) {
+      pdf.setDrawColor(140, 148, 154);
+      pdf.setLineDashPattern([1.2, 1.2], 0);
+      pdf.line(pagePadding, y + slotHeight, pageWidth - pagePadding, y + slotHeight);
+      pdf.setLineDashPattern([], 0);
+    }
+  });
+
+  if (!printableOrders.length) {
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(12);
+    pdf.text('No COD orders selected', pageWidth / 2, 20, { align: 'center' });
+  }
+  if (options.output === 'blob') return pdf.output('blob');
+  pdf.save(`COD_Labels_${todayInputDate()}.pdf`);
+  return null;
+}
+
+async function createCodBillPdf(order, items = [], companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
+  const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+  const settings = { ...DEFAULT_COMPANY_SETTINGS, ...(companySettings || {}) };
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 8;
+  let logoData = '';
+  const logoUrl = companyLogoUrl(settings);
+  if (logoUrl) {
+    try { logoData = await imageUrlToDataUrl(logoUrl); } catch { logoData = ''; }
+  }
+  let companyX = margin;
+  if (logoData) {
+    const logoFormat = logoData.startsWith('data:image/png') ? 'PNG' : logoData.startsWith('data:image/webp') ? 'WEBP' : 'JPEG';
+    pdf.addImage(logoData, logoFormat, margin, margin, 16, 16, undefined, 'FAST');
+    companyX += 20;
+  }
+  pdf.setTextColor(23, 32, 42);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(13);
+  pdf.text(String(settings.shop_name || 'Computer Shop'), companyX, margin + 4.5);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(6.3);
+  const companyLines = [settings.header_subtitle, settings.address, [settings.phone, settings.email].filter(Boolean).join(' | ')].filter(Boolean);
+  if (companyLines.length) pdf.text(pdf.splitTextToSize(companyLines.join('\n'), 64), companyX, margin + 8);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(10.5);
+  pdf.text('COD ORDER BILL', pageWidth - margin, margin + 4.5, { align: 'right' });
+  pdf.setFontSize(8.5);
+  pdf.text(String(order.document_no || ''), pageWidth - margin, margin + 9, { align: 'right' });
+  pdf.setDrawColor(22, 136, 189);
+  pdf.setLineWidth(.65);
+  pdf.line(margin, margin + 20, pageWidth - margin, margin + 20);
+
+  let cursorY = margin + 26;
+  const metaRows = [
+    ['Date', fmtDate(order.document_date || order.created_at), 'Status', codStatusLabel(order.status)],
+    ['Recipient', order.recipient_name || '-', 'Phone', order.delivery_phone || '-'],
+    ['Courier', order.delivery_service || 'Not selected', 'Tracking', order.tracking_number || 'Not assigned']
+  ];
+  metaRows.forEach(([leftLabel, leftValue, rightLabel, rightValue]) => {
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(5.4); pdf.setTextColor(92, 103, 111);
+    pdf.text(leftLabel.toUpperCase(), margin, cursorY);
+    pdf.text(rightLabel.toUpperCase(), pageWidth / 2 + 2, cursorY);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(23, 32, 42);
+    pdf.text(pdf.splitTextToSize(String(leftValue), pageWidth / 2 - margin - 5), margin, cursorY + 3.6);
+    pdf.text(pdf.splitTextToSize(String(rightValue), pageWidth / 2 - margin - 5), pageWidth / 2 + 2, cursorY + 3.6);
+    cursorY += 8;
+  });
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(5.4); pdf.setTextColor(92, 103, 111);
+  pdf.text('DELIVERY ADDRESS', margin, cursorY);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7); pdf.setTextColor(23, 32, 42);
+  const addressLines = pdf.splitTextToSize(String(order.delivery_address || '-'), pageWidth - margin * 2);
+  pdf.text(addressLines, margin, cursorY + 3.7);
+  cursorY += addressLines.length * 3.2 + 6;
+  if (order.notes) {
+    const noteLines = pdf.splitTextToSize(`Notes: ${order.notes}`, pageWidth - margin * 2 - 4);
+    pdf.setFillColor(244, 248, 250);
+    pdf.rect(margin, cursorY, pageWidth - margin * 2, noteLines.length * 3 + 4, 'F');
+    pdf.text(noteLines, margin + 2, cursorY + 3.8);
+    cursorY += noteLines.length * 3 + 7;
+  }
+
+  const headers = [];
+  if (settings.show_item_code) headers.push('Code');
+  headers.push('Description', 'Qty', 'Unit price', 'Total');
+  const rows = (items || []).map((item) => {
+    const row = [];
+    if (settings.show_item_code) row.push(item.item_code || '-');
+    row.push(item.description || '-', String(numberValue(item.qty)), money(item.unit_price), money(item.line_total ?? numberValue(item.qty) * numberValue(item.unit_price)));
+    return row;
+  });
+  autoTable(pdf, {
+    startY: cursorY,
+    head: [headers],
+    body: rows.length ? rows : [[...(settings.show_item_code ? ['-'] : []), 'No items', '-', '-', '-']],
+    margin: { left: margin, right: margin, bottom: 13 },
+    showHead: 'everyPage',
+    rowPageBreak: 'avoid',
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 6.6, cellPadding: 1.6, textColor: [23, 32, 42], lineColor: [214, 221, 226], lineWidth: .14 },
+    headStyles: { fillColor: [237, 243, 246], textColor: [23, 32, 42], fontStyle: 'bold' },
+    columnStyles: settings.show_item_code
+      ? { 0: { cellWidth: 17 }, 1: { cellWidth: 'auto' }, 2: { cellWidth: 10, halign: 'right' }, 3: { cellWidth: 25, halign: 'right' }, 4: { cellWidth: 26, halign: 'right' } }
+      : { 0: { cellWidth: 'auto' }, 1: { cellWidth: 10, halign: 'right' }, 2: { cellWidth: 25, halign: 'right' }, 3: { cellWidth: 26, halign: 'right' } }
+  });
+  cursorY = (pdf.lastAutoTable?.finalY || cursorY) + 5;
+  const orderTotal = numberValue(order.total_amount);
+  const collectTotal = numberValue(order.cod_collect_amount || order.total_amount);
+  const collectDifference = roundMoney(collectTotal - orderTotal);
+  const summaryHeight = collectDifference ? 16 : 12;
+  const policyLines = pdf.splitTextToSize(invoicePolicyText(settings), pageWidth - margin * 2 - 4);
+  const policyHeight = Math.max(policyLines.length * 1.55 + 4.5, 9);
+  const requiredHeight = summaryHeight + 18 + policyHeight;
+  if (cursorY + requiredHeight > pageHeight - margin - 7) { pdf.addPage('a5', 'portrait'); cursorY = margin; }
+  const totalsX = pageWidth - margin - 68;
+  pdf.setDrawColor(110, 120, 126); pdf.setLineWidth(.2); pdf.line(totalsX, cursorY, pageWidth - margin, cursorY);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6.4); pdf.setTextColor(23, 32, 42);
+  pdf.text('Order total', totalsX, cursorY + 4); pdf.text(money(orderTotal), pageWidth - margin, cursorY + 4, { align: 'right' });
+  let summaryY = cursorY + 4;
+  if (collectDifference) {
+    summaryY += 4;
+    pdf.text('Delivery charge in COD', totalsX, summaryY); pdf.text(money(collectDifference), pageWidth - margin, summaryY, { align: 'right' });
+  }
+  summaryY += 4.5;
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.6);
+  pdf.text('COD TO COLLECT', totalsX, summaryY); pdf.text(money(collectTotal), pageWidth - margin, summaryY, { align: 'right' });
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(5.6); pdf.setTextColor(82, 96, 105);
+  pdf.text('Payment will be collected by the courier on delivery.', totalsX, summaryY + 4);
+
+  const signatureY = summaryY + 12;
+  const signatureWidth = (pageWidth - margin * 2 - 20) / 2;
+  pdf.setDrawColor(85, 92, 98);
+  pdf.line(margin + 3, signatureY, margin + 3 + signatureWidth, signatureY);
+  pdf.line(pageWidth - margin - 3 - signatureWidth, signatureY, pageWidth - margin - 3, signatureY);
+  pdf.setTextColor(23, 32, 42); pdf.setFontSize(5.4);
+  pdf.text('Authorized By', margin + 3 + signatureWidth / 2, signatureY + 3, { align: 'center' });
+  pdf.text('Customer Signature', pageWidth - margin - 3 - signatureWidth / 2, signatureY + 3, { align: 'center' });
+  const policyY = signatureY + 6;
+  pdf.setFillColor(247, 248, 249); pdf.setDrawColor(215, 220, 224);
+  pdf.rect(margin, policyY, pageWidth - margin * 2, policyHeight, 'FD');
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(4.3); pdf.setTextColor(68, 76, 82);
+  pdf.text('STORE POLICIES', margin + 2, policyY + 2.5);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(4);
+  pdf.text(policyLines, margin + 2, policyY + 4.2);
+
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setDrawColor(214, 221, 226); pdf.line(margin, pageHeight - margin + 1, pageWidth - margin, pageHeight - margin + 1);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(5.8); pdf.setTextColor(100, 112, 120);
+    pdf.text(`${settings.shop_name || 'Computer Shop'} - Page ${page} of ${pageCount}`, pageWidth / 2, pageHeight - margin + 4, { align: 'center' });
+  }
+  if (options.output === 'blob') return pdf.output('blob');
+  pdf.save(`${safePdfFilename(order.document_no)}-COD-Bill.pdf`);
+  return null;
+}
+
+async function printCodLabels(orders, companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
+  const popup = options.popup || window.open('', '_blank', 'width=920,height=980');
+  if (!popup) { window.alert('Allow pop-ups for this site to print COD labels.'); return; }
+  try {
+    popup.document.open();
+    popup.document.write('<!doctype html><title>Preparing COD labels</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing three-per-A5 COD labels...</body>');
+    popup.document.close();
+    const blob = await createCodLabelsPdf(orders, companySettings, { output: 'blob' });
+    showPdfBlobPreview(popup, blob, `COD Labels - ${orders.length} order${orders.length === 1 ? '' : 's'}`, options.autoPrint !== false);
+  } catch (printError) {
+    popup.document.open();
+    popup.document.write(`<!doctype html><title>Print failed</title><body style="font-family:Arial;padding:30px"><h2>Could not prepare COD labels</h2><p>${escapePrintHtml(printError.message || String(printError))}</p></body>`);
+    popup.document.close();
+  }
+}
+
+async function printCodDocument(order, items, mode = 'label', companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
+  if (!order) return;
+  if (mode === 'label') { await printCodLabels([order], companySettings, options); return; }
+  const popup = options.popup || window.open('', '_blank', 'width=920,height=980');
+  if (!popup) { window.alert('Allow pop-ups for this site to print COD bills.'); return; }
+  try {
+    popup.document.open();
+    popup.document.write('<!doctype html><title>Preparing COD bill</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing A5 COD bill...</body>');
+    popup.document.close();
+    const blob = await createCodBillPdf(order, items, companySettings, { output: 'blob' });
+    showPdfBlobPreview(popup, blob, `${order.document_no} - COD Order Bill`, options.autoPrint !== false);
+  } catch (printError) {
+    popup.document.open();
+    popup.document.write(`<!doctype html><title>Print failed</title><body style="font-family:Arial;padding:30px"><h2>Could not prepare COD bill</h2><p>${escapePrintHtml(printError.message || String(printError))}</p></body>`);
+    popup.document.close();
+  }
 }
 
 function openCourierTracking(service) {
@@ -4388,7 +5231,7 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
 
   async function loadCodSupport() {
     const [staffRes, userRes] = await Promise.all([
-      supabase.from('staff').select('id, auth_user_id, full_name, role').eq('is_active', true).order('full_name'),
+      supabase.from('staff_directory_v38').select('id, auth_user_id, full_name, role').eq('is_active', true).order('full_name'),
       supabase.auth.getUser()
     ]);
     if (staffRes.error) setError(staffRes.error.message);
@@ -4588,6 +5431,7 @@ function CodOrdersPage() {
   const [staff, setStaff] = useState([]);
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [filters, setFilters] = useState({ search: '', status: 'active' });
+  const [labelSelection, setLabelSelection] = useState([]);
   const [formMode, setFormMode] = useState('');
   const [action, setAction] = useState({ tracking: '', service: '', paymentMethodId: '', feePaidNow: 0, receivedAmount: 0, returnReason: '', returnFee: 0 });
   const [busy, setBusy] = useState(false);
@@ -4601,9 +5445,16 @@ function CodOrdersPage() {
     fetchCompanySettings().then(setCompanySettings).catch(() => {});
   }, []);
 
+  useRealtimeRefresh(['documents', 'document_items', 'stock_balances'], () => {
+    loadCodOrders();
+    if (selected?.id) loadSelectedCodItems(selected.id);
+  });
+  useRealtimeRefresh(['payment_methods'], loadCodLookups);
+  useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
+
   async function loadCodLookups() {
     const [staffRes, paymentRes] = await Promise.all([
-      supabase.from('staff').select('id, full_name').order('full_name'),
+      supabase.from('staff_directory_v38').select('id, full_name').eq('is_active', true).order('full_name'),
       supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name')
     ]);
     if (!staffRes.error) setStaff(staffRes.data || []);
@@ -4622,6 +5473,7 @@ function CodOrdersPage() {
     else {
       setOrders(data || []);
       setSelected((current) => current ? (data || []).find((row) => row.id === current.id) || null : null);
+      setLabelSelection((current) => current.filter((id) => (data || []).some((row) => row.id === id)));
     }
   }
 
@@ -4639,7 +5491,11 @@ function CodOrdersPage() {
       returnReason: '',
       returnFee: numberValue(order.delivery_charge)
     }));
-    const { data, error: itemError } = await supabase.from('document_items').select('*').eq('document_id', order.id).order('created_at');
+    await loadSelectedCodItems(order.id);
+  }
+
+  async function loadSelectedCodItems(documentId) {
+    const { data, error: itemError } = await supabase.from('document_items').select('*').eq('document_id', documentId).order('created_at');
     if (itemError) setError(itemError.message); else setItems(data || []);
   }
 
@@ -4755,6 +5611,21 @@ function CodOrdersPage() {
     if (clean && !`${order.document_no} ${order.recipient_name} ${order.delivery_phone} ${order.delivery_address} ${order.delivery_service} ${order.tracking_number}`.toLowerCase().includes(clean)) return false;
     return true;
   });
+  const pendingLabelOrders = filtered.filter((order) => ['awaiting_packing', 'packed'].includes(order.status));
+  const selectedLabelOrders = orders.filter((order) => labelSelection.includes(order.id));
+  function toggleLabelOrder(orderId) {
+    setLabelSelection((current) => current.includes(orderId) ? current.filter((id) => id !== orderId) : [...current, orderId]);
+  }
+  function selectPendingLabels() {
+    const ids = pendingLabelOrders.map((order) => order.id);
+    setLabelSelection(ids);
+    if (!ids.length) setMessage('No awaiting-packing or packed orders match the current filters.');
+  }
+  function printSelectedLabels() {
+    if (!selectedLabelOrders.length) { setError('Select at least one COD order to print labels.'); return; }
+    setError('');
+    printCodLabels(selectedLabelOrders, companySettings);
+  }
   const staffMap = new Map(staff.map((row) => [row.id, row.full_name]));
   const canAct = selected && !['converted', 'returned', 'cancelled'].includes(selected.status);
   const nextStatusAction = selected ? {
@@ -4775,8 +5646,9 @@ function CodOrdersPage() {
       {message && <div className="notice">{message}</div>}{error && <div className="error-box">{error}</div>}
       <div className="cod-queue-stats"><StatCard label="Awaiting packing" value={orders.filter((row) => row.status === 'awaiting_packing').length} /><StatCard label="Packed" value={orders.filter((row) => row.status === 'packed').length} /><StatCard label="Dispatched" value={orders.filter((row) => row.status === 'dispatched').length} /><StatCard label="Awaiting payment" value={orders.filter((row) => row.status === 'awaiting_settlement').length} /></div>
       <div className="panel-card cod-filter-row"><input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Search order, customer, phone, address, courier, tracking" /><select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="active">All active orders</option><option value="all">All orders</option><option value="awaiting_packing">Awaiting packing</option><option value="packed">Packed</option><option value="dispatched">Dispatched</option><option value="awaiting_settlement">Awaiting payment</option><option value="converted">Paid / Converted</option><option value="returned">Returned</option><option value="cancelled">Cancelled</option></select><button className="secondary-button" onClick={loadCodOrders}>Refresh</button></div>
+      <div className="panel-card cod-label-batch-bar"><div><strong>Batch COD labels</strong><span>Three labels are arranged from top to bottom on each A5 sheet.</span></div><div><button className="secondary-button" onClick={selectPendingLabels}>Select Pending</button><button className="secondary-button" disabled={!labelSelection.length} onClick={() => setLabelSelection([])}>Clear</button><button className="primary-button" disabled={!labelSelection.length} onClick={printSelectedLabels}>Print Selected ({labelSelection.length})</button></div></div>
       <div className="cod-queue-layout">
-        <div className="panel-card table-wrap"><table><thead><tr><th>Order</th><th>Status</th><th>Customer</th><th>Phone</th><th>Source</th><th>Order taker</th><th>Courier</th><th>Tracking</th><th>Courier status</th><th>COD</th></tr></thead><tbody>{filtered.map((order) => <tr key={order.id} className={selected?.id === order.id ? 'selected-row' : ''} onClick={() => selectCodOrder(order)}><td>{order.document_no}</td><td>{codStatusLabel(order.status)}</td><td>{order.recipient_name}</td><td>{order.delivery_phone}</td><td>{order.order_source || '-'}</td><td>{staffMap.get(order.order_taken_by) || '-'}</td><td>{order.delivery_service || '-'}</td><td>{order.tracking_number || '-'}</td><td>{order.courier_status || '-'}</td><td>{money(order.cod_collect_amount || order.total_amount)}</td></tr>)}{!filtered.length && <EmptyRow colSpan={10} text="No COD orders match this filter." />}</tbody></table></div>
+        <div className="panel-card table-wrap"><table><thead><tr><th className="cod-label-select-column">Label</th><th>Order</th><th>Status</th><th>Customer</th><th>Phone</th><th>Source</th><th>Order taker</th><th>Courier</th><th>Tracking</th><th>Courier status</th><th>COD</th></tr></thead><tbody>{filtered.map((order) => <tr key={order.id} className={selected?.id === order.id ? 'selected-row' : ''} onClick={() => selectCodOrder(order)}><td className="cod-label-select-column"><input type="checkbox" aria-label={`Select label ${order.document_no}`} checked={labelSelection.includes(order.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleLabelOrder(order.id)} /></td><td>{order.document_no}</td><td>{codStatusLabel(order.status)}</td><td>{order.recipient_name}</td><td>{order.delivery_phone}</td><td>{order.order_source || '-'}</td><td>{staffMap.get(order.order_taken_by) || '-'}</td><td>{order.delivery_service || '-'}</td><td>{order.tracking_number || '-'}</td><td>{order.courier_status || '-'}</td><td>{money(order.cod_collect_amount || order.total_amount)}</td></tr>)}{!filtered.length && <EmptyRow colSpan={11} text="No COD orders match this filter." />}</tbody></table></div>
         <section className="panel-card cod-action-panel">
           {!selected && <div className="muted-box">Select an order to view items and actions.</div>}
           {selected && <>
@@ -4964,6 +5836,8 @@ function AssembliesManager() {
   const [error, setError] = useState('');
 
   useEffect(() => { loadAssemblies(); loadAssemblyProducts(); }, []);
+  useRealtimeRefresh(['product_assemblies', 'product_assembly_items'], loadAssemblies);
+  useRealtimeRefresh(['products', 'stock_balances'], loadAssemblyProducts);
 
   async function loadAssemblies() {
     setError('');
@@ -5078,6 +5952,8 @@ function ProductsPage() {
     const timeout = setTimeout(() => loadProducts(), 180);
     return () => clearTimeout(timeout);
   }, [selectedCategoryId, searchBy, search, filterMode, categories.length]);
+  useRealtimeRefresh(['products', 'stock_balances', 'stock_movements'], loadProducts);
+  useRealtimeRefresh(['categories'], () => { loadCategories(); loadProducts(); });
 
   async function loadCategories() {
     const { data, error: categoryError } = await supabase.from('categories').select('id, name, parent_id, path').order('path', { ascending: true });
@@ -5928,6 +6804,8 @@ function StockPage({ onOpenDocuments }) {
     const timeout = setTimeout(() => loadStock(), 180);
     return () => clearTimeout(timeout);
   }, [selectedCategoryId, stockView, searchBy, search, filterMode, categories.length]);
+  useRealtimeRefresh(['products', 'stock_balances', 'stock_movements', 'documents', 'document_items'], loadStock);
+  useRealtimeRefresh(['categories'], () => { loadCategories(); loadStock(); });
 
   async function loadCategories() {
     const { data, error: categoryError } = await supabase.from('categories').select('id, name, parent_id, path').order('path', { ascending: true });
@@ -6226,6 +7104,11 @@ function CustomersSuppliersPage() {
     if (selectedId) loadTransactions(selectedId);
     else setTransactions([]);
   }, [selectedId]);
+  useRealtimeRefresh(['customers', 'suppliers', 'documents', 'document_items', 'cashflow_entries'], () => {
+    loadRows();
+    if (selectedId) loadTransactions(selectedId);
+  });
+  useRealtimeRefresh(['payment_methods'], loadPaymentMethods);
 
   const selected = rows.find((row) => row.id === selectedId);
   const selectedOutstanding = selected ? Number(selected.due_balance || 0) - Number(selected.store_credit_balance || 0) : 0;
@@ -6570,38 +7453,61 @@ function CustomersSuppliersPage() {
 function CashflowPage() {
   const [entries, setEntries] = useState([]);
   const [paymentMethods, setPaymentMethods] = useState([]);
+  const [cashAccounts, setCashAccounts] = useState([]);
+  const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
   const [filters, setFilters] = useState({ search: '', type: 'all', documentType: 'all', paymentMethodId: 'all', datePreset: 'today', dateFrom: '', dateTo: '' });
   const [showAdd, setShowAdd] = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
   const [manualForm, setManualForm] = useState({ entry_type: 'cash_out', payment_method_id: '', amount: '', description: '' });
+  const [transferForm, setTransferForm] = useState({ from_payment_method_id: '', to_payment_method_id: '', amount: '', transfer_date: todayInputDate(), description: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
+  const [pdfBusy, setPdfBusy] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
-  useEffect(() => { loadPaymentMethods(); }, []);
+  useEffect(() => {
+    loadPaymentMethods();
+    loadCashAccounts();
+    fetchCompanySettings().then(setCompanySettings).catch((settingsError) => setError(settingsError.message));
+  }, []);
   useEffect(() => {
     const timeout = setTimeout(() => loadEntries(), 120);
     return () => clearTimeout(timeout);
   }, [filters.datePreset, filters.dateFrom, filters.dateTo]);
+  useRealtimeRefresh(['cashflow_entries', 'documents'], () => { loadEntries(); loadCashAccounts(); });
+  useRealtimeRefresh(['payment_methods'], () => { loadPaymentMethods(); loadCashAccounts(); });
+  useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
 
   async function loadEntries() {
     setError('');
     const range = cashflowDateRange(filters.datePreset, filters.dateFrom, filters.dateTo);
-    let query = supabase
-      .from('cashflow_entries')
-      .select('id, document_id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name), documents(id, document_no, document_type, status, total_amount, paid_amount, notes)')
-      .order('created_at', { ascending: false })
-      .limit(1500);
-    if (range.start) query = query.gte('created_at', range.start.toISOString());
-    if (range.end) query = query.lt('created_at', range.end.toISOString());
-    const { data, error: cashError } = await query;
-    if (cashError) setError(cashError.message);
-    else setEntries(data || []);
+    const pageSize = 1000;
+    let offset = 0;
+    const loadedEntries = [];
+    while (true) {
+      let query = supabase
+        .from('cashflow_entries')
+        .select('id, document_id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name), documents(id, document_no, document_type, status, total_amount, paid_amount, notes)')
+        .order('created_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (range.start) query = query.gte('created_at', range.start.toISOString());
+      if (range.end) query = query.lt('created_at', range.end.toISOString());
+      const { data, error: cashError } = await query;
+      if (cashError) {
+        setError(cashError.message);
+        return;
+      }
+      loadedEntries.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+      offset += pageSize;
+    }
+    setEntries(loadedEntries);
   }
 
   async function loadPaymentMethods() {
     const { data, error: methodError } = await supabase
       .from('payment_methods')
-      .select('id, name, is_paid_method, affects_cashflow, is_active')
+      .select('id, name, is_paid_method, affects_cashflow, is_active, account_kind')
       .eq('is_active', true)
       .eq('affects_cashflow', true)
       .order('name');
@@ -6609,7 +7515,24 @@ function CashflowPage() {
     else {
       setPaymentMethods(data || []);
       if ((data || []).length) setManualForm((form) => ({ ...form, payment_method_id: form.payment_method_id || data[0].id }));
+      const transferable = (data || []).filter((method) => ['cash', 'bank'].includes(method.account_kind));
+      setTransferForm((form) => ({
+        ...form,
+        from_payment_method_id: transferable.some((method) => method.id === form.from_payment_method_id) ? form.from_payment_method_id : transferable[0]?.id || '',
+        to_payment_method_id: transferable.some((method) => method.id === form.to_payment_method_id && method.id !== (form.from_payment_method_id || transferable[0]?.id))
+          ? form.to_payment_method_id
+          : transferable.find((method) => method.id !== (form.from_payment_method_id || transferable[0]?.id))?.id || ''
+      }));
     }
+  }
+
+  async function loadCashAccounts() {
+    const { data, error: balanceError } = await supabase.rpc('get_cash_account_balances_v43');
+    if (balanceError) {
+      setError(`${balanceError.message}. Run migration 043_cash_accounts_transfers_cod_printing.sql in Supabase.`);
+      return;
+    }
+    setCashAccounts(data || []);
   }
 
   async function saveManualMovement(event) {
@@ -6637,6 +7560,63 @@ function CashflowPage() {
     loadEntries();
   }
 
+  async function saveAccountTransfer(event) {
+    event.preventDefault();
+    setError(''); setMessage('');
+    const amount = numberValue(transferForm.amount);
+    if (!transferForm.from_payment_method_id || !transferForm.to_payment_method_id) { setError('Select both transfer accounts.'); return; }
+    if (transferForm.from_payment_method_id === transferForm.to_payment_method_id) { setError('Source and destination accounts must be different.'); return; }
+    if (amount <= 0) { setError('Enter a transfer amount greater than zero.'); return; }
+    const { data, error: transferError } = await supabase.rpc('save_cash_account_transfer_v43', {
+      p_from_payment_method_id: transferForm.from_payment_method_id,
+      p_to_payment_method_id: transferForm.to_payment_method_id,
+      p_amount: amount,
+      p_description: transferForm.description || null,
+      p_transfer_date: transferForm.transfer_date || todayInputDate()
+    });
+    if (transferError) { setError(transferError.message); return; }
+    setShowTransfer(false);
+    setTransferForm((form) => ({ ...form, amount: '', description: '', transfer_date: todayInputDate() }));
+    setMessage(`${data?.document_no}: ${money(data?.amount)} transferred from ${data?.from_account} to ${data?.to_account}.`);
+    loadEntries(); loadCashAccounts();
+  }
+
+  async function exportCashflow(mode) {
+    setError('');
+    setMessage('');
+    if (filters.datePreset === 'custom' && filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo) {
+      setError('Custom date From cannot be after To.');
+      return;
+    }
+    const popup = mode === 'print' ? window.open('', '_blank', 'width=920,height=980') : null;
+    if (mode === 'print' && !popup) {
+      setError('Allow pop-ups for this site to preview and print the cashflow PDF.');
+      return;
+    }
+    setPdfBusy(mode);
+    try {
+      if (popup) {
+        popup.document.open();
+        popup.document.write('<!doctype html><title>Preparing cashflow PDF</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing A5 cashflow report...</body>');
+        popup.document.close();
+        const blob = await createCashflowReportPdf(filteredEntries, filters, companySettings, { output: 'blob' });
+        showPdfBlobPreview(popup, blob, `Cashflow - ${cashflowReportRangeLabel(filters)}`, true);
+      } else {
+        await createCashflowReportPdf(filteredEntries, filters, companySettings);
+        setMessage(`A5 cashflow PDF downloaded for ${cashflowReportRangeLabel(filters)}.`);
+      }
+    } catch (pdfError) {
+      setError(pdfError.message || String(pdfError));
+      if (popup && !popup.closed) {
+        popup.document.open();
+        popup.document.write(`<!doctype html><title>PDF failed</title><body style="font-family:Arial;padding:30px"><h2>Could not prepare cashflow PDF</h2><p>${escapePrintHtml(pdfError.message || String(pdfError))}</p></body>`);
+        popup.document.close();
+      }
+    } finally {
+      setPdfBusy('');
+    }
+  }
+
   const filteredEntries = entries.filter((entry) => {
     const docType = entry.documents?.document_type || '';
     const text = `${entry.description || ''} ${entry.account_name || ''} ${entry.payment_methods?.name || ''} ${entry.documents?.document_no || ''} ${docType}`.toLowerCase();
@@ -6647,10 +7627,13 @@ function CashflowPage() {
     return true;
   });
 
-  const cashIn = filteredEntries.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const cashOut = filteredEntries.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const externalEntries = filteredEntries.filter((row) => row.documents?.document_type !== 'account_transfer');
+  const cashIn = externalEntries.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const cashOut = externalEntries.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const nonCash = filteredEntries.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
+  const transferableMethods = paymentMethods.filter((method) => ['cash', 'bank'].includes(method.account_kind));
+  const sourceAccount = cashAccounts.find((account) => account.payment_method_id === transferForm.from_payment_method_id);
 
   return (
     <section className="page-section cashflow-v17">
@@ -6659,7 +7642,13 @@ function CashflowPage() {
           <h3>Cashflow</h3>
           <p>Every cash movement is linked to a numbered source document. Click any row to inspect it.</p>
         </div>
-        <div className="cashflow-heading-actions"><span>{rangeLabel}</span><button className="primary-button" onClick={() => setShowAdd(true)}>+ Add Cash Document</button></div>
+        <div className="cashflow-heading-actions">
+          <span>{rangeLabel}</span>
+          <button className="secondary-button" disabled={!!pdfBusy} onClick={() => exportCashflow('print')}>{pdfBusy === 'print' ? 'Preparing...' : 'Print A5'}</button>
+          <button className="secondary-button" disabled={!!pdfBusy} onClick={() => exportCashflow('download')}>{pdfBusy === 'download' ? 'Preparing...' : 'Download A5 PDF'}</button>
+          <button className="secondary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button>
+          <button className="primary-button" onClick={() => setShowAdd(true)}>+ Add Cash Document</button>
+        </div>
       </div>
       {error && <div className="error-box">{error}</div>}
       {message && <div className="notice success">{message}</div>}
@@ -6668,6 +7657,14 @@ function CashflowPage() {
         <StatCard label="Cash Out" value={money(cashOut)} />
         <StatCard label="Net" value={money(cashIn - cashOut)} />
         <StatCard label="Non-cash" value={money(nonCash)} />
+      </div>
+
+      <div className="panel-card cash-account-section">
+        <div className="cash-account-heading"><div><h3>Cash & Bank Accounts</h3><p>Current balances from all recorded cashflow. Transfers move money between accounts without changing profit or total cash.</p></div><button className="primary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button></div>
+        <div className="cash-account-grid">
+          {cashAccounts.filter((account) => ['cash', 'bank'].includes(account.account_kind) && (account.is_active || Math.abs(numberValue(account.balance)) > .004)).map((account) => <div className={`cash-account-card ${account.account_kind}`} key={account.payment_method_id}><span>{account.account_kind === 'cash' ? 'Cash drawer' : 'Bank account'}</span><strong>{account.payment_method_name}</strong><em className={numberValue(account.balance) < 0 ? 'negative-balance' : ''}>{signedMoney(account.balance)}</em><small>Current balance - all time</small></div>)}
+          {!cashAccounts.some((account) => ['cash', 'bank'].includes(account.account_kind)) && <div className="muted-box">Run migration 043 to create Cash, Bank 1 and Bank 2 account balances.</div>}
+        </div>
       </div>
 
       <div className="panel-card cashflow-date-filter">
@@ -6695,6 +7692,7 @@ function CashflowPage() {
           <option value="supplier_payment">Supplier payments</option>
           <option value="expense">Expenses</option>
           <option value="other_income">Other income</option>
+          <option value="account_transfer">Account transfers</option>
         </select>
         <select value={filters.paymentMethodId} onChange={(e) => setFilters({ ...filters, paymentMethodId: e.target.value })}>
           <option value="all">All payments</option>
@@ -6757,6 +7755,24 @@ function CashflowPage() {
           </div>
         </div>
       )}
+      {showTransfer && (
+        <div className="modal-backdrop">
+          <div className="modal-card cash-transfer-modal">
+            <div className="section-title-row"><div><h3>Transfer Money</h3><p>Move money between Cash, Bank 1, Bank 2, or another bank account. This does not create income or expense.</p></div><button type="button" className="secondary-button" onClick={() => setShowTransfer(false)}>Close</button></div>
+            <form onSubmit={saveAccountTransfer}>
+              <div className="cash-transfer-grid">
+                <label>From account<select value={transferForm.from_payment_method_id} onChange={(e) => { const fromId = e.target.value; const toId = transferForm.to_payment_method_id === fromId ? transferableMethods.find((method) => method.id !== fromId)?.id || '' : transferForm.to_payment_method_id; setTransferForm({ ...transferForm, from_payment_method_id: fromId, to_payment_method_id: toId }); }}>{transferableMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select><small>Available: {sourceAccount ? signedMoney(sourceAccount.balance) : '-'}</small></label>
+                <label>To account<select value={transferForm.to_payment_method_id} onChange={(e) => setTransferForm({ ...transferForm, to_payment_method_id: e.target.value })}>{transferableMethods.filter((method) => method.id !== transferForm.from_payment_method_id).map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select></label>
+                <label>Transfer date<input type="date" value={transferForm.transfer_date} onChange={(e) => setTransferForm({ ...transferForm, transfer_date: e.target.value })} /></label>
+                <label>Amount<input type="number" min="0.01" step="0.01" value={transferForm.amount} onFocus={selectAllText} onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })} required /></label>
+                <label className="wide-field">Description<input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder="Example: Daily cash deposit" /></label>
+              </div>
+              <div className="cash-transfer-effect"><div><span>Source</span><strong>-{money(transferForm.amount)}</strong></div><div><span>Destination</span><strong>+{money(transferForm.amount)}</strong></div><div><span>Total cash change</span><strong>{money(0)}</strong></div></div>
+              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowTransfer(false)}>Cancel</button><button className="primary-button">Save Transfer</button></div>
+            </form>
+          </div>
+        </div>
+      )}
       {previewDocumentId && <DocumentPreviewModal documentId={previewDocumentId} onClose={() => setPreviewDocumentId('')} />}
     </section>
   );
@@ -6802,6 +7818,12 @@ function WarrantyPage() {
     if (!claim) return;
     setClaimUpdate({ status: claim.status, resolution: claim.resolution || '', notes: claim.internal_notes || '', replacementProductId: claim.replacement_product_id || claim.product_id || '', replacementSerialNumber: claim.replacement_serial_number || '' });
   }, [selectedClaimId, claims]);
+  useRealtimeRefresh(['warranty_records', 'warranty_claims', 'warranty_claim_events', 'documents', 'document_items', 'products'], () => {
+    loadWarrantyData();
+    if (selectedClaimId) {
+      supabase.from('warranty_claim_events').select('*').eq('claim_id', selectedClaimId).order('created_at').then(({ data }) => setEvents(data || []));
+    }
+  });
 
   async function loadWarrantyData() {
     setLoading(true); setError('');
@@ -7086,6 +8108,8 @@ function ReportsPage() {
     const timeout = setTimeout(() => loadPeriodReports(), 160);
     return () => clearTimeout(timeout);
   }, [period.from, period.to]);
+  useRealtimeRefresh(['documents', 'document_items', 'cashflow_entries', 'stock_movements'], loadPeriodReports, 420);
+  useRealtimeRefresh(['customers', 'suppliers', 'payment_methods', 'company_settings'], loadReportLookups, 420);
 
   async function loadReportLookups() {
     const [customerRes, supplierRes, paymentRes, companyRes] = await Promise.all([
@@ -7355,13 +8379,402 @@ function OnlineOrdersPage() {
   );
 }
 
+function accountingDisplayAmount(value) {
+  const amount = numberValue(value);
+  const formatted = Math.abs(amount).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return amount < -0.004 ? `(${formatted})` : formatted;
+}
+
+function accountingPeriodLabel(from, to) {
+  const format = (value) => new Date(`${value}T00:00:00`).toLocaleDateString('en-LK', { day: 'numeric', month: 'long', year: 'numeric' });
+  return from === to ? format(from) : `${format(from)} to ${format(to)}`;
+}
+
+function AccountingStatementRow({ label, value, total = false, major = false, indent = false }) {
+  return <div className={`accounting-statement-row${total ? ' total' : ''}${major ? ' major' : ''}${indent ? ' indent' : ''}`}><span>{label}</span><strong>{accountingDisplayAmount(value)}</strong></div>;
+}
+
+function AccountingPage({ activeStaff } = {}) {
+  const [section, setSection] = useState('income');
+  const [periodPreset, setPeriodPreset] = useState('this_month');
+  const [customFrom, setCustomFrom] = useState(todayInputDate());
+  const [customTo, setCustomTo] = useState(todayInputDate());
+  const [asOfDate, setAsOfDate] = useState(todayInputDate());
+  const [reportData, setReportData] = useState({ accounts: [], income: [], balance: [], ledger: [], settings: {} });
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [ledgerSearch, setLedgerSearch] = useState('');
+  const [showCashEntry, setShowCashEntry] = useState(false);
+  const [cashEntry, setCashEntry] = useState({ entry_type: 'cash_out', payment_method_id: '', account_id: '', amount: '', description: '', document_date: todayInputDate() });
+  const [showAccountEditor, setShowAccountEditor] = useState(false);
+  const [accountForm, setAccountForm] = useState({ id: '', code: '', name: '', classification: 'expense', profit_group: '' });
+  const [openingAccount, setOpeningAccount] = useState(null);
+  const [openingForm, setOpeningForm] = useState({ balance: '', opening_date: todayInputDate(), notes: '' });
+  const [allocationForm, setAllocationForm] = useState({ operator_percent: 20, reserve_percent: 5, partner_pool_percent: 60 });
+  const period = useMemo(() => reportPeriodRange(periodPreset, customFrom, customTo), [periodPreset, customFrom, customTo]);
+
+  useEffect(() => { loadAccounting(); loadAccountingLookups(); }, []);
+  useEffect(() => {
+    const timeout = setTimeout(loadAccounting, 160);
+    return () => clearTimeout(timeout);
+  }, [period.from, period.to, asOfDate]);
+  useRealtimeRefresh(['accounting_accounts', 'accounting_journal_entries', 'accounting_journal_lines', 'accounting_opening_balances', 'accounting_settings'], loadAccounting, 420);
+
+  async function loadAccountingLookups() {
+    const [paymentRes, companyRes] = await Promise.all([
+      supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow, is_active').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name'),
+      fetchCompanySettings().then((data) => ({ data, error: null })).catch((lookupError) => ({ data: null, error: lookupError }))
+    ]);
+    if (paymentRes.error || companyRes.error) setError((paymentRes.error || companyRes.error).message);
+    if (!paymentRes.error) {
+      setPaymentMethods(paymentRes.data || []);
+      setCashEntry((current) => ({ ...current, payment_method_id: current.payment_method_id || paymentRes.data?.[0]?.id || '' }));
+    }
+    if (!companyRes.error && companyRes.data) setCompanySettings(companyRes.data);
+  }
+
+  async function loadAccounting() {
+    setLoading(true); setError('');
+    const { data, error: reportError } = await supabase.rpc('get_accounting_report_v42', {
+      p_from: period.from,
+      p_to: period.to,
+      p_as_of: asOfDate
+    });
+    setLoading(false);
+    if (reportError) {
+      setError(`${reportError.message}. Run migration 042_double_entry_accounting_statements.sql in Supabase.`);
+      return;
+    }
+    const next = { accounts: [], income: [], balance: [], ledger: [], settings: {}, ...(data || {}) };
+    setReportData(next);
+    setAllocationForm({
+      operator_percent: numberValue(next.settings?.operator_percent, 20),
+      reserve_percent: numberValue(next.settings?.reserve_percent, 5),
+      partner_pool_percent: numberValue(next.settings?.partner_pool_percent, 60)
+    });
+    const defaultExpense = next.accounts.find((row) => row.system_key === 'expense_miscellaneous') || next.accounts.find((row) => row.account_type === 'expense');
+    setCashEntry((current) => ({ ...current, account_id: current.account_id || defaultExpense?.id || '' }));
+  }
+
+  const incomeRows = reportData.income || [];
+  const salesRows = incomeRows.filter((row) => row.statement_section === 'sales' && Math.abs(numberValue(row.balance)) > 0.004);
+  const otherIncomeRows = incomeRows.filter((row) => row.statement_section === 'other_income' && Math.abs(numberValue(row.balance)) > 0.004);
+  const cogsRows = incomeRows.filter((row) => row.statement_section === 'cogs' && Math.abs(numberValue(row.balance)) > 0.004);
+  const expenseRows = incomeRows.filter((row) => row.statement_section === 'expense' && Math.abs(numberValue(row.balance)) > 0.004);
+  const salesTotal = salesRows.reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const otherIncomeTotal = otherIncomeRows.reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const cogsTotal = cogsRows.reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const expenseTotal = expenseRows.reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const grossProfit = salesTotal - cogsTotal;
+  const netProfit = grossProfit + otherIncomeTotal - expenseTotal;
+  const operatorAllocation = netProfit * numberValue(reportData.settings?.operator_percent, 20) / 100;
+  const reserveAllocation = netProfit * numberValue(reportData.settings?.reserve_percent, 5) / 100;
+  const distributableProfit = netProfit - operatorAllocation - reserveAllocation;
+  const partnerPool = distributableProfit * numberValue(reportData.settings?.partner_pool_percent, 60) / 100;
+  const investorPool = distributableProfit - partnerPool;
+
+  const balanceRows = reportData.balance || [];
+  const fixedAssets = balanceRows.filter((row) => row.statement_section === 'fixed_asset' && Math.abs(numberValue(row.balance)) > 0.004);
+  const currentAssets = balanceRows.filter((row) => row.statement_section === 'current_asset' && Math.abs(numberValue(row.balance)) > 0.004);
+  const nonCurrentAssets = balanceRows.filter((row) => row.statement_section === 'non_current_asset' && Math.abs(numberValue(row.balance)) > 0.004);
+  const currentLiabilities = balanceRows.filter((row) => row.statement_section === 'current_liability' && Math.abs(numberValue(row.balance)) > 0.004);
+  const longLiabilities = balanceRows.filter((row) => row.statement_section === 'long_term_liability' && Math.abs(numberValue(row.balance)) > 0.004);
+  const equityRows = balanceRows.filter((row) => row.statement_section === 'equity' && Math.abs(numberValue(row.balance)) > 0.004);
+  const totalAssets = [...fixedAssets, ...currentAssets, ...nonCurrentAssets].reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const totalLiabilities = [...currentLiabilities, ...longLiabilities].reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const equityBeforeEarnings = equityRows.reduce((sum, row) => sum + numberValue(row.balance), 0);
+  const currentEarnings = numberValue(reportData.current_earnings);
+  const totalEquity = equityBeforeEarnings + currentEarnings;
+  const balanceDifference = totalAssets - totalLiabilities - totalEquity;
+
+  const equityMembers = balanceRows.filter((row) => row.account_type === 'equity' && row.profit_group && numberValue(row.balance) > 0);
+  function allocatedMembers(group, pool) {
+    const members = equityMembers.filter((row) => row.profit_group === group);
+    const investment = members.reduce((sum, row) => sum + numberValue(row.balance), 0);
+    return members.map((row) => ({ ...row, percentage: investment ? numberValue(row.balance) / investment * 100 : 0, allocation: investment ? pool * numberValue(row.balance) / investment : 0 }));
+  }
+  const partnerMembers = allocatedMembers('partner', partnerPool);
+  const investorMembers = allocatedMembers('investor', investorPool);
+  const ledgerRows = (reportData.ledger || []).filter((row) => !ledgerSearch.trim() || `${row.entry_date} ${row.reference_no || ''} ${row.description || ''} ${row.code || ''} ${row.account_name || ''} ${row.memo || ''}`.toLowerCase().includes(ledgerSearch.trim().toLowerCase()));
+  const expenseAccounts = (reportData.accounts || []).filter((row) => row.account_type === 'expense' && row.is_active);
+  const otherIncomeAccounts = (reportData.accounts || []).filter((row) => row.account_type === 'income' && row.statement_section === 'other_income' && row.is_active);
+
+  async function saveCashEntry(event) {
+    event.preventDefault(); setBusy(true); setError(''); setMessage('');
+    const { data, error: saveError } = await supabase.rpc('save_accounting_cash_document_v42', {
+      p_entry_type: cashEntry.entry_type,
+      p_payment_method_id: cashEntry.payment_method_id || null,
+      p_account_id: cashEntry.account_id || null,
+      p_amount: numberValue(cashEntry.amount),
+      p_description: cashEntry.description.trim() || null,
+      p_document_date: cashEntry.document_date
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setShowCashEntry(false);
+    setCashEntry((current) => ({ ...current, amount: '', description: '', document_date: todayInputDate() }));
+    setMessage(`${data?.document_type === 'expense' ? 'Expense' : 'Other income'} ${data?.document_no} saved to cashflow and the ledger.`);
+    await loadAccounting();
+  }
+
+  const ACCOUNT_CLASSIFICATIONS = {
+    fixed_asset: ['asset', 'fixed_asset', 'debit'], current_asset: ['asset', 'current_asset', 'debit'],
+    non_current_asset: ['asset', 'non_current_asset', 'debit'], current_liability: ['liability', 'current_liability', 'credit'],
+    long_term_liability: ['liability', 'long_term_liability', 'credit'], equity: ['equity', 'equity', 'credit'],
+    other_income: ['income', 'other_income', 'credit'], expense: ['expense', 'expense', 'debit']
+  };
+
+  async function saveAccount(event) {
+    event.preventDefault(); setBusy(true); setError(''); setMessage('');
+    const classification = ACCOUNT_CLASSIFICATIONS[accountForm.classification];
+    const { data, error: saveError } = await supabase.rpc('admin_save_account_v42', {
+      p_account_id: accountForm.id || null, p_code: accountForm.code || null, p_name: accountForm.name.trim(),
+      p_account_type: classification[0], p_statement_section: classification[1], p_normal_side: classification[2],
+      p_profit_group: classification[0] === 'equity' ? accountForm.profit_group || null : null
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setShowAccountEditor(false); setAccountForm({ id: '', code: '', name: '', classification: 'expense', profit_group: '' });
+    setMessage(`Account saved${data ? ` (${String(data).slice(0, 8)})` : ''}.`); await loadAccounting();
+  }
+
+  async function saveOpeningBalance(event) {
+    event.preventDefault(); setBusy(true); setError(''); setMessage('');
+    const { error: saveError } = await supabase.rpc('admin_save_opening_balance_v42', {
+      p_account_id: openingAccount.id, p_balance: numberValue(openingForm.balance),
+      p_opening_date: openingForm.opening_date, p_notes: openingForm.notes.trim() || null
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setOpeningAccount(null); setMessage('Opening balance saved and the balancing equity entry was created automatically.'); await loadAccounting();
+  }
+
+  async function saveAllocationSettings(event) {
+    event.preventDefault(); setBusy(true); setError(''); setMessage('');
+    const { error: saveError } = await supabase.rpc('admin_save_accounting_settings_v42', {
+      p_operator_percent: numberValue(allocationForm.operator_percent), p_reserve_percent: numberValue(allocationForm.reserve_percent),
+      p_partner_pool_percent: numberValue(allocationForm.partner_pool_percent)
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setMessage('Profit allocation settings saved.'); await loadAccounting();
+  }
+
+  function openOpening(row) {
+    setOpeningAccount(row);
+    setOpeningForm({ balance: String(numberValue(row.opening_balance)), opening_date: row.opening_date || todayInputDate(), notes: '' });
+  }
+
+  function exportAccountingExcel() {
+    const workbook = XLSX.utils.book_new();
+    let rows = [];
+    let sheetName = 'Accounting';
+    if (section === 'income') {
+      sheetName = 'Income Statement';
+      rows = [[companySettings.shop_name || 'Computer Shop'], ['INCOME STATEMENT'], [`For ${accountingPeriodLabel(period.from, period.to)}`], [], ['Income', 'Amount']];
+      salesRows.forEach((row) => rows.push([row.name, numberValue(row.balance)]));
+      rows.push(['Net Sales', salesTotal], ['Cost of Goods Sold', -cogsTotal], ['Gross Profit', grossProfit]);
+      otherIncomeRows.forEach((row) => rows.push([row.name, numberValue(row.balance)]));
+      rows.push([], ['Expenses', 'Amount']); expenseRows.forEach((row) => rows.push([row.name, -numberValue(row.balance)]));
+      rows.push(['Total Expenses', -expenseTotal], ['Net Profit', netProfit], [], ['Operator allocation', operatorAllocation], ['Reserve', reserveAllocation], ['Distributable profit', distributableProfit]);
+      [...partnerMembers, ...investorMembers].forEach((row) => rows.push([`${row.profit_group === 'partner' ? 'Partner' : 'Investor'} - ${row.name}`, row.allocation]));
+    } else if (section === 'balance') {
+      sheetName = 'Balance Sheet';
+      const left = [['Assets', null], ...fixedAssets.map((row) => [row.name, numberValue(row.balance)]), ['Total Fixed Assets', fixedAssets.reduce((sum, row) => sum + numberValue(row.balance), 0)], [], ...currentAssets.map((row) => [row.name, numberValue(row.balance)]), ['Total Current Assets', currentAssets.reduce((sum, row) => sum + numberValue(row.balance), 0)], [], ...nonCurrentAssets.map((row) => [row.name, numberValue(row.balance)]), ['Total Non-Current Assets', nonCurrentAssets.reduce((sum, row) => sum + numberValue(row.balance), 0)], [], ['Total Assets', totalAssets]];
+      const right = [['Liabilities & Equity', null], ...currentLiabilities.map((row) => [row.name, numberValue(row.balance)]), ...longLiabilities.map((row) => [row.name, numberValue(row.balance)]), ['Total Liabilities', totalLiabilities], [], ...equityRows.map((row) => [row.name, numberValue(row.balance)]), ['Current Earnings', currentEarnings], ['Total Equity', totalEquity], [], ['Total Equity & Liabilities', totalLiabilities + totalEquity]];
+      rows = [[companySettings.shop_name || 'Computer Shop'], ['BALANCE SHEET'], [`As at ${accountingPeriodLabel(asOfDate, asOfDate)}`], [], ['Assets', 'Amount', '', 'Liabilities & Equity', 'Amount']];
+      const count = Math.max(left.length, right.length); for (let index = 1; index < count; index += 1) rows.push([left[index]?.[0] || '', left[index]?.[1] ?? '', '', right[index]?.[0] || '', right[index]?.[1] ?? '']);
+    } else {
+      sheetName = 'General Ledger'; rows = [['Date', 'Reference', 'Description', 'Code', 'Account', 'Debit', 'Credit', 'Memo'], ...ledgerRows.map((row) => [row.entry_date, row.reference_no || '', row.description, row.code, row.account_name, numberValue(row.debit), numberValue(row.credit), row.memo || ''])];
+    }
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    worksheet['!cols'] = section === 'balance' ? [{ wch: 30 }, { wch: 16 }, { wch: 3 }, { wch: 32 }, { wch: 16 }] : [{ wch: 30 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 30 }];
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName.slice(0, 31));
+    XLSX.writeFile(workbook, `${sheetName.replace(/\s+/g, '_')}_${section === 'balance' ? asOfDate : period.to}.xlsx`);
+  }
+
+  function printAccounting() {
+    document.body.classList.add('accounting-print-mode');
+    const cleanup = () => document.body.classList.remove('accounting-print-mode');
+    window.addEventListener('afterprint', cleanup, { once: true });
+    window.setTimeout(() => { window.print(); window.setTimeout(cleanup, 1000); }, 50);
+  }
+
+  if (activeStaff?.role !== 'admin') return <FullScreenMessage title="Admin only" message="An administrator PIN is required to view financial statements and the ledger." />;
+
+  return (
+    <section className="page-section accounting-page">
+      <div className="accounting-page-header">
+        <div><h3>Accounting</h3><p>Automatic double-entry statements generated from POS documents, stock and payments.</p></div>
+        <div className="button-row"><button className="primary-button" onClick={() => setShowCashEntry(true)}>+ Expense or Income</button>{section !== 'setup' && <><button className="secondary-button" onClick={printAccounting}>Print / Save PDF</button><button className="secondary-button" onClick={exportAccountingExcel}>Excel</button></>}</div>
+      </div>
+      <div className="accounting-tabs">
+        {[['income', 'Income Statement'], ['balance', 'Balance Sheet'], ['ledger', 'General Ledger'], ['setup', 'Accounts & Opening Balances']].map(([key, label]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => setSection(key)}>{label}</button>)}
+      </div>
+      {error && <div className="error-box">{error}</div>}{message && <div className="notice success">{message}</div>}
+
+      {section !== 'setup' && <div className="panel-card accounting-filter-bar">
+        {section !== 'balance' && <><div className="date-preset-buttons">{[['this_month', 'This month'], ['last_month', 'Last month'], ['custom', 'Custom']].map(([value, label]) => <button key={value} className={periodPreset === value ? 'pill-button active' : 'pill-button'} onClick={() => setPeriodPreset(value)}>{label}</button>)}</div>{periodPreset === 'custom' && <div className="custom-date-range"><label>From<input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><span>to</span><label>To<input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} /></label></div>}</>}
+        {section === 'balance' && <label className="accounting-asof-filter">Balance sheet as at<input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} /></label>}
+        <button className="secondary-button" onClick={loadAccounting}>Refresh</button>
+      </div>}
+
+      {loading ? <div className="panel-card">Preparing accounting statements...</div> : <>
+        {section === 'income' && <div className="accounting-statement accounting-income-statement">
+          <div className="accounting-statement-heading"><img src={companyLogoUrl(companySettings)} alt="" /><h1>{companySettings.shop_name || 'Computer Shop'}</h1><h2>INCOME STATEMENT</h2><p>For {accountingPeriodLabel(period.from, period.to)}</p></div>
+          <div className="accounting-statement-body">
+            <h3>Revenue</h3>{salesRows.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}
+            <AccountingStatementRow label="Net Sales" value={salesTotal} total />
+            {cogsRows.length ? cogsRows.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={-numberValue(row.balance)} />) : <AccountingStatementRow label="Cost of Goods Sold" value={0} />}
+            <AccountingStatementRow label="Gross Profit" value={grossProfit} total major />
+            {otherIncomeRows.length > 0 && <><h3>Other Income</h3>{otherIncomeRows.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}<AccountingStatementRow label="Total Other Income" value={otherIncomeTotal} total /></>}
+            <h3>Expenses</h3>{expenseRows.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={-numberValue(row.balance)} />)}{!expenseRows.length && <AccountingStatementRow label="No expenses recorded" value={0} />}
+            <AccountingStatementRow label="Total Expenses" value={-expenseTotal} total />
+            <AccountingStatementRow label="Net Profit" value={netProfit} total major />
+          </div>
+          <div className="accounting-profit-allocation">
+            <div className="accounting-allocation-summary"><AccountingStatementRow label={`Operator (${numberValue(reportData.settings?.operator_percent, 20)}%)`} value={operatorAllocation} /><AccountingStatementRow label={`Reserve (${numberValue(reportData.settings?.reserve_percent, 5)}%)`} value={reserveAllocation} /><AccountingStatementRow label="Distributable Profit" value={distributableProfit} total /></div>
+            {(partnerMembers.length > 0 || investorMembers.length > 0) && <div className="accounting-member-groups">{[['Partners', partnerMembers, partnerPool], ['Investors', investorMembers, investorPool]].map(([label, members, pool]) => members.length > 0 && <div key={label}><h4>{label} <span>{accountingDisplayAmount(pool)}</span></h4><table><thead><tr><th>Name</th><th>Investment</th><th>Share</th><th>Profit</th></tr></thead><tbody>{members.map((row) => <tr key={row.id}><td>{row.name}</td><td>{accountingDisplayAmount(row.balance)}</td><td>{row.percentage.toFixed(2)}%</td><td>{accountingDisplayAmount(row.allocation)}</td></tr>)}</tbody></table></div>)}</div>}
+          </div>
+        </div>}
+
+        {section === 'balance' && <div className="accounting-statement accounting-balance-sheet">
+          <div className="accounting-statement-heading"><img src={companyLogoUrl(companySettings)} alt="" /><h1>{companySettings.shop_name || 'Computer Shop'}</h1><h2>BALANCE SHEET</h2><p>As at {accountingPeriodLabel(asOfDate, asOfDate)}</p></div>
+          <div className="accounting-balance-columns">
+            <div><h3>Assets</h3><h4>Fixed Assets</h4>{fixedAssets.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}<AccountingStatementRow label="Total Fixed Assets" value={fixedAssets.reduce((sum, row) => sum + numberValue(row.balance), 0)} total /><h4>Current Assets</h4>{currentAssets.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}<AccountingStatementRow label="Total Current Assets" value={currentAssets.reduce((sum, row) => sum + numberValue(row.balance), 0)} total /><h4>Non-Current Assets</h4>{nonCurrentAssets.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}<AccountingStatementRow label="Total Non-Current Assets" value={nonCurrentAssets.reduce((sum, row) => sum + numberValue(row.balance), 0)} total /><AccountingStatementRow label="Total Assets" value={totalAssets} total major /></div>
+            <div><h3>Liabilities &amp; Equity</h3><h4>Liabilities</h4>{[...currentLiabilities, ...longLiabilities].map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}{!currentLiabilities.length && !longLiabilities.length && <AccountingStatementRow label="No liabilities" value={0} />}<AccountingStatementRow label="Total Liabilities" value={totalLiabilities} total /><h4>Equity</h4>{equityRows.map((row) => <AccountingStatementRow key={row.id} label={row.name} value={row.balance} />)}<AccountingStatementRow label="Current Earnings" value={currentEarnings} /><AccountingStatementRow label="Total Equity" value={totalEquity} total /><AccountingStatementRow label="Total Equity & Liabilities" value={totalLiabilities + totalEquity} total major /></div>
+          </div>
+          <div className={`accounting-balance-check ${Math.abs(balanceDifference) < 0.01 ? 'balanced' : 'warning'}`}>{Math.abs(balanceDifference) < 0.01 ? 'Balance sheet is balanced' : `Difference: ${accountingDisplayAmount(balanceDifference)}`}</div>
+        </div>}
+
+        {section === 'ledger' && <div className="panel-card accounting-ledger accounting-print-area"><div className="accounting-ledger-heading"><div><h3>General Ledger</h3><p>{accountingPeriodLabel(period.from, period.to)} · {ledgerRows.length} lines</p></div><input value={ledgerSearch} onChange={(event) => setLedgerSearch(event.target.value)} placeholder="Search account, reference or description" /></div><div className="table-wrap"><table><thead><tr><th>Date</th><th>Reference</th><th>Description</th><th>Code</th><th>Account</th><th>Debit</th><th>Credit</th></tr></thead><tbody>{ledgerRows.map((row) => <tr key={row.line_id}><td>{fmtDate(row.entry_date)}</td><td>{row.reference_no || '-'}</td><td>{row.description}{row.memo ? <small className="ledger-memo">{row.memo}</small> : null}</td><td>{row.code}</td><td>{row.account_name}</td><td className="report-number">{numberValue(row.debit) ? accountingDisplayAmount(row.debit) : '-'}</td><td className="report-number">{numberValue(row.credit) ? accountingDisplayAmount(row.credit) : '-'}</td></tr>)}{!ledgerRows.length && <EmptyRow colSpan={7} text="No ledger entries for this period." />}</tbody></table></div></div>}
+
+        {section === 'setup' && <div className="accounting-setup-grid">
+          <div className="panel-card accounting-setup-card"><div className="section-title-row"><div><h3>Chart of Accounts</h3><p>Add capital owners, fixed assets, deposits or extra expense categories.</p></div><button className="primary-button" onClick={() => setShowAccountEditor(true)}>+ Add Account</button></div><div className="table-wrap"><table><thead><tr><th>Code</th><th>Account</th><th>Class</th><th>Profit group</th><th>Opening balance</th><th></th></tr></thead><tbody>{(reportData.accounts || []).filter((row) => row.is_active).map((row) => <tr key={row.id}><td>{row.code}</td><td><strong>{row.name}</strong>{row.is_system && <small className="ledger-memo">Automatic account</small>}</td><td>{row.statement_section.replaceAll('_', ' ')}</td><td>{row.profit_group ? row.profit_group[0].toUpperCase() + row.profit_group.slice(1) : '-'}</td><td>{accountingDisplayAmount(row.opening_balance)}</td><td>{!['opening_balance_equity', 'inventory_revaluation_equity', 'party_opening_equity', 'accounting_difference'].includes(row.system_key) && <button className="small-button" onClick={() => openOpening(row)}>Opening Balance</button>}</td></tr>)}</tbody></table></div></div>
+          <form className="panel-card accounting-allocation-settings" onSubmit={saveAllocationSettings}><h3>Profit Allocation</h3><p>Matches the allocation section below your Income Statement.</p><label>Operator percentage<input type="number" min="0" max="100" step="0.01" value={allocationForm.operator_percent} onChange={(event) => setAllocationForm({ ...allocationForm, operator_percent: event.target.value })} /></label><label>Reserve percentage<input type="number" min="0" max="100" step="0.01" value={allocationForm.reserve_percent} onChange={(event) => setAllocationForm({ ...allocationForm, reserve_percent: event.target.value })} /></label><label>Partner share of distributable profit<input type="number" min="0" max="100" step="0.01" value={allocationForm.partner_pool_percent} onChange={(event) => setAllocationForm({ ...allocationForm, partner_pool_percent: event.target.value })} /></label><small>The remaining distributable profit is assigned to the Investor group.</small><button className="primary-button" disabled={busy}>Save Allocation</button></form>
+        </div>}
+      </>}
+
+      {showCashEntry && <div className="modal-backdrop"><form className="modal-card accounting-cash-modal" onSubmit={saveCashEntry}><div className="section-title-row"><div><h3>Record Expense or Other Income</h3><p>This creates the cashflow document and balanced ledger entry together.</p></div><button type="button" className="secondary-button" onClick={() => setShowCashEntry(false)}>Close</button></div><div className="accounting-modal-grid"><label>Type<select value={cashEntry.entry_type} onChange={(event) => { const type = event.target.value; const accounts = type === 'cash_out' ? expenseAccounts : otherIncomeAccounts; setCashEntry({ ...cashEntry, entry_type: type, account_id: accounts[0]?.id || '' }); }}><option value="cash_out">Expense / Cash out</option><option value="cash_in">Other income / Cash in</option></select></label><label>Date<input type="date" value={cashEntry.document_date} onChange={(event) => setCashEntry({ ...cashEntry, document_date: event.target.value })} /></label><label>Category<select value={cashEntry.account_id} onChange={(event) => setCashEntry({ ...cashEntry, account_id: event.target.value })}>{(cashEntry.entry_type === 'cash_out' ? expenseAccounts : otherIncomeAccounts).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label><label>Paid through<select value={cashEntry.payment_method_id} onChange={(event) => setCashEntry({ ...cashEntry, payment_method_id: event.target.value })}>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select></label><label>Amount<input type="number" min="0.01" step="0.01" value={cashEntry.amount} onChange={(event) => setCashEntry({ ...cashEntry, amount: event.target.value })} required /></label><label className="wide-field">Description<input value={cashEntry.description} onChange={(event) => setCashEntry({ ...cashEntry, description: event.target.value })} placeholder="Example: Shop rent for April" /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowCashEntry(false)}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save to Cashflow & Ledger'}</button></div></form></div>}
+
+      {showAccountEditor && <div className="modal-backdrop"><form className="modal-card accounting-account-modal" onSubmit={saveAccount}><div className="section-title-row"><div><h3>Add Account</h3><p>Create accounts such as Equity - Hakam, Security Deposit or a new expense category.</p></div><button type="button" className="secondary-button" onClick={() => setShowAccountEditor(false)}>Close</button></div><label>Account name<input value={accountForm.name} onChange={(event) => setAccountForm({ ...accountForm, name: event.target.value })} required autoFocus /></label><label>Code optional<input value={accountForm.code} onChange={(event) => setAccountForm({ ...accountForm, code: event.target.value })} placeholder="Generated automatically when empty" /></label><label>Classification<select value={accountForm.classification} onChange={(event) => setAccountForm({ ...accountForm, classification: event.target.value, profit_group: event.target.value === 'equity' ? accountForm.profit_group : '' })}><option value="expense">Expense</option><option value="current_asset">Current asset</option><option value="fixed_asset">Fixed asset</option><option value="non_current_asset">Non-current asset</option><option value="current_liability">Current liability</option><option value="long_term_liability">Long-term liability</option><option value="equity">Equity / Capital</option><option value="other_income">Other income</option></select></label>{accountForm.classification === 'equity' && <label>Profit allocation group<select value={accountForm.profit_group} onChange={(event) => setAccountForm({ ...accountForm, profit_group: event.target.value })}><option value="">Not included</option><option value="partner">Partner</option><option value="investor">Investor</option></select></label>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowAccountEditor(false)}>Cancel</button><button className="primary-button" disabled={busy}>Save Account</button></div></form></div>}
+
+      {openingAccount && <div className="modal-backdrop"><form className="modal-card accounting-opening-modal" onSubmit={saveOpeningBalance}><div className="section-title-row"><div><h3>Opening Balance</h3><p>{openingAccount.code} · {openingAccount.name}</p></div><button type="button" className="secondary-button" onClick={() => setOpeningAccount(null)}>Close</button></div><div className="notice slim-notice">Enter the balance on the date you begin using this accounting system. A balancing Opening Balance Equity line is created automatically.</div><label>Opening date<input type="date" value={openingForm.opening_date} onChange={(event) => setOpeningForm({ ...openingForm, opening_date: event.target.value })} /></label><label>Balance<input type="number" step="0.01" value={openingForm.balance} onChange={(event) => setOpeningForm({ ...openingForm, balance: event.target.value })} /></label><label>Note<input value={openingForm.notes} onChange={(event) => setOpeningForm({ ...openingForm, notes: event.target.value })} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setOpeningAccount(null)}>Cancel</button><button className="primary-button" disabled={busy}>Save Opening Balance</button></div></form></div>}
+    </section>
+  );
+}
+
+function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLockMinutes = 5, onSettingsSaved, onAutoLockChanged } = {}) {
+  const [settingsSection, setSettingsSection] = useState('application');
+  const [form, setForm] = useState({ ...DEFAULT_APP_SETTINGS, ...appSettings, auto_lock_minutes: autoLockMinutes });
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setForm({ ...DEFAULT_APP_SETTINGS, ...appSettings, auto_lock_minutes: autoLockMinutes });
+  }, [appSettings.updated_at, autoLockMinutes]);
+  useEffect(() => { loadSettingsPaymentMethods(); }, []);
+  useRealtimeRefresh(['payment_methods'], loadSettingsPaymentMethods);
+
+  async function loadSettingsPaymentMethods() {
+    const { data, error: loadError } = await supabase.from('payment_methods').select('id, name, is_active, is_paid_method').eq('is_active', true).order('name');
+    if (loadError) setError(loadError.message); else setPaymentMethods(data || []);
+  }
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    setSaving(true); setError(''); setMessage('');
+    const autoLock = Math.min(Math.max(Math.round(numberValue(form.auto_lock_minutes, 5)), 1), 240);
+    const { data, error: saveError } = await supabase.rpc('admin_save_app_settings_v41', {
+      p_settings: {
+        allow_negative_pos_stock: !!form.allow_negative_pos_stock,
+        show_pos_stock_badges: form.show_pos_stock_badges !== false,
+        confirm_pos_sale: !!form.confirm_pos_sale,
+        default_payment_method_id: form.default_payment_method_id || null,
+        auto_lock_minutes: autoLock
+      }
+    });
+    setSaving(false);
+    if (saveError) {
+      setError(`${saveError.message}. Run migration 041_admin_app_settings.sql if it has not been applied.`);
+      return;
+    }
+    const saved = { ...DEFAULT_APP_SETTINGS, ...(data || {}), default_payment_method_id: data?.default_payment_method_id || '' };
+    setForm({ ...saved, auto_lock_minutes: autoLock });
+    onSettingsSaved?.(saved);
+    onAutoLockChanged?.(autoLock);
+    setMessage('Settings saved and synchronized to all active devices.');
+  }
+
+  return (
+    <section className="page-section settings-page">
+      <nav className="settings-section-tabs" aria-label="Settings sections">
+        {[
+          ['application', 'Application', 'POS, stock and security defaults'],
+          ['company', 'Company & Printing', 'Shop details, logo and documents'],
+          ['payments', 'Payment Types', 'Cash, bank, card and credit methods'],
+          ['users', 'Users & Security', 'Staff, PINs and trusted devices'],
+          ['backups', 'Backups & Restore', 'Daily backups and recovery']
+        ].map(([key, label, description]) => (
+          <button key={key} type="button" className={settingsSection === key ? 'settings-section-tab active' : 'settings-section-tab'} onClick={() => setSettingsSection(key)}>
+            <strong>{label}</strong>
+            <small>{description}</small>
+          </button>
+        ))}
+      </nav>
+
+      {settingsSection === 'application' && <>
+      <div className="page-actions settings-page-heading"><div><h3>Application Settings</h3><p>Admin-only controls shared by every trusted POS device.</p></div><button className="primary-button" form="application-settings-form" disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button></div>
+      {error && <div className="error-box">{error}</div>}
+      {message && <div className="notice success">{message}</div>}
+      <form id="application-settings-form" className="settings-category-grid" onSubmit={saveSettings}>
+        <div className="panel-card settings-category-card">
+          <div className="settings-category-heading"><span>POS</span><div><h3>Checkout behavior</h3><p>Defaults used while creating sales.</p></div></div>
+          <label className="settings-toggle-row"><input type="checkbox" checked={!!form.confirm_pos_sale} onChange={(e) => setForm({ ...form, confirm_pos_sale: e.target.checked })} /><span><strong>Confirm before saving a sale</strong><small>Shows a final amount confirmation for F10 and quick payment saves.</small></span></label>
+          <label className="settings-toggle-row"><input type="checkbox" checked={form.show_pos_stock_badges !== false} onChange={(e) => setForm({ ...form, show_pos_stock_badges: e.target.checked })} /><span><strong>Show stock badges on POS tiles</strong><small>Displays available, low, zero, or negative stock below each product.</small></span></label>
+          <label className="settings-field-row"><span><strong>Preferred payment method</strong><small>Shown first inside the F10 payment workspace.</small></span><select value={form.default_payment_method_id || ''} onChange={(e) => setForm({ ...form, default_payment_method_id: e.target.value })}><option value="">Use alphabetical order</option>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}{method.is_paid_method === false ? ' (Credit)' : ''}</option>)}</select></label>
+        </div>
+
+        <div className="panel-card settings-category-card">
+          <div className="settings-category-heading"><span>ST</span><div><h3>Stock control</h3><p>Controls how POS sales behave when physical stock runs out.</p></div></div>
+          <label className={`settings-toggle-row warning-setting ${form.allow_negative_pos_stock ? 'enabled' : ''}`}><input type="checkbox" checked={!!form.allow_negative_pos_stock} onChange={(e) => setForm({ ...form, allow_negative_pos_stock: e.target.checked })} /><span><strong>Allow negative stock in POS sales</strong><small>When enabled, admins and permitted staff may sell tracked items beyond available quantity. COD orders still require physical stock.</small></span></label>
+          <div className="settings-safety-note"><strong>{form.allow_negative_pos_stock ? 'Negative stock will be allowed' : 'Overselling is blocked'}</strong><span>{form.allow_negative_pos_stock ? 'Use the Stock page to identify and correct negative quantities.' : 'Product selection and database saving both enforce available quantity.'}</span></div>
+        </div>
+
+        <div className="panel-card settings-category-card">
+          <div className="settings-category-heading"><span>SC</span><div><h3>Security</h3><p>Trusted-device session behavior.</p></div></div>
+          <label className="settings-field-row"><span><strong>Automatic lock</strong><small>Locks the current operator after inactivity. Staff unlock again using their PIN.</small></span><div className="settings-number-field"><input type="number" min="1" max="240" step="1" value={form.auto_lock_minutes} onChange={(e) => setForm({ ...form, auto_lock_minutes: e.target.value })} /><em>minutes</em></div></label>
+        </div>
+
+        <div className="panel-card settings-category-card">
+          <div className="settings-category-heading"><span>✓</span><div><h3>Accounting safeguards</h3><p>These protections remain enforced and cannot be disabled.</p></div></div>
+          <div className="settings-protection-list"><div><strong>Named credit customers</strong><small>Walk-in customers cannot carry an outstanding balance.</small></div><div><strong>Supplier required for purchases</strong><small>Every purchase remains attached to a supplier account.</small></div><div><strong>Realtime synchronization</strong><small>Documents, stock, balances, jobs and COD updates refresh across devices.</small></div></div>
+        </div>
+      </form>
+      </>}
+
+      {settingsSection === 'company' && <div className="settings-embedded-page"><MyCompanyPage /></div>}
+      {settingsSection === 'payments' && <div className="settings-embedded-page"><PaymentTypesPage /></div>}
+      {settingsSection === 'users' && <div className="settings-embedded-page"><UsersSecurityPage activeStaff={activeStaff} autoLockMinutes={autoLockMinutes} onAutoLockChanged={onAutoLockChanged} /></div>}
+      {settingsSection === 'backups' && <div className="settings-embedded-page"><BackupsPage /></div>}
+    </section>
+  );
+}
+
 
 function PaymentTypesPage() {
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ name: '', is_paid_method: true, affects_cashflow: true });
+  const [form, setForm] = useState({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other' });
   const [error, setError] = useState('');
 
   useEffect(() => { loadRows(); }, []);
+  useRealtimeRefresh(['payment_methods'], loadRows);
 
   async function loadRows() {
     setError('');
@@ -7377,12 +8790,13 @@ function PaymentTypesPage() {
       name: form.name.trim(),
       is_paid_method: form.is_paid_method,
       affects_cashflow: form.is_paid_method ? form.affects_cashflow : false,
+      account_kind: form.is_paid_method && form.affects_cashflow ? form.account_kind : 'other',
       is_active: true
     };
     const { error: insertError } = await supabase.from('payment_methods').insert(payload);
     if (insertError) setError(insertError.message);
     else {
-      setForm({ name: '', is_paid_method: true, affects_cashflow: true });
+      setForm({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other' });
       loadRows();
     }
   }
@@ -7421,23 +8835,25 @@ function PaymentTypesPage() {
             />
             Affects cash/bank cashflow
           </label>
+          {form.is_paid_method && form.affects_cashflow && <><label>Cashflow account type</label><select value={form.account_kind} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">Cash and bank accounts appear separately on the Cashflow page and can be used for transfers.</small></>}
           <button className="primary-button full-width">Save</button>
         </form>
       </div>
       <div className="panel-card table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Affects Cashflow</th><th>Active</th><th>Action</th></tr></thead>
+          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Account Type</th><th>Affects Cashflow</th><th>Active</th><th>Action</th></tr></thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.id}>
                 <td>{row.name}</td>
                 <td>{row.is_paid_method === false ? 'Unpaid / Credit' : 'Paid'}</td>
+                <td>{row.account_kind === 'cash' ? 'Cash drawer' : row.account_kind === 'bank' ? 'Bank account' : 'Other'}</td>
                 <td>{row.affects_cashflow ? 'Yes' : 'No'}</td>
                 <td>{row.is_active ? 'Yes' : 'No'}</td>
                 <td><button className="small-button" onClick={() => toggleActive(row)}>{row.is_active ? 'Disable' : 'Enable'}</button></td>
               </tr>
             ))}
-            {rows.length === 0 && <EmptyRow colSpan={5} text="No payment types." />}
+            {rows.length === 0 && <EmptyRow colSpan={6} text="No payment types." />}
           </tbody>
         </table>
       </div>
@@ -7445,33 +8861,125 @@ function PaymentTypesPage() {
   );
 }
 
-function UsersSecurityPage() {
+function UsersSecurityPage({ activeStaff, autoLockMinutes = 5, onAutoLockChanged } = {}) {
   const [staff, setStaff] = useState([]);
+  const [devices, setDevices] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ id: '', full_name: '', role: 'staff', is_active: true, permissions: { ...DEFAULT_STAFF_PERMISSIONS }, pin: '', confirmPin: '' });
+  const [lockMinutes, setLockMinutes] = useState(autoLockMinutes);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => { loadStaff(); }, []);
+  useEffect(() => { loadSecurityAdmin(); }, []);
+  useEffect(() => setLockMinutes(autoLockMinutes), [autoLockMinutes]);
 
-  async function loadStaff() {
-    const { data, error: staffError } = await supabase.from('staff').select('*').order('full_name');
-    if (staffError) setError('Run supabase/sql/002_structure_updates.sql to create the staff table.');
-    else setStaff(data || []);
+  async function loadSecurityAdmin() {
+    setError('');
+    const [staffRes, devicesRes] = await Promise.all([
+      supabase.rpc('admin_list_staff_v38'),
+      supabase.rpc('admin_list_trusted_devices_v38')
+    ]);
+    const loadError = staffRes.error || devicesRes.error;
+    if (loadError) setError(`${loadError.message}. Run migrations 038 and 039 if they have not been applied.`);
+    else { setStaff(staffRes.data || []); setDevices(devicesRes.data || []); }
   }
 
+  function openNewStaff() {
+    setForm({ id: '', full_name: '', role: 'staff', is_active: true, permissions: { ...DEFAULT_STAFF_PERMISSIONS }, pin: '', confirmPin: '' });
+    setMessage(''); setError(''); setShowForm(true);
+  }
+
+  function openEditStaff(row) {
+    setForm({ id: row.id, full_name: row.full_name, role: row.role, is_active: row.is_active, permissions: { ...DEFAULT_STAFF_PERMISSIONS, ...(row.permissions || {}) }, pin: '', confirmPin: '' });
+    setMessage(''); setError(''); setShowForm(true);
+  }
+
+  async function saveStaff(event) {
+    event.preventDefault();
+    if (form.pin && form.pin !== form.confirmPin) { setError('PIN confirmation does not match.'); return; }
+    if (!form.id && form.pin.length !== 4) { setError('Set a 4-digit PIN for the new user.'); return; }
+    setBusy(true); setError(''); setMessage('');
+    const { error: saveError } = await supabase.rpc('admin_save_staff_v38', {
+      p_staff_id: form.id || null,
+      p_full_name: form.full_name.trim(),
+      p_role: form.role,
+      p_permissions: form.role === 'admin' ? {} : form.permissions,
+      p_pin: form.pin || null,
+      p_is_active: form.is_active
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setMessage(form.id ? `${form.full_name} updated.` : `${form.full_name} added.`);
+    setShowForm(false);
+    await loadSecurityAdmin();
+  }
+
+  async function setStaffActive(row, isActive) {
+    if (!isActive && !window.confirm(`Deactivate ${row.full_name}? They will no longer be able to unlock the POS.`)) return;
+    setBusy(true); setError(''); setMessage('');
+    const { error: updateError } = await supabase.rpc('admin_save_staff_v38', {
+      p_staff_id: row.id,
+      p_full_name: row.full_name,
+      p_role: row.role,
+      p_permissions: row.permissions || {},
+      p_pin: null,
+      p_is_active: isActive
+    });
+    setBusy(false);
+    if (updateError) setError(updateError.message);
+    else { setMessage(`${row.full_name} ${isActive ? 'reactivated' : 'deactivated'}. Historical records are preserved.`); await loadSecurityAdmin(); }
+  }
+
+  async function saveAutoLock(event) {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    const { data, error: settingsError } = await supabase.rpc('admin_update_pos_security_v38', { p_auto_lock_minutes: Number(lockMinutes) });
+    setBusy(false);
+    if (settingsError) setError(settingsError.message);
+    else { const minutes = Number(data?.auto_lock_minutes || lockMinutes); onAutoLockChanged?.(minutes); setMessage(`Auto-lock updated to ${minutes} minute${minutes === 1 ? '' : 's'}.`); }
+  }
+
+  async function setDeviceActive(device, isActive) {
+    if (!isActive && !window.confirm(`Remove trust from ${device.device_name}? Any active PIN session on it will be locked.`)) return;
+    setBusy(true); setError(''); setMessage('');
+    const { error: deviceError } = await supabase.rpc('admin_set_trusted_device_active_v38', { p_device_id: device.id, p_is_active: isActive });
+    setBusy(false);
+    if (deviceError) setError(deviceError.message);
+    else { setMessage(`${device.device_name} is now ${isActive ? 'trusted' : 'not trusted'}.`); await loadSecurityAdmin(); }
+  }
+
+  if (activeStaff?.role !== 'admin') return <FullScreenMessage title="Admin only" message="An admin PIN is required to manage users and security." />;
+
   return (
-    <section className="page-section">
-      <div className="panel-card">
-        <h3>Users & Security</h3>
-        <p>Create login users in Supabase Auth, then add one row in the staff table with their Auth UUID.</p>
-        {error && <div className="notice">{error}</div>}
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Name</th><th>Role</th><th>Active</th><th>Auth User ID</th></tr></thead>
-            <tbody>
-              {staff.map((row) => <tr key={row.id}><td>{row.full_name}</td><td>{row.role}</td><td>{row.is_active ? 'Yes' : 'No'}</td><td>{row.auth_user_id}</td></tr>)}
-              {staff.length === 0 && <EmptyRow colSpan={4} text="No staff records yet." />}
-            </tbody>
-          </table>
+    <section className="page-section users-security-page">
+      <div className="section-title-row"><div><h3>Users & Security</h3><p>Use one owner email login to trust a browser, then let each person unlock it using their own 4-digit PIN.</p></div><button className="primary-button" onClick={openNewStaff}>Add User</button></div>
+      {message && <div className="notice success">{message}</div>}{error && <div className="error-box">{error}</div>}
+
+      {showForm && <form className="panel-card staff-editor" onSubmit={saveStaff}>
+        <div className="section-title-row"><div><h3>{form.id ? `Edit ${form.full_name}` : 'New User'}</h3><p>Changing a PIN is optional when editing. PINs must be unique and contain exactly four numbers.</p></div><button type="button" className="secondary-button" onClick={() => setShowForm(false)}>Close</button></div>
+        <div className="staff-basic-grid">
+          <label>Name<input autoFocus value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required /></label>
+          <label>Access level<select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="staff">Staff · selected permissions</option><option value="admin">Admin · full access</option></select></label>
+          <label>{form.id ? 'New PIN (optional)' : '4-digit PIN'}<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={form.pin} onChange={(e) => setForm({ ...form, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })} required={!form.id} /></label>
+          <label>Confirm PIN<input type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength="4" value={form.confirmPin} onChange={(e) => setForm({ ...form, confirmPin: e.target.value.replace(/\D/g, '').slice(0, 4) })} required={!!form.pin} /></label>
+          <label className="staff-active-check"><input type="checkbox" disabled={form.id === activeStaff?.id} checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} /> Active user</label>
         </div>
+        {form.role === 'admin' ? <div className="admin-access-note"><strong>Administrator</strong><span>Administrators always have every permission, including users, trusted devices, settings and backups.</span></div> : <div className="permission-groups">{STAFF_PERMISSION_GROUPS.map((group) => <fieldset key={group.label}><legend>{group.label}</legend>{group.items.map((permission) => <label key={permission.key} className="permission-option"><input type="checkbox" checked={form.permissions[permission.key] === true} onChange={(e) => setForm({ ...form, permissions: { ...form.permissions, [permission.key]: e.target.checked } })} /><span><strong>{permission.label}</strong><small>{permission.default ? 'Suitable for normal staff' : 'Sensitive access'}</small></span></label>)}</fieldset>)}</div>}
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowForm(false)}>Cancel</button><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save User'}</button></div>
+      </form>}
+
+      <div className="panel-card">
+        <div className="section-title-row"><div><h3>Users</h3><p>Deactivate former staff instead of deleting them so invoices keep the correct operator name.</p></div></div>
+        <div className="table-wrap"><table><thead><tr><th>Name</th><th>Level</th><th>PIN</th><th>Email identity</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+          {staff.map((row) => <tr key={row.id}><td><strong>{row.full_name}</strong>{row.id === activeStaff?.id && <small className="current-user-label">Currently active</small>}</td><td>{row.role === 'admin' ? 'Admin' : 'Staff'}</td><td>{row.has_pin ? 'Set' : 'Not set'}</td><td>{row.auth_email || 'PIN only'}</td><td><span className={row.is_active ? 'status-pill active' : 'status-pill inactive'}>{row.is_active ? 'Active' : 'Inactive'}</span></td><td><button className="small-button" onClick={() => openEditStaff(row)}>Edit</button><button className={row.is_active ? 'small-button danger' : 'small-button'} disabled={busy || row.id === activeStaff?.id} title={row.id === activeStaff?.id ? 'Switch to another admin before deactivating this user' : ''} onClick={() => setStaffActive(row, !row.is_active)}>{row.is_active ? 'Deactivate' : 'Reactivate'}</button></td></tr>)}
+          {!staff.length && <EmptyRow colSpan={6} text="No users found." />}
+        </tbody></table></div>
+      </div>
+
+      <div className="security-admin-grid">
+        <form className="panel-card auto-lock-card" onSubmit={saveAutoLock}><h3>Automatic lock</h3><p>Lock the staff session after no clicks, typing or touch activity. The email session stays signed in because this is a trusted device.</p><label>Inactive for<input type="number" min="1" max="120" value={lockMinutes} onChange={(e) => setLockMinutes(e.target.value)} /><span>minutes</span></label><button className="primary-button" disabled={busy}>Save Auto-lock</button></form>
+        <div className="panel-card trusted-devices-card"><h3>Trusted devices</h3><p>A removed device must be authorized again using the linked owner email and password.</p><div className="trusted-device-list">{devices.map((device) => <div key={device.id} className="trusted-device-row"><div><strong>{device.device_name}</strong><small>Last used {new Date(device.last_seen_at).toLocaleString('en-LK')}</small></div><span className={device.is_active ? 'status-pill active' : 'status-pill inactive'}>{device.is_active ? 'Trusted' : 'Removed'}</span><button className="small-button" disabled={busy} onClick={() => setDeviceActive(device, !device.is_active)}>{device.is_active ? 'Remove trust' : 'Trust again'}</button></div>)}{!devices.length && <div className="muted-box">No trusted devices.</div>}</div></div>
       </div>
     </section>
   );
