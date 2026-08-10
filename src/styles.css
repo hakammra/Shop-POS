@@ -4481,3 +4481,105 @@ body.pos-resizing {
   .cashflow-summary-grid, .party-summary-grid, .cash-account-grid { grid-template-columns: 1fr; }
   .cod-queue-stats { grid-template-columns: 1fr 1fr; }
 }
+
+/* v45: Gemini technical assistant */
+.tech-assistant-page {
+  min-height: calc(100dvh - 78px);
+  background:
+    radial-gradient(circle at 84% 0%, rgba(40, 169, 230, .10), transparent 34%),
+    var(--bg);
+}
+.tech-assistant-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.tech-assistant-header h3 { margin: 3px 0 6px; font-size: 27px; }
+.tech-assistant-header p { max-width: 820px; margin: 0; color: var(--muted); line-height: 1.45; }
+.tech-assistant-kicker { color: #74d8ff; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.tech-assistant-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.tech-assistant-guide { align-self: start; padding: 15px; }
+.tech-assistant-guide h4 { margin: 0 0 10px; font-size: 17px; }
+.tech-prompt-list { display: grid; gap: 7px; }
+.tech-prompt-list button {
+  min-height: 55px;
+  padding: 9px 10px;
+  border: 1px solid #46545b;
+  border-radius: 7px;
+  background: #252a2d;
+  color: #eef7fa;
+  text-align: left;
+  line-height: 1.35;
+}
+.tech-prompt-list button:hover { border-color: var(--primary); background: #263943; }
+.tech-assistant-safety { display: grid; gap: 4px; margin: 14px 0 10px; padding: 11px; border: 1px solid #80651f; border-radius: 7px; background: #393018; }
+.tech-assistant-safety strong { color: #ffe29a; }
+.tech-assistant-safety span, .tech-assistant-guide > small { color: #cbd1d4; font-size: 12px; line-height: 1.45; }
+.tech-chat-card { display: flex; min-width: 0; min-height: calc(100dvh - 142px); flex-direction: column; overflow: hidden; padding: 0; }
+.tech-chat-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: #262c2f; }
+.tech-chat-status > div { display: flex; align-items: center; gap: 8px; }
+.tech-chat-status small { color: var(--muted); text-align: right; }
+.tech-conversation { flex: 1 1 auto; min-height: 350px; max-height: calc(100dvh - 390px); padding: 18px; overflow-y: auto; overscroll-behavior: contain; }
+.tech-chat-empty { min-height: 280px; display: grid; place-items: center; align-content: center; text-align: center; color: var(--muted); }
+.tech-chat-empty > span { width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 9px; border: 1px solid #387f9e; border-radius: 14px; background: #14384a; color: #82dcff; font-size: 21px; font-weight: 900; }
+.tech-chat-empty h4 { margin: 0 0 6px; color: #fff; font-size: 21px; }
+.tech-chat-empty p { max-width: 440px; margin: 0; }
+.tech-message { width: min(780px, 88%); margin: 0 0 13px; padding: 12px 14px; border: 1px solid #475157; border-radius: 9px; background: #292d2f; }
+.tech-message.user { margin-left: auto; border-color: #277ba0; background: #153d50; }
+.tech-message.assistant { margin-right: auto; }
+.tech-message-heading { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.tech-message-heading strong { color: #8edfff; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.tech-message-heading small { color: #b8c9d0; }
+.tech-message-text { color: #f4f7f8; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tech-video-link { display: inline-block; margin-top: 9px; color: #9de2ff; font-size: 12px; font-weight: 700; }
+.tech-thinking { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.tech-thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); animation: tech-pulse 1s infinite alternate; }
+.tech-thinking span:nth-child(2) { animation-delay: 160ms; }
+.tech-thinking span:nth-child(3) { animation-delay: 320ms; margin-right: 5px; }
+@keyframes tech-pulse { from { opacity: .25; transform: translateY(2px); } to { opacity: 1; transform: translateY(-2px); } }
+.tech-assistant-error { margin: 0 14px 9px; }
+.tech-assistant-composer { flex: 0 0 auto; padding: 11px 14px 13px; border-top: 1px solid var(--line); background: #24282a; }
+.tech-assistant-composer textarea { min-height: 84px; max-height: 180px; resize: vertical; line-height: 1.4; }
+.tech-composer-actions { display: flex; align-items: center; gap: 9px; margin-top: 8px; }
+.tech-composer-actions > small { margin-left: auto; color: var(--muted); }
+.tech-composer-actions .primary-button { min-width: 140px; }
+.tech-photo-button { width: auto; display: inline-flex; align-items: center; justify-content: center; margin: 0; cursor: pointer; }
+.tech-photo-button input { display: none; }
+.tech-image-preview { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-bottom: 9px; padding: 8px; border: 1px solid #48616c; border-radius: 7px; background: #203039; }
+.tech-image-preview img { width: 58px; height: 52px; display: block; border-radius: 4px; object-fit: cover; }
+.tech-image-preview div { min-width: 0; display: grid; gap: 3px; }
+.tech-image-preview strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tech-image-preview small { color: var(--muted); }
+
+@media (max-width: 900px) {
+  .tech-assistant-page { min-height: 0; }
+  .tech-assistant-layout { grid-template-columns: 1fr; }
+  .tech-assistant-guide { position: static; }
+  .tech-prompt-list { display: flex; overflow-x: auto; padding-bottom: 4px; }
+  .tech-prompt-list button { min-width: 225px; }
+  .tech-chat-card { min-height: 70dvh; }
+  .tech-conversation { max-height: none; }
+}
+
+@media (max-width: 700px) {
+  .tech-assistant-page { padding: 9px; }
+  .tech-assistant-header { align-items: stretch; flex-direction: column; }
+  .tech-assistant-header h3 { font-size: 23px; }
+  .tech-assistant-header .secondary-button { align-self: flex-start; }
+  .tech-assistant-guide { padding: 11px; }
+  .tech-assistant-guide > small { display: none; }
+  .tech-assistant-safety { margin-bottom: 0; }
+  .tech-chat-status { align-items: flex-start; flex-direction: column; }
+  .tech-chat-status small { text-align: left; }
+  .tech-conversation { min-height: 330px; padding: 10px; }
+  .tech-message { width: 94%; padding: 10px 11px; }
+  .tech-assistant-composer { padding: 9px; }
+  .tech-composer-actions { flex-wrap: wrap; }
+  .tech-composer-actions > small { order: 3; margin: 0; }
+  .tech-composer-actions .primary-button { margin-left: auto; }
+  .tech-image-preview { grid-template-columns: 52px minmax(0, 1fr); }
+  .tech-image-preview img { width: 52px; height: 48px; }
+  .tech-image-preview button { grid-column: 1 / -1; width: 100%; }
+}

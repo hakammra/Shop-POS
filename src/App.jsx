@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { key: 'cod_orders', label: 'COD Orders', icon: '\uD83D\uDE9A', group: 'Orders & Service', permission: 'manage_cod_orders' },
   { key: 'online_orders', label: 'Online Orders', icon: '◉', group: 'Orders & Service', permission: 'manage_online_orders' },
   { key: 'jobs', label: 'Jobs & Repairs', icon: '⌁', group: 'Orders & Service', permission: 'manage_jobs' },
+  { key: 'tech_assistant', label: 'Tech Assistant', icon: 'AI', group: 'Orders & Service', permission: 'use_ai_assistant' },
   { key: 'documents', label: 'Documents', icon: '▰', group: 'Records & Stock', permission: 'view_documents' },
   { key: 'customers_suppliers', label: 'Customers & Suppliers', icon: '♟', group: 'Records & Stock', permission: 'manage_parties' },
   { key: 'products', label: 'Products', icon: '◇', group: 'Records & Stock', permission: 'manage_products' },
@@ -38,7 +39,8 @@ const STAFF_PERMISSION_GROUPS = [
       { key: 'manage_cod_orders', label: 'Manage COD orders', default: true },
       { key: 'manage_online_orders', label: 'Manage online orders', default: true },
       { key: 'manage_jobs', label: 'Manage jobs and repairs', default: true },
-      { key: 'manage_warranty', label: 'Manage warranty claims', default: true }
+      { key: 'manage_warranty', label: 'Manage warranty claims', default: true },
+      { key: 'use_ai_assistant', label: 'Use Gemini technical assistant', default: true }
     ]
   },
   {
@@ -619,6 +621,7 @@ export default function App() {
         {activePage === 'documents' && <DocumentsPage permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
         {activePage === 'cod_orders' && <CodOrdersPage />}
         {activePage === 'jobs' && <JobsPage />}
+        {activePage === 'tech_assistant' && <TechAssistantPage />}
         {activePage === 'products' && <ProductsPage />}
         {activePage === 'stock' && <StockPage onOpenDocuments={() => setActivePage('documents')} />}
         {activePage === 'warranty' && <WarrantyPage />}
@@ -781,6 +784,165 @@ function AuthScreen() {
         </button>
       </form>
     </div>
+  );
+}
+
+async function prepareAssistantImage(file) {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowedTypes.includes(file.type)) throw new Error('Use a JPG, PNG or WebP image.');
+  if (file.size > 12 * 1024 * 1024) throw new Error('The image is too large. Choose one below 12 MB.');
+
+  const source = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read that image.'));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error('Could not open that image.'));
+    element.src = source;
+  });
+  const maximumSide = 1600;
+  const scale = Math.min(1, maximumSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+  const mimeType = file.type === 'image/png' && file.size < 1.5 * 1024 * 1024 ? 'image/png' : 'image/jpeg';
+  const compressed = canvas.toDataURL(mimeType, mimeType === 'image/jpeg' ? 0.82 : undefined);
+  const data = compressed.split(',')[1] || '';
+  if (!data) throw new Error('Could not prepare that image.');
+  return { name: file.name, mimeType, data, preview: compressed };
+}
+
+function TechAssistantPage() {
+  const [messages, setMessages] = useState([]);
+  const [question, setQuestion] = useState('');
+  const [image, setImage] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [model, setModel] = useState('Gemini');
+  const fileInputRef = useRef(null);
+  const conversationRef = useRef(null);
+
+  useEffect(() => {
+    conversationRef.current?.scrollTo({ top: conversationRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, busy]);
+
+  async function selectImage(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError('');
+    try {
+      setImage(await prepareAssistantImage(file));
+    } catch (imageError) {
+      setImage(null);
+      setError(imageError.message || String(imageError));
+    }
+  }
+
+  function clearImage() {
+    setImage(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function askAssistant(event) {
+    event.preventDefault();
+    const cleanQuestion = question.trim();
+    if (!cleanQuestion) { setError('Enter a technical question first.'); return; }
+    if (busy) return;
+
+    const userMessage = { id: createClientId(), role: 'user', text: cleanQuestion, imageName: image?.name || '' };
+    const requestHistory = messages.slice(-8).map((message) => ({ role: message.role, text: message.text }));
+    setMessages((current) => [...current, userMessage]);
+    setQuestion('');
+    setBusy(true);
+    setError('');
+    try {
+      const { data, error: functionError } = await supabase.functions.invoke('tech-assistant', {
+        body: {
+          question: cleanQuestion,
+          history: requestHistory,
+          image: image ? { mimeType: image.mimeType, data: image.data } : null
+        }
+      });
+      if (functionError) {
+        let functionMessage = '';
+        try {
+          const details = await functionError.context?.json();
+          functionMessage = details?.error || '';
+        } catch {
+          functionMessage = '';
+        }
+        throw new Error(functionMessage || functionError.message);
+      }
+      if (!data?.answer) throw new Error(data?.error || 'Gemini returned an empty answer.');
+      setModel(data.model || 'Gemini');
+      setMessages((current) => [...current, { id: createClientId(), role: 'assistant', text: data.answer }]);
+      clearImage();
+    } catch (assistantError) {
+      setError(`${assistantError.message || String(assistantError)}${String(assistantError.message || assistantError).includes('Failed to send') ? ' Deploy the tech-assistant Edge Function and set GEMINI_API_KEY.' : ''}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function resetConversation() {
+    setMessages([]);
+    setQuestion('');
+    setError('');
+    clearImage();
+  }
+
+  const quickPrompts = [
+    'Which battery is compatible with this laptop model and what must I verify?',
+    'Help diagnose a laptop that powers on but has no display.',
+    'Identify this part from its label and explain compatible replacements.',
+    'Give me the best YouTube search phrase for disassembling this laptop.'
+  ];
+
+  return (
+    <section className="page-section tech-assistant-page">
+      <div className="tech-assistant-header">
+        <div><span className="tech-assistant-kicker">Gemini technical tool</span><h3>Tech Assistant</h3><p>Ask about laptop parts, compatible replacements, troubleshooting and repair procedures. Add a clear label photo when available.</p></div>
+        <button type="button" className="secondary-button" onClick={resetConversation}>New Conversation</button>
+      </div>
+
+      <div className="tech-assistant-layout">
+        <aside className="panel-card tech-assistant-guide">
+          <h4>Useful questions</h4>
+          <div className="tech-prompt-list">{quickPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => setQuestion(prompt)}>{prompt}</button>)}</div>
+          <div className="tech-assistant-safety"><strong>Verify before fitting</strong><span>Confirm the exact model, part number, voltage, connector, polarity and dimensions. AI answers can be incomplete or wrong.</span></div>
+          <small>Do not include customer names, phone numbers, invoices or other private information. Free-tier Gemini requests may be used by Google to improve its products.</small>
+        </aside>
+
+        <div className="panel-card tech-chat-card">
+          <div className="tech-chat-status"><div><span className="realtime-sync-dot" /><strong>{model}</strong></div><small>Technical guidance, not a replacement for manufacturer service documentation</small></div>
+          <div className="tech-conversation" ref={conversationRef}>
+            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>What are you repairing?</h4><p>Enter the full laptop model or upload a readable photo of the battery or part label.</p></div>}
+            {messages.map((message) => <article key={message.id} className={`tech-message ${message.role}`}>
+              <div className="tech-message-heading"><strong>{message.role === 'user' ? 'You' : 'Tech Assistant'}</strong>{message.imageName && <small>Photo: {message.imageName}</small>}</div>
+              <div className="tech-message-text">{message.text}</div>
+              {message.role === 'user' && <a className="tech-video-link" href={`https://www.youtube.com/results?search_query=${encodeURIComponent(`${message.text} disassembly repair`)}`} target="_blank" rel="noreferrer">Search YouTube for videos</a>}
+            </article>)}
+            {busy && <article className="tech-message assistant loading"><div className="tech-message-heading"><strong>Tech Assistant</strong></div><div className="tech-thinking"><span /><span /><span /> Checking the details...</div></article>}
+          </div>
+
+          {error && <div className="error-box tech-assistant-error">{error}</div>}
+          <form className="tech-assistant-composer" onSubmit={askAssistant}>
+            {image && <div className="tech-image-preview"><img src={image.preview} alt="Selected technical reference" /><div><strong>{image.name}</strong><small>Compressed securely before sending</small></div><button type="button" className="secondary-button" onClick={clearImage}>Remove</button></div>}
+            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Example: Dell Latitude 5490, original battery says WDX0R 11.4V. What replacements are compatible?" maxLength={2000} />
+            <div className="tech-composer-actions">
+              <label className="secondary-button tech-photo-button">Add Photo<input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectImage} /></label>
+              <small>{question.length}/2000</small>
+              <button className="primary-button" disabled={busy || !question.trim()}>{busy ? 'Asking Gemini...' : 'Ask Gemini'}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
   );
 }
 
