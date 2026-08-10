@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './lib/supabaseClient';
 import * as XLSX from 'xlsx';
+import Storefront from './Storefront';
 
 const NAV_ITEMS = [
   { key: 'pos', label: 'POS', icon: '▦', group: 'Checkout', permission: 'pos_sales' },
@@ -40,7 +41,7 @@ const STAFF_PERMISSION_GROUPS = [
       { key: 'manage_online_orders', label: 'Manage online orders', default: true },
       { key: 'manage_jobs', label: 'Manage jobs and repairs', default: true },
       { key: 'manage_warranty', label: 'Manage warranty claims', default: true },
-      { key: 'use_ai_assistant', label: 'Use Gemini technical assistant', default: true }
+      { key: 'use_ai_assistant', label: 'Use Gemini assistant', default: true }
     ]
   },
   {
@@ -58,7 +59,8 @@ const STAFF_PERMISSION_GROUPS = [
     label: 'Finance',
     items: [
       { key: 'manage_cashflow', label: 'View and add cashflow entries', default: false },
-      { key: 'view_reports', label: 'View profit, payment and sales reports', default: false }
+      { key: 'view_reports', label: 'View profit, payment and sales reports', default: false },
+      { key: 'assistant_business_data', label: 'Allow AI to read customer, supplier and financial data', default: false }
     ]
   }
 ];
@@ -182,7 +184,11 @@ const REALTIME_TABLES = [
   'accounting_journal_entries',
   'accounting_journal_lines',
   'accounting_opening_balances',
-  'accounting_settings'
+  'accounting_settings',
+  'assistant_settings',
+  'assistant_supplier_knowledge',
+  'online_store_orders',
+  'online_store_order_items'
 ];
 
 function useRealtimeRefresh(tables, refresh, debounceMs = 280) {
@@ -381,6 +387,14 @@ function QuickCustomerModal({ initialName = '', alsoSupplier = false, onClose, o
 }
 
 export default function App() {
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (pathname === '/store' || pathname.startsWith('/store/')) {
+    return <Storefront adminMode={pathname === '/store/admin' || pathname.startsWith('/store/admin/')} />;
+  }
+  return <PosApplication />;
+}
+
+function PosApplication() {
   const [session, setSession] = useState(null);
   const [activePage, setActivePage] = useState('pos');
   const [loadingSession, setLoadingSession] = useState(true);
@@ -392,6 +406,8 @@ export default function App() {
   const [activeStaff, setActiveStaff] = useState(null);
   const [realtimeStatus, setRealtimeStatus] = useState('paused');
   const [appSettings, setAppSettings] = useState(DEFAULT_APP_SETTINGS);
+  const [assistantProductTarget, setAssistantProductTarget] = useState(null);
+  const [assistantDocumentTarget, setAssistantDocumentTarget] = useState(null);
   const deviceToken = useMemo(() => getOrCreateDeviceToken(), []);
 
   useEffect(() => {
@@ -609,6 +625,7 @@ export default function App() {
             <p>Trusted device</p>
           </div>
           <div className="topbar-session-actions">
+            <a className="pos-store-link" href="/store" target="_blank" rel="noreferrer" title="Open the public online store">Online Store ↗</a>
             <div className={`realtime-sync-badge ${realtimeStatus}`} title="Automatically refreshes shared changes from other devices"><span className="realtime-sync-dot" /><strong>{realtimeStatus === 'live' ? 'Live sync' : realtimeStatus === 'connecting' ? 'Connecting' : realtimeStatus === 'error' ? 'Sync retrying' : 'Sync paused'}</strong></div>
             <div className="active-operator-badge"><span className="operator-dot" /><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
             <button className="secondary-button" onClick={lockPos}>Lock / Switch</button>
@@ -617,12 +634,12 @@ export default function App() {
         </header>
 
         {activePage === 'pos' && <POSScreen permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} appSettings={appSettings} />}
-        {activePage === 'dashboard' && <Dashboard />}
-        {activePage === 'documents' && <DocumentsPage permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
+        {activePage === 'dashboard' && <Dashboard onNavigate={setActivePage} canViewOnlineOrders={staffCan(activeStaff, 'manage_online_orders')} />}
+        {activePage === 'documents' && <DocumentsPage permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} assistantTarget={assistantDocumentTarget} onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
         {activePage === 'cod_orders' && <CodOrdersPage />}
         {activePage === 'jobs' && <JobsPage />}
-        {activePage === 'tech_assistant' && <TechAssistantPage />}
-        {activePage === 'products' && <ProductsPage />}
+        {activePage === 'tech_assistant' && <TechAssistantPage canUseBusiness={staffCan(activeStaff, 'assistant_business_data')} canOpenProducts={staffCan(activeStaff, 'manage_products')} canOpenDocuments={staffCan(activeStaff, 'view_documents')} onOpenProduct={(product) => { setAssistantProductTarget({ ...product, nonce: Date.now() }); setActivePage('products'); }} onOpenDocument={(document) => { setAssistantDocumentTarget({ ...document, nonce: Date.now() }); setActivePage('documents'); }} />}
+        {activePage === 'products' && <ProductsPage assistantTarget={assistantProductTarget} />}
         {activePage === 'stock' && <StockPage onOpenDocuments={() => setActivePage('documents')} />}
         {activePage === 'warranty' && <WarrantyPage />}
         {activePage === 'reports' && <ReportsPage />}
@@ -633,6 +650,7 @@ export default function App() {
         {activePage === 'settings' && <SettingsPage activeStaff={activeStaff} appSettings={appSettings} autoLockMinutes={securityState.auto_lock_minutes || 5} onSettingsSaved={setAppSettings} onAutoLockChanged={(minutes) => setSecurityState((current) => ({ ...current, auto_lock_minutes: minutes }))} />}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
           {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span>{item.icon}</span><strong>{item.label === 'COD Orders' ? 'COD' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
+          <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
           <button type="button" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
         </nav>
       </main>
@@ -817,15 +835,117 @@ async function prepareAssistantImage(file) {
   return { name: file.name, mimeType, data, preview: compressed };
 }
 
-function TechAssistantPage() {
+const DEFAULT_ASSISTANT_SETTINGS = {
+  default_language: 'en',
+  response_style: 'concise',
+  save_conversations: true,
+  conversation_retention_days: 30,
+  max_conversations_per_staff: 10,
+  auto_speak_answers: false,
+  custom_instructions: ''
+};
+
+function assistantQuestionRequestsProducts(question = '') {
+  const text = String(question || '');
+  return /\b(stock|in\s*stock|price|availability|inventory|product\s*match|item\s*code|sku|barcode|do\s+(?:we|you)\s+(?:have|sell|stock)|carry)\b/i.test(text)
+    || /\b(?:find|search|show|lookup|look\s*up|check)\b.{0,40}\b(?:products?|items?|battery|charger|screen|keyboard|ram|ssd|hard\s*drive|adapter|cable|part)\b/i.test(text)
+    || /\b(?:shop|store|our|pos)\b.{0,35}\b(?:products?|items?|availability|available)\b|\b(?:products?|items?)\b.{0,35}\b(?:shop|store|our|pos|available)\b/i.test(text);
+}
+
+function assistantQuestionRequestsDocuments(question = '') {
+  const text = String(question || '');
+  return /\b(invoice|bill|receipt|document|transaction|sales?\s+(?:record|history|document|invoice)|purchase\s+(?:record|history|document|invoice))s?\b/i.test(text)
+    || /\b(?:did|what|when|who|how\s+much)\b.{0,70}\b(?:buy|bought|purchase|purchased|pay|paid|refund|returned)\b/i.test(text)
+    || /\b(?:buy|bought|purchase|purchased|pay|paid|refund|returned)\b.{0,50}\b(?:today|yesterday|date|day|month|number|history|record)\b/i.test(text);
+}
+
+function AssistantMessageText({ text = '' }) {
+  const tokenPattern = /(\[[^\]]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s]+)/g;
+  return <div className="tech-message-text">{String(text).split(tokenPattern).map((part, index) => {
+    const markdown = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+    if (markdown) return <a key={`${markdown[2]}-${index}`} href={markdown[2]} target="_blank" rel="noreferrer">{markdown[1]}</a>;
+    if (/^https?:\/\//.test(part)) return <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer">{part}</a>;
+    return <span key={index}>{part}</span>;
+  })}</div>;
+}
+
+function AssistantBusinessResults({ context, question = '', canOpenDocuments = false, onOpenDocument } = {}) {
+  if (!context) return null;
+  const summary = context.financial_summary || {};
+  const period = context.period_summary || {};
+  const hasPeriodSummary = Object.keys(period).length > 0;
+  const customers = context.customers || [];
+  const suppliers = context.suppliers || [];
+  const documents = assistantQuestionRequestsDocuments(question) ? (context.documents || []) : [];
+  const hasResults = context.show_financial_summary || hasPeriodSummary || customers.length || suppliers.length || documents.length;
+  if (!hasResults) return <div className="tech-source-note">Business database checked. No matching record was found.</div>;
+
+  return <div className="tech-business-results">
+    <div className="tech-business-heading"><strong>Read-only POS records</strong>{context.checked_at && <small>Checked {new Date(context.checked_at).toLocaleString('en-LK')}</small>}</div>
+    {context.show_financial_summary && <div className="tech-business-summary">
+      <div><span>Customers owe shop</span><strong>{money(summary.customer_receivables)}</strong></div>
+      <div><span>Customer credit owed</span><strong>{money(summary.customer_credit_owed)}</strong></div>
+      <div><span>Supplier payables</span><strong>{money(summary.supplier_payables)}</strong></div>
+    </div>}
+    {hasPeriodSummary && <div className="tech-business-summary period">
+      <div><span>Period sales</span><strong>{money(period.sales_total)}</strong></div>
+      <div><span>Cash in</span><strong>{money(period.cash_in)}</strong></div>
+      <div><span>Cash out</span><strong>{money(period.cash_out)}</strong></div>
+    </div>}
+    {customers.length > 0 && <div className="tech-business-list"><strong>Matching customers</strong>{customers.map((customer) => <div key={customer.id}><span>{customer.name}</span><small>{numberValue(customer.net_outstanding) > 0 ? `Owes shop ${money(customer.net_outstanding)}` : numberValue(customer.net_outstanding) < 0 ? `Shop credit ${money(Math.abs(numberValue(customer.net_outstanding)))}` : 'No outstanding balance'}</small></div>)}</div>}
+    {suppliers.length > 0 && <div className="tech-business-list"><strong>Matching suppliers</strong>{suppliers.map((supplier) => <div key={supplier.id}><span>{supplier.name}</span><small>{numberValue(supplier.payable_balance) > 0 ? `Shop owes ${money(supplier.payable_balance)}` : 'No payable balance'}</small></div>)}</div>}
+    {documents.length > 0 && <div className="tech-business-documents"><strong>Matching documents</strong>{documents.map((document) => <div key={document.id}><span><b>{document.document_no}</b><small>{document.party_name || 'Walk-in customer'} · {fmtDate(document.document_date)} · {documentTypeLabel(document.document_type)}</small></span><em>{money(document.total_amount)}</em>{canOpenDocuments && <button type="button" onClick={() => onOpenDocument?.(document)}>Open</button>}</div>)}</div>}
+    <small className="tech-business-warning">Confidential snapshot. The assistant cannot edit records or make payments.</small>
+  </div>;
+}
+
+function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = false, canOpenDocuments = false, canUseBusiness = false } = {}) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
   const [image, setImage] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [model, setModel] = useState('Gemini');
+  const [language, setLanguage] = useState('en');
+  const [assistantSettings, setAssistantSettings] = useState(DEFAULT_ASSISTANT_SETTINGS);
+  const [conversations, setConversations] = useState([]);
+  const [conversationId, setConversationId] = useState('');
+  const [loadingConversation, setLoadingConversation] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState('');
   const fileInputRef = useRef(null);
   const conversationRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const utteranceRef = useRef(null);
+
+  useEffect(() => {
+    loadAssistantWorkspace();
+    return () => {
+      recognitionRef.current?.abort?.();
+      window.speechSynthesis?.cancel?.();
+      utteranceRef.current = null;
+    };
+  }, []);
+
+  async function loadAssistantWorkspace() {
+    const [settingsResult, conversationsResult] = await Promise.all([
+      supabase.rpc('assistant_get_settings_v45'),
+      supabase.rpc('assistant_list_conversations_v45')
+    ]);
+    if (settingsResult.error || conversationsResult.error) {
+      setError('Assistant memory is not ready. Run migration 045_ai_memory_pos_tools_voice.sql in Supabase, then redeploy the function.');
+      return;
+    }
+    const nextSettings = { ...DEFAULT_ASSISTANT_SETTINGS, ...(settingsResult.data || {}) };
+    setAssistantSettings(nextSettings);
+    setLanguage(nextSettings.default_language === 'ta' ? 'ta' : 'en');
+    setConversations(conversationsResult.data || []);
+  }
+
+  async function refreshConversations() {
+    const { data, error: listError } = await supabase.rpc('assistant_list_conversations_v45');
+    if (!listError) setConversations(data || []);
+  }
 
   useEffect(() => {
     conversationRef.current?.scrollTo({ top: conversationRef.current.scrollHeight, behavior: 'smooth' });
@@ -851,8 +971,9 @@ function TechAssistantPage() {
   async function askAssistant(event) {
     event.preventDefault();
     const cleanQuestion = question.trim();
-    if (!cleanQuestion) { setError('Enter a technical question first.'); return; }
+    if (!cleanQuestion) { setError('Enter a question first.'); return; }
     if (busy) return;
+    stopSpeaking();
 
     const userMessage = { id: createClientId(), role: 'user', text: cleanQuestion, imageName: image?.name || '' };
     const requestHistory = messages.slice(-8).map((message) => ({ role: message.role, text: message.text }));
@@ -865,7 +986,10 @@ function TechAssistantPage() {
         body: {
           question: cleanQuestion,
           history: requestHistory,
-          image: image ? { mimeType: image.mimeType, data: image.data } : null
+          image: image ? { mimeType: image.mimeType, data: image.data } : null,
+          imageName: image?.name || '',
+          language,
+          conversationId: conversationId || null
         }
       });
       if (functionError) {
@@ -880,7 +1004,21 @@ function TechAssistantPage() {
       }
       if (!data?.answer) throw new Error(data?.error || 'Gemini returned an empty answer.');
       setModel(data.model || 'Gemini');
-      setMessages((current) => [...current, { id: createClientId(), role: 'assistant', text: data.answer }]);
+      const assistantMessageId = createClientId();
+      const assistantMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        text: data.answer,
+        productMatches: data.productMatches || [],
+        supplierMatches: data.supplierMatches || [],
+        businessContext: data.businessContext || null,
+        videoLinks: data.videoLinks || [],
+        language: data.language || language
+      };
+      setMessages((current) => [...current, assistantMessage]);
+      if (data.conversation?.id) setConversationId(data.conversation.id);
+      if (assistantSettings.auto_speak_answers) speakAnswer(data.answer, data.language || language, assistantMessageId);
+      refreshConversations();
       clearImage();
     } catch (assistantError) {
       setError(`${assistantError.message || String(assistantError)}${String(assistantError.message || assistantError).includes('Failed to send') ? ' Deploy the tech-assistant Edge Function and set GEMINI_API_KEY.' : ''}`);
@@ -890,42 +1028,125 @@ function TechAssistantPage() {
   }
 
   function resetConversation() {
+    recognitionRef.current?.abort?.();
+    stopSpeaking();
     setMessages([]);
     setQuestion('');
     setError('');
+    setConversationId('');
+    setListening(false);
     clearImage();
   }
 
-  const quickPrompts = [
-    'Which battery is compatible with this laptop model and what must I verify?',
-    'Help diagnose a laptop that powers on but has no display.',
-    'Identify this part from its label and explain compatible replacements.',
-    'Give me the best YouTube search phrase for disassembling this laptop.'
-  ];
+  async function openConversation(id) {
+    stopSpeaking();
+    setLoadingConversation(true);
+    setError('');
+    const { data, error: loadError } = await supabase.rpc('assistant_get_conversation_v45', { p_conversation_id: id });
+    setLoadingConversation(false);
+    if (loadError) { setError(loadError.message); return; }
+    setConversationId(id);
+    setLanguage(data?.conversation?.language === 'ta' ? 'ta' : 'en');
+    setMessages((data?.messages || []).map((message) => ({
+      ...message,
+      id: message.id || createClientId(),
+      imageName: message.metadata?.image_name || '',
+      productMatches: message.metadata?.product_matches || [],
+      supplierMatches: message.metadata?.supplier_matches || [],
+      businessContext: message.metadata?.business_context || null,
+      videoLinks: message.metadata?.video_links || [],
+      language: data?.conversation?.language || language
+    })));
+  }
+
+  async function deleteConversation(event, id) {
+    event.stopPropagation();
+    if (!window.confirm('Delete this saved assistant conversation?')) return;
+    const { error: deleteError } = await supabase.rpc('assistant_delete_conversation_v45', { p_conversation_id: id });
+    if (deleteError) { setError(deleteError.message); return; }
+    if (conversationId === id) resetConversation();
+    refreshConversations();
+  }
+
+  function startVoiceInput() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setError('Voice typing is not supported by this browser. Use Chrome on Android or type the question.');
+      return;
+    }
+    if (listening) {
+      recognitionRef.current?.stop?.();
+      return;
+    }
+    stopSpeaking();
+    setError('');
+    const recognition = new SpeechRecognition();
+    const originalQuestion = question.trim();
+    recognition.lang = language === 'ta' ? 'ta-LK' : 'en-LK';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.onstart = () => setListening(true);
+    recognition.onend = () => setListening(false);
+    recognition.onerror = (event) => {
+      setListening(false);
+      if (event.error !== 'aborted') setError(event.error === 'not-allowed' ? 'Microphone permission was blocked. Allow microphone access for this site.' : `Voice input stopped: ${event.error}.`);
+    };
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results).map((result) => result[0]?.transcript || '').join(' ').trim();
+      setQuestion(`${originalQuestion}${originalQuestion && transcript ? ' ' : ''}${transcript}`);
+    };
+    recognitionRef.current = recognition;
+    recognition.start();
+  }
+
+  function stopSpeaking() {
+    window.speechSynthesis?.cancel?.();
+    utteranceRef.current = null;
+    setSpeakingMessageId('');
+  }
+
+  function speakAnswer(text, answerLanguage = language, messageId = 'automatic') {
+    if (!window.speechSynthesis) { setError('Spoken answers are not supported by this browser.'); return; }
+    if (speakingMessageId === messageId) { stopSpeaking(); return; }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(String(text || '').replace(/(^|\n)[A-Za-z ]+:\s*/g, '$1'));
+    utterance.lang = answerLanguage === 'ta' ? 'ta-LK' : 'en-LK';
+    utterance.rate = answerLanguage === 'ta' ? 0.9 : 1;
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoice = voices.find((voice) => voice.lang.toLowerCase().startsWith(answerLanguage === 'ta' ? 'ta' : 'en'));
+    if (preferredVoice) utterance.voice = preferredVoice;
+    utterance.onend = () => setSpeakingMessageId((current) => current === messageId ? '' : current);
+    utterance.onerror = () => setSpeakingMessageId((current) => current === messageId ? '' : current);
+    utteranceRef.current = utterance;
+    setSpeakingMessageId(messageId);
+    window.speechSynthesis.speak(utterance);
+  }
 
   return (
     <section className="page-section tech-assistant-page">
       <div className="tech-assistant-header">
-        <div><span className="tech-assistant-kicker">Gemini technical tool</span><h3>Tech Assistant</h3><p>Ask about laptop parts, compatible replacements, troubleshooting and repair procedures. Add a clear label photo when available.</p></div>
-        <button type="button" className="secondary-button" onClick={resetConversation}>New Conversation</button>
+        <div><span className="tech-assistant-kicker">Gemini + shop database</span><h3>Shop Assistant</h3><p>Ask about repairs, stock and supplier lists{canUseBusiness ? ', or permission-approved customers, documents and balances' : ''}. Speak in English or Tamil.</p></div>
+        <div className="tech-header-actions"><label>Answer language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="en">English</option><option value="ta">Tamil · தமிழ்</option></select></label>{assistantSettings.save_conversations && conversations.length > 0 && <label className="tech-mobile-history">Saved chat<select value={conversationId} onChange={(event) => event.target.value ? openConversation(event.target.value) : resetConversation()}><option value="">New conversation</option>{conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}</option>)}</select></label>}<button type="button" className="secondary-button" onClick={resetConversation}>New Conversation</button></div>
       </div>
 
       <div className="tech-assistant-layout">
         <aside className="panel-card tech-assistant-guide">
-          <h4>Useful questions</h4>
-          <div className="tech-prompt-list">{quickPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => setQuestion(prompt)}>{prompt}</button>)}</div>
+          <div className="tech-saved-conversations tech-saved-primary"><div className="tech-saved-heading"><div><span>HISTORY</span><h4>Conversations</h4></div>{assistantSettings.save_conversations && <small>{conversations.length}/{assistantSettings.max_conversations_per_staff}</small>}</div>{assistantSettings.save_conversations ? <>{conversations.map((conversation) => <button type="button" key={conversation.id} className={conversationId === conversation.id ? 'tech-conversation-link active' : 'tech-conversation-link'} onClick={() => openConversation(conversation.id)}><span><strong>{conversation.title}</strong><small>{conversation.message_count} messages · {fmtDate(conversation.updated_at)}</small></span><em onClick={(event) => deleteConversation(event, conversation.id)} title="Delete conversation">×</em></button>)}{!conversations.length && <div className="tech-history-empty"><strong>No saved conversations</strong><small>Your recent chats will appear here.</small></div>}</> : <div className="tech-history-empty"><strong>History is turned off</strong><small>An administrator can enable bounded conversation history in Settings.</small></div>}</div>
           <div className="tech-assistant-safety"><strong>Verify before fitting</strong><span>Confirm the exact model, part number, voltage, connector, polarity and dimensions. AI answers can be incomplete or wrong.</span></div>
-          <small>Do not include customer names, phone numbers, invoices or other private information. Free-tier Gemini requests may be used by Google to improve its products.</small>
+          <small>Database access is read-only. {canUseBusiness ? 'Business answers follow your active staff permissions. ' : ''}Conversations keep text only, are capped, and expire automatically. Photos and microphone audio are not saved by this app. Unpaid Gemini API content may be used by Google to improve its products.</small>
         </aside>
 
         <div className="panel-card tech-chat-card">
-          <div className="tech-chat-status"><div><span className="realtime-sync-dot" /><strong>{model}</strong></div><small>Technical guidance, not a replacement for manufacturer service documentation</small></div>
+          <div className="tech-chat-status"><div><span className="realtime-sync-dot" /><strong>{model}</strong></div><small>{canUseBusiness ? 'Technical help and permission-aware read-only business lookup' : 'Technical guidance and read-only product lookup'}</small></div>
           <div className="tech-conversation" ref={conversationRef}>
-            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>What are you repairing?</h4><p>Enter the full laptop model or upload a readable photo of the battery or part label.</p></div>}
-            {messages.map((message) => <article key={message.id} className={`tech-message ${message.role}`}>
-              <div className="tech-message-heading"><strong>{message.role === 'user' ? 'You' : 'Tech Assistant'}</strong>{message.imageName && <small>Photo: {message.imageName}</small>}</div>
-              <div className="tech-message-text">{message.text}</div>
-              {message.role === 'user' && <a className="tech-video-link" href={`https://www.youtube.com/results?search_query=${encodeURIComponent(`${message.text} disassembly repair`)}`} target="_blank" rel="noreferrer">Search YouTube for videos</a>}
+            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>{loadingConversation ? 'Loading conversation...' : 'What do you need?'}</h4><p>Ask for product stock, supplier parts or technical help{canUseBusiness ? ', or ask about purchases, documents and balances' : ''}. You can speak Tamil using the microphone.</p></div>}
+            {messages.map((message, messageIndex) => <article key={message.id} className={`tech-message ${message.role}`}>
+              <div className="tech-message-heading"><strong>{message.role === 'user' ? 'You' : 'Tech Assistant'}</strong><div>{message.imageName && <small>Photo: {message.imageName}</small>}{message.role === 'assistant' && <button type="button" className={speakingMessageId === message.id ? 'tech-speak-button speaking' : 'tech-speak-button'} onClick={() => speakAnswer(message.text, message.language || language, message.id)}>{speakingMessageId === message.id ? 'Stop' : 'Read aloud'}</button>}</div></div>
+              <AssistantMessageText text={message.text} />
+              {message.productMatches?.length > 0 && assistantQuestionRequestsProducts(messages[messageIndex - 1]?.role === 'user' ? messages[messageIndex - 1].text : '') && <div className="tech-database-results"><strong>Matching POS products</strong>{message.productMatches.slice(0, 6).map((product) => <div key={product.product_id} className="tech-product-result"><span><b>{product.item_code}</b>{product.name}</span><small>{money(product.selling_price)} · {product.track_inventory === false ? 'Non-stock item' : `Available ${numberValue(product.available_qty)} · Damaged ${numberValue(product.damaged_qty)}`}</small>{canOpenProducts && <button type="button" onClick={() => onOpenProduct?.(product)}>Open Product</button>}</div>)}</div>}
+              {message.supplierMatches?.length > 0 && <div className="tech-source-note">Supplier memory used: {message.supplierMatches.map((entry) => `${entry.supplier_name} · ${entry.title}`).join(', ')}</div>}
+              <AssistantBusinessResults context={message.businessContext} question={messages[messageIndex - 1]?.role === 'user' ? messages[messageIndex - 1].text : ''} canOpenDocuments={canOpenDocuments} onOpenDocument={onOpenDocument} />
+              {message.videoLinks?.length > 0 && <div className="tech-video-suggestions"><strong>Suggested YouTube searches</strong>{message.videoLinks.map((link, index) => <a key={`${link.url}-${index}`} href={link.url} target="_blank" rel="noreferrer"><span>{link.title}</span><b>Open YouTube</b></a>)}</div>}
             </article>)}
             {busy && <article className="tech-message assistant loading"><div className="tech-message-heading"><strong>Tech Assistant</strong></div><div className="tech-thinking"><span /><span /><span /> Checking the details...</div></article>}
           </div>
@@ -933,9 +1154,10 @@ function TechAssistantPage() {
           {error && <div className="error-box tech-assistant-error">{error}</div>}
           <form className="tech-assistant-composer" onSubmit={askAssistant}>
             {image && <div className="tech-image-preview"><img src={image.preview} alt="Selected technical reference" /><div><strong>{image.name}</strong><small>Compressed securely before sending</small></div><button type="button" className="secondary-button" onClick={clearImage}>Remove</button></div>}
-            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Example: Dell Latitude 5490, original battery says WDX0R 11.4V. What replacements are compatible?" maxLength={2000} />
+            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={canUseBusiness ? 'Ask about a repair, product stock, customer purchase, document or outstanding balance...' : 'Ask about a repair, compatible part, product stock or supplier list...'} maxLength={2000} />
             <div className="tech-composer-actions">
               <label className="secondary-button tech-photo-button">Add Photo<input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectImage} /></label>
+              <button type="button" className={listening ? 'secondary-button tech-voice-button listening' : 'secondary-button tech-voice-button'} onClick={startVoiceInput}>{listening ? 'Stop Listening' : language === 'ta' ? 'Speak Tamil' : 'Voice Input'}</button>
               <small>{question.length}/2000</small>
               <button className="primary-button" disabled={busy || !question.trim()}>{busy ? 'Asking Gemini...' : 'Ask Gemini'}</button>
             </div>
@@ -2206,8 +2428,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 }
 
 
-function Dashboard() {
-  const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0 });
+function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
+  const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0, todaySales: 0, todayInvoices: 0, outstanding: 0, lowStock: [], pendingCod: 0, onlineNew: 0, recentDocuments: [] });
   const [error, setError] = useState('');
 
   useEffect(() => { loadStats(); }, []);
@@ -2218,51 +2440,80 @@ function Dashboard() {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const [productsRes, customersRes, suppliersRes, docsRes, cashRes] = await Promise.all([
+    const [productsRes, customersRes, suppliersRes, docsRes, cashRes, todayDocsRes, outstandingRes, stockRes, codRes, recentRes, onlineRes] = await Promise.all([
       supabase.from('products').select('id', { count: 'exact', head: true }),
       supabase.from('customers').select('id', { count: 'exact', head: true }),
       supabase.from('suppliers').select('id', { count: 'exact', head: true }),
       supabase.from('documents').select('id', { count: 'exact', head: true }).neq('document_type', 'cod_order'),
-      supabase.from('cashflow_entries').select('entry_type, amount').gte('created_at', todayStart.toISOString())
+      supabase.from('cashflow_entries').select('entry_type, amount').gte('created_at', todayStart.toISOString()),
+      supabase.from('documents').select('id, document_type, total_amount, status').gte('created_at', todayStart.toISOString()),
+      supabase.from('documents').select('balance_amount').eq('document_type', 'invoice').gt('balance_amount', 0),
+      supabase.from('product_stock_view').select('product_id, item_code, name, available_qty, min_stock_level, track_inventory').eq('is_active', true).eq('track_inventory', true).limit(1000),
+      supabase.from('documents').select('id, status').eq('document_type', 'cod_order').limit(1000),
+      supabase.from('documents').select('id, document_no, document_type, status, total_amount, created_at').order('created_at', { ascending: false }).limit(7),
+      canViewOnlineOrders ? supabase.rpc('list_online_store_orders_v47', { p_status: 'new' }) : Promise.resolve({ data: [], error: null })
     ]);
 
-    const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error;
+    const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error || todayDocsRes.error || outstandingRes.error || stockRes.error || codRes.error || recentRes.error;
     if (firstError) {
       setError(firstError.message);
       return;
     }
 
+    const todayInvoices = (todayDocsRes.data || []).filter((row) => row.document_type === 'invoice');
+    const lowStock = (stockRes.data || []).filter((row) => numberValue(row.available_qty) <= numberValue(row.min_stock_level)).sort((a, b) => numberValue(a.available_qty) - numberValue(b.available_qty)).slice(0, 6);
     setStats({
       products: productsRes.count || 0,
       customers: customersRes.count || 0,
       suppliers: suppliersRes.count || 0,
       documents: docsRes.count || 0,
       cashIn: (cashRes.data || []).filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0),
-      cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0)
+      cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      todaySales: todayInvoices.reduce((sum, row) => sum + numberValue(row.total_amount), 0),
+      todayInvoices: todayInvoices.length,
+      outstanding: (outstandingRes.data || []).reduce((sum, row) => sum + numberValue(row.balance_amount), 0),
+      lowStock,
+      pendingCod: (codRes.data || []).filter((row) => !['settled', 'returned', 'cancelled'].includes(row.status)).length,
+      onlineNew: onlineRes.error ? 0 : (onlineRes.data || []).length,
+      recentDocuments: recentRes.data || []
     });
   }
 
   return (
-    <section className="page-section">
+    <section className="page-section dashboard-page">
       {error && <div className="error-box">{error}</div>}
-      <div className="stats-grid">
-        <StatCard label="Products" value={stats.products} />
-        <StatCard label="Customers" value={stats.customers} />
-        <StatCard label="Suppliers" value={stats.suppliers} />
-        <StatCard label="Documents" value={stats.documents} />
-        <StatCard label="Today Cash In" value={money(stats.cashIn)} />
-        <StatCard label="Today Cash Out" value={money(stats.cashOut)} />
+      <header className="dashboard-welcome">
+        <div><span>Shop overview</span><h3>Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}.</h3><p>{new Date().toLocaleDateString('en-LK', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · Live figures from your POS</p></div>
+        <div className="dashboard-quick-actions"><button type="button" onClick={() => onNavigate?.('pos')}>New Sale</button><button type="button" onClick={() => onNavigate?.('documents')}>Documents</button>{canViewOnlineOrders && <button type="button" onClick={() => onNavigate?.('online_orders')}>Online Orders</button>}<button type="button" onClick={() => onNavigate?.('cashflow')}>Cashflow</button></div>
+      </header>
+
+      <div className="dashboard-primary-stats">
+        <article className="dashboard-metric sales"><span>Today's sales</span><strong>{money(stats.todaySales)}</strong><small>{stats.todayInvoices} invoice{stats.todayInvoices === 1 ? '' : 's'} saved today</small><i>↗</i></article>
+        <article className="dashboard-metric cash"><span>Cashflow in</span><strong>{money(stats.cashIn)}</strong><small>Out {money(stats.cashOut)} · Net {money(stats.cashIn - stats.cashOut)}</small><i>⇅</i></article>
+        <article className="dashboard-metric credit"><span>Customer outstanding</span><strong>{money(stats.outstanding)}</strong><small>Open invoice balances</small><i>◷</i></article>
+        <article className="dashboard-metric orders"><span>Orders needing work</span><strong>{stats.pendingCod + stats.onlineNew}</strong><small>{stats.pendingCod} COD · {stats.onlineNew} new online</small><i>◎</i></article>
       </div>
-      <div className="panel-card">
-        <h3>Build status</h3>
-        <p>This update creates the main structure first: POS, documents, stock, cashflow, customers/suppliers, payment types, users/security, and company settings.</p>
-        <p>Next step is to connect full product add/edit and stock opening import screens.</p>
+
+      <div className="dashboard-content-grid">
+        <article className="panel-card dashboard-activity">
+          <div className="dashboard-panel-title"><div><span>Latest activity</span><h3>Recent documents</h3></div><button type="button" onClick={() => onNavigate?.('documents')}>View all</button></div>
+          <div className="dashboard-document-list">{stats.recentDocuments.map((document) => <div key={document.id}><span className={`dashboard-doc-icon ${document.document_type}`}>{document.document_type === 'invoice' ? 'S' : document.document_type === 'purchase' ? 'P' : document.document_type === 'cod_order' ? 'C' : 'D'}</span><div><strong>{document.document_no}</strong><small>{documentTypeLabel(document.document_type)} · {fmtDate(document.created_at)}</small></div><span className="dashboard-doc-status">{String(document.status || '').replaceAll('_', ' ')}</span><b>{money(document.total_amount)}</b></div>)}{!stats.recentDocuments.length && <div className="muted-box">No documents yet.</div>}</div>
+        </article>
+
+        <article className="panel-card dashboard-stock-watch">
+          <div className="dashboard-panel-title"><div><span>Inventory watch</span><h3>Low stock</h3></div><button type="button" onClick={() => onNavigate?.('stock')}>Open stock</button></div>
+          <div className="dashboard-stock-list">{stats.lowStock.map((product) => <div key={product.product_id}><span><strong>{product.name}</strong><small>{product.item_code}</small></span><b className={numberValue(product.available_qty) <= 0 ? 'empty' : ''}>{numberValue(product.available_qty)} available</b></div>)}{!stats.lowStock.length && <div className="dashboard-all-good"><span>✓</span><strong>Stock levels look healthy</strong><small>No products are at or below their minimum level.</small></div>}</div>
+        </article>
+      </div>
+
+      <div className="dashboard-mini-stats">
+        <div><span>Products</span><strong>{stats.products}</strong></div><div><span>Customers</span><strong>{stats.customers}</strong></div><div><span>Suppliers</span><strong>{stats.suppliers}</strong></div><div><span>All documents</span><strong>{stats.documents}</strong></div>
       </div>
     </section>
   );
 }
 
-function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
+function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = null, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
   const can = (permission) => isAdmin || permissions?.[permission] === true;
   const canManageDocumentType = (type) => {
     if (['purchase', 'stock_in_transit', 'stock_adjustment', 'trade_in'].includes(type)) return can('manage_inventory_documents');
@@ -2295,6 +2546,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
     loadDocumentFilterParties();
     fetchCompanySettings().then(setCompanySettings).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!assistantTarget?.document_no) return;
+    setActiveDocumentTabId('view');
+    setFilters((current) => ({ ...current, number: assistantTarget.document_no }));
+    setMessage(`Showing document ${assistantTarget.document_no} from the assistant.`);
+  }, [assistantTarget?.nonce]);
 
   useRealtimeRefresh(['documents', 'document_items', 'payment_methods', 'cashflow_entries'], () => {
     loadDocuments(true);
@@ -6127,7 +6385,7 @@ function AssembliesManager() {
   </div>;
 }
 
-function ProductsPage() {
+function ProductsPage({ assistantTarget = null } = {}) {
   const [productSection, setProductSection] = useState('products');
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -6151,6 +6409,24 @@ function ProductsPage() {
   }, [selectedCategoryId, searchBy, search, filterMode, categories.length]);
   useRealtimeRefresh(['products', 'stock_balances', 'stock_movements'], loadProducts);
   useRealtimeRefresh(['categories'], () => { loadCategories(); loadProducts(); });
+
+  useEffect(() => {
+    if (!assistantTarget?.product_id) return;
+    setProductSection('products');
+    setSelectedCategoryId('all');
+    setSearchBy('code');
+    setSearch(assistantTarget.item_code || assistantTarget.name || '');
+    setFilterMode('search');
+    setShowForm(false);
+  }, [assistantTarget?.nonce]);
+
+  useEffect(() => {
+    if (!assistantTarget?.product_id) return;
+    const match = products.find((product) => product.product_id === assistantTarget.product_id);
+    if (!match) return;
+    setSelectedProduct(match);
+    window.setTimeout(() => document.querySelector(`[data-product-id="${assistantTarget.product_id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  }, [assistantTarget?.nonce, products]);
 
   async function loadCategories() {
     const { data, error: categoryError } = await supabase.from('categories').select('id, name, parent_id, path').order('path', { ascending: true });
@@ -6545,7 +6821,7 @@ function ProductsPage() {
               </thead>
               <tbody>
                 {products.map((product) => (
-                  <tr key={product.product_id} onClick={() => setSelectedProduct(product)} className={selectedProduct?.product_id === product.product_id ? 'selected-row' : ''}>
+                  <tr key={product.product_id} data-product-id={product.product_id} onClick={() => setSelectedProduct(product)} className={selectedProduct?.product_id === product.product_id ? 'selected-row' : ''}>
                     <td><strong>{product.item_code}</strong></td>
                     <td>{product.name}</td>
                     <td>{product.category_path || product.category_name || '-'}</td>
@@ -8559,18 +8835,107 @@ function ReportsPage() {
 }
 
 function OnlineOrdersPage() {
+  const [orders, setOrders] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => { loadOrders(); }, []);
+  useRealtimeRefresh(['online_store_orders', 'online_store_order_items'], () => loadOrders(true));
+
+  async function loadOrders(preserveSelection = false) {
+    setError('');
+    const { data, error: loadError } = await supabase.rpc('list_online_store_orders_v47', { p_status: null });
+    setLoading(false);
+    if (loadError) {
+      setError(`${loadError.message}. Run migration 047_online_store_orders.sql in Supabase.`);
+      return;
+    }
+    const rows = Array.isArray(data) ? data : [];
+    setOrders(rows);
+    setSelectedId((current) => preserveSelection && rows.some((row) => row.id === current) ? current : (current && rows.some((row) => row.id === current) ? current : rows[0]?.id || ''));
+  }
+
+  async function updateStatus(order, status) {
+    if (!order || busy) return;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    const { error: updateError } = await supabase.rpc('update_online_store_order_status_v47', { p_order_id: order.id, p_status: status });
+    setBusy(false);
+    if (updateError) { setError(updateError.message); return; }
+    setMessage(`${order.order_no} marked ${status.replaceAll('_', ' ')}.`);
+    await loadOrders(true);
+  }
+
+  const activeStatuses = ['new', 'contacted', 'confirmed', 'preparing', 'ready'];
+  const nextStatus = { new: 'contacted', contacted: 'confirmed', confirmed: 'preparing', preparing: 'ready', ready: 'completed' };
+  const statusLabel = (status) => ({ new: 'New', contacted: 'Customer contacted', confirmed: 'Confirmed', preparing: 'Preparing', ready: 'Ready', completed: 'Completed', cancelled: 'Cancelled' }[status] || status);
+  const visibleOrders = orders.filter((order) => statusFilter === 'all' || (statusFilter === 'active' ? activeStatuses.includes(order.status) : order.status === statusFilter));
+  const selected = orders.find((order) => order.id === selectedId) || null;
+  const counts = orders.reduce((result, order) => ({ ...result, [order.status]: (result[order.status] || 0) + 1 }), {});
+
+  useEffect(() => {
+    if (!visibleOrders.some((order) => order.id === selectedId)) setSelectedId(visibleOrders[0]?.id || '');
+  }, [statusFilter, orders.map((order) => `${order.id}:${order.status}`).join('|')]);
+
   return (
-    <section className="page-section">
-      <div className="panel-card">
-        <h3>Online Orders</h3>
-        <p>The online store will be a separate app later. This page will show synced website orders and reserved stock.</p>
-        <ul>
-          <li>New order</li>
-          <li>Pending payment</li>
-          <li>Confirmed / reserved</li>
-          <li>Ready for pickup</li>
-          <li>Completed / cancelled / refunded</li>
-        </ul>
+    <section className="page-section online-orders-page">
+      <div className="online-orders-heading">
+        <div><span>Website connection</span><h3>Online Orders</h3><p>Customer requests from the public store. Confirm the order before treating stock as reserved or recording a sale.</p></div>
+        <a className="primary-button online-orders-store-link" href="/store" target="_blank" rel="noreferrer">Open Online Store</a>
+      </div>
+      {error && <div className="error-box">{error}</div>}
+      {message && <div className="success-box">{message}</div>}
+
+      <div className="online-order-stats">
+        <button type="button" className={statusFilter === 'new' ? 'active' : ''} onClick={() => setStatusFilter('new')}><span>New requests</span><strong>{counts.new || 0}</strong><small>Need attention</small></button>
+        <button type="button" className={statusFilter === 'confirmed' ? 'active' : ''} onClick={() => setStatusFilter('confirmed')}><span>Confirmed</span><strong>{counts.confirmed || 0}</strong><small>Approved by shop</small></button>
+        <button type="button" className={statusFilter === 'preparing' ? 'active' : ''} onClick={() => setStatusFilter('preparing')}><span>Preparing</span><strong>{counts.preparing || 0}</strong><small>Being arranged</small></button>
+        <button type="button" className={statusFilter === 'ready' ? 'active' : ''} onClick={() => setStatusFilter('ready')}><span>Ready</span><strong>{counts.ready || 0}</strong><small>Pickup or dispatch</small></button>
+      </div>
+
+      <div className="online-order-filter-row">
+        {['active', 'all', 'completed', 'cancelled'].map((filter) => <button type="button" key={filter} className={statusFilter === filter ? 'active' : ''} onClick={() => setStatusFilter(filter)}>{filter === 'active' ? 'Active orders' : statusLabel(filter)}</button>)}
+        <button type="button" onClick={() => loadOrders(true)}>Refresh</button>
+      </div>
+
+      <div className="online-orders-workspace">
+        <div className="online-order-list panel-card">
+          {loading && <div className="muted-box">Loading website orders...</div>}
+          {!loading && visibleOrders.map((order) => <button type="button" key={order.id} className={selectedId === order.id ? 'online-order-card selected' : 'online-order-card'} onClick={() => setSelectedId(order.id)}>
+            <div><strong>{order.order_no}</strong><span className={`online-order-status ${order.status}`}>{statusLabel(order.status)}</span></div>
+            <h4>{order.customer_name}</h4>
+            <p>{order.phone} · {order.city || (order.fulfillment_method === 'pickup' ? 'Store pickup' : 'Delivery')}</p>
+            <div><small>{new Date(order.created_at).toLocaleString('en-LK')}</small><b>{money(order.total_amount)}</b></div>
+          </button>)}
+          {!loading && !visibleOrders.length && <div className="muted-box">No orders in this view.</div>}
+        </div>
+
+        <div className="online-order-detail panel-card">
+          {!selected && <div className="muted-box">Select an online order to view it.</div>}
+          {selected && <>
+            <header><div><span>{selected.order_no}</span><h3>{selected.customer_name}</h3><p>{new Date(selected.created_at).toLocaleString('en-LK')}</p></div><span className={`online-order-status ${selected.status}`}>{statusLabel(selected.status)}</span></header>
+            <div className="online-order-contact-grid">
+              <div><span>Phone</span><strong>{selected.phone}</strong></div>
+              <div><span>Fulfilment</span><strong>{selected.fulfillment_method === 'pickup' ? 'Store pickup' : 'Delivery'}</strong></div>
+              <div><span>Payment preference</span><strong>{selected.payment_preference === 'cod' ? 'Cash on delivery' : selected.payment_preference === 'bank' ? 'Bank transfer' : selected.payment_preference === 'pickup' ? 'Pay at store' : 'Card request'}</strong></div>
+              <div><span>Email</span><strong>{selected.email || '-'}</strong></div>
+            </div>
+            {selected.fulfillment_method === 'delivery' && <div className="online-order-address"><span>Delivery address</span><p>{selected.delivery_address || '-'}{selected.city ? `, ${selected.city}` : ''}</p></div>}
+            {selected.customer_notes && <div className="online-order-address"><span>Customer note</span><p>{selected.customer_notes}</p></div>}
+            <div className="online-order-items"><h4>Requested items</h4>{(selected.items || []).map((item) => <div key={item.id}><span><b>{item.quantity} ×</b> {item.product_name}<small>{item.item_code || ''}</small></span><strong>{money(item.line_total)}</strong></div>)}</div>
+            <div className="online-order-total"><span>Order value</span><strong>{money(selected.total_amount)}</strong></div>
+            <div className="online-order-actions">
+              {nextStatus[selected.status] && <button type="button" className="primary-button" disabled={busy} onClick={() => updateStatus(selected, nextStatus[selected.status])}>Mark {statusLabel(nextStatus[selected.status])}</button>}
+              {!['completed', 'cancelled'].includes(selected.status) && <button type="button" className="danger-button" disabled={busy} onClick={() => window.confirm(`Cancel ${selected.order_no}?`) && updateStatus(selected, 'cancelled')}>Cancel Order</button>}
+            </div>
+            <small className="online-order-safety">This is an order request only. It has not created a sales invoice, cashflow entry, COD order, or stock reservation.</small>
+          </>}
+        </div>
       </div>
     </section>
   );
@@ -8917,7 +9282,8 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
           ['company', 'Company & Printing', 'Shop details, logo and documents'],
           ['payments', 'Payment Types', 'Cash, bank, card and credit methods'],
           ['users', 'Users & Security', 'Staff, PINs and trusted devices'],
-          ['backups', 'Backups & Restore', 'Daily backups and recovery']
+          ['assistant', 'AI Assistant', 'Supplier memory, Tamil and retention'],
+          ['backups', 'Backups & Restore', 'Daily backups, recovery and clean reset']
         ].map(([key, label, description]) => (
           <button key={key} type="button" className={settingsSection === key ? 'settings-section-tab active' : 'settings-section-tab'} onClick={() => setSettingsSection(key)}>
             <strong>{label}</strong>
@@ -8959,9 +9325,169 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
       {settingsSection === 'company' && <div className="settings-embedded-page"><MyCompanyPage /></div>}
       {settingsSection === 'payments' && <div className="settings-embedded-page"><PaymentTypesPage /></div>}
       {settingsSection === 'users' && <div className="settings-embedded-page"><UsersSecurityPage activeStaff={activeStaff} autoLockMinutes={autoLockMinutes} onAutoLockChanged={onAutoLockChanged} /></div>}
+      {settingsSection === 'assistant' && <div className="settings-embedded-page"><AssistantSettingsPage /></div>}
       {settingsSection === 'backups' && <div className="settings-embedded-page"><BackupsPage /></div>}
     </section>
   );
+}
+
+
+function AssistantSettingsPage() {
+  const emptyKnowledge = { id: '', supplier_name: '', title: '', content: '', tags: '', is_active: true };
+  const [settings, setSettings] = useState(DEFAULT_ASSISTANT_SETTINGS);
+  const [knowledge, setKnowledge] = useState([]);
+  const [knowledgeForm, setKnowledgeForm] = useState(emptyKnowledge);
+  const [sourceImage, setSourceImage] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const sourceFileRef = useRef(null);
+
+  useEffect(() => { loadAssistantAdmin(); }, []);
+  useRealtimeRefresh(['assistant_settings', 'assistant_supplier_knowledge'], loadAssistantAdmin);
+
+  async function loadAssistantAdmin() {
+    const [settingsResult, knowledgeResult] = await Promise.all([
+      supabase.rpc('assistant_get_settings_v45'),
+      supabase.rpc('admin_list_assistant_knowledge_v45')
+    ]);
+    const loadError = settingsResult.error || knowledgeResult.error;
+    if (loadError) {
+      setError(`${loadError.message}. Run migration 045_ai_memory_pos_tools_voice.sql in Supabase.`);
+      return;
+    }
+    setSettings({ ...DEFAULT_ASSISTANT_SETTINGS, ...(settingsResult.data || {}) });
+    setKnowledge(knowledgeResult.data || []);
+  }
+
+  async function saveAssistantSettings(event) {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    const { data, error: saveError } = await supabase.rpc('admin_save_assistant_settings_v45', {
+      p_settings: {
+        default_language: settings.default_language,
+        response_style: settings.response_style,
+        save_conversations: !!settings.save_conversations,
+        conversation_retention_days: numberValue(settings.conversation_retention_days, 30),
+        max_conversations_per_staff: numberValue(settings.max_conversations_per_staff, 10),
+        auto_speak_answers: !!settings.auto_speak_answers,
+        custom_instructions: settings.custom_instructions || ''
+      }
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setSettings({ ...DEFAULT_ASSISTANT_SETTINGS, ...(data || {}) });
+    setMessage(settings.save_conversations ? 'Assistant settings saved.' : 'Settings saved and stored conversations were removed.');
+  }
+
+  async function selectSupplierImage(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError('');
+    try { setSourceImage(await prepareAssistantImage(file)); }
+    catch (imageError) { setSourceImage(null); setError(imageError.message || String(imageError)); }
+  }
+
+  function clearSupplierImage() {
+    setSourceImage(null);
+    if (sourceFileRef.current) sourceFileRef.current.value = '';
+  }
+
+  async function extractSupplierList() {
+    if (!sourceImage) { setError('Choose a supplier list image first.'); return; }
+    setExtracting(true); setError(''); setMessage('');
+    const { data, error: functionError } = await supabase.functions.invoke('tech-assistant', {
+      body: {
+        action: 'extract_knowledge',
+        supplier: knowledgeForm.supplier_name,
+        notes: knowledgeForm.title,
+        image: { mimeType: sourceImage.mimeType, data: sourceImage.data }
+      }
+    });
+    setExtracting(false);
+    if (functionError || !data?.extractedText) {
+      let details = '';
+      try { details = (await functionError?.context?.json())?.error || ''; } catch { details = ''; }
+      setError(details || functionError?.message || data?.error || 'Could not extract the supplier image.');
+      return;
+    }
+    setKnowledgeForm((current) => ({ ...current, content: data.extractedText }));
+    clearSupplierImage();
+    setMessage('List extracted. Review every model, number, price and availability before saving it to shared memory.');
+  }
+
+  async function saveKnowledge(event) {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    const { error: saveError } = await supabase.rpc('admin_save_assistant_knowledge_v45', {
+      p_entry: {
+        id: knowledgeForm.id || null,
+        supplier_name: knowledgeForm.supplier_name.trim(),
+        title: knowledgeForm.title.trim(),
+        content: knowledgeForm.content.trim(),
+        tags: knowledgeForm.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+        is_active: !!knowledgeForm.is_active
+      }
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setKnowledgeForm(emptyKnowledge);
+    clearSupplierImage();
+    setMessage('Supplier knowledge saved and available to permitted staff.');
+    loadAssistantAdmin();
+  }
+
+  function editKnowledge(entry) {
+    setKnowledgeForm({
+      id: entry.id,
+      supplier_name: entry.supplier_name || '',
+      title: entry.title || '',
+      content: entry.content || '',
+      tags: (entry.tags || []).join(', '),
+      is_active: entry.is_active !== false
+    });
+    setMessage(''); setError(''); clearSupplierImage();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function deleteKnowledge(entry) {
+    if (!window.confirm(`Delete “${entry.title}” from assistant memory?`)) return;
+    const { error: deleteError } = await supabase.rpc('admin_delete_assistant_knowledge_v45', { p_entry_id: entry.id });
+    if (deleteError) { setError(deleteError.message); return; }
+    if (knowledgeForm.id === entry.id) setKnowledgeForm(emptyKnowledge);
+    setMessage('Supplier knowledge deleted.');
+    loadAssistantAdmin();
+  }
+
+  return <section className="page-section assistant-settings-page">
+    <div className="page-actions settings-page-heading"><div><h3>AI Assistant Settings</h3><p>Control shared supplier memory, answer language, voice playback and bounded conversation history.</p></div></div>
+    {error && <div className="error-box">{error}</div>}
+    {message && <div className="notice success">{message}</div>}
+
+    <form className="panel-card assistant-preferences-form" onSubmit={saveAssistantSettings}>
+      <div className="section-title-row"><div><h3>Behavior and storage</h3><p>These defaults apply to every permitted staff member.</p></div><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save AI Settings'}</button></div>
+      <div className="assistant-settings-grid">
+        <label>Default answer language<select value={settings.default_language} onChange={(event) => setSettings({ ...settings, default_language: event.target.value })}><option value="en">English</option><option value="ta">Tamil · தமிழ்</option></select></label>
+        <label>Answer length<select value={settings.response_style} onChange={(event) => setSettings({ ...settings, response_style: event.target.value })}><option value="brief">Very brief</option><option value="concise">Concise</option><option value="detailed">More detailed</option></select></label>
+        <label>Keep conversations for<input type="number" min="1" max="90" step="1" disabled={!settings.save_conversations} value={settings.conversation_retention_days} onChange={(event) => setSettings({ ...settings, conversation_retention_days: event.target.value })} /><small>1–90 days</small></label>
+        <label>Maximum per staff<input type="number" min="1" max="20" step="1" disabled={!settings.save_conversations} value={settings.max_conversations_per_staff} onChange={(event) => setSettings({ ...settings, max_conversations_per_staff: event.target.value })} /><small>Each conversation keeps at most 30 text messages.</small></label>
+      </div>
+      <label className="settings-toggle-row"><input type="checkbox" checked={!!settings.save_conversations} onChange={(event) => setSettings({ ...settings, save_conversations: event.target.checked })} /><span><strong>Save bounded conversation history</strong><small>Only text and matched product references are stored. Turning this off deletes saved conversations.</small></span></label>
+      <label className="settings-toggle-row"><input type="checkbox" checked={!!settings.auto_speak_answers} onChange={(event) => setSettings({ ...settings, auto_speak_answers: event.target.checked })} /><span><strong>Read answers aloud automatically</strong><small>Uses the device browser voice. Staff can still tap Read aloud when this is off.</small></span></label>
+      <label className="assistant-custom-instructions">Shop answer preferences<textarea maxLength={2000} value={settings.custom_instructions} onChange={(event) => setSettings({ ...settings, custom_instructions: event.target.value })} placeholder="Example: When asked for a battery, return the supplier model first, then only the essential checks." /><small>{settings.custom_instructions.length}/2000 · Safety and database access rules always take priority.</small></label>
+    </form>
+
+    <form className="panel-card assistant-knowledge-form" onSubmit={saveKnowledge}>
+      <div className="section-title-row"><div><h3>{knowledgeForm.id ? 'Edit supplier memory' : 'Add supplier list to memory'}</h3><p>Paste a list or extract it from a WhatsApp/photo screenshot. The app discards the image after extraction; do not submit customer or confidential information to unpaid Gemini.</p></div>{knowledgeForm.id && <button type="button" className="secondary-button" onClick={() => setKnowledgeForm(emptyKnowledge)}>New Entry</button>}</div>
+      <div className="assistant-knowledge-header"><label>Supplier name<input value={knowledgeForm.supplier_name} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, supplier_name: event.target.value })} placeholder="Example: ABC Laptop Parts" required /></label><label>List title / date<input value={knowledgeForm.title} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, title: event.target.value })} placeholder="Battery availability · August 2026" required /></label><label>Search tags<input value={knowledgeForm.tags} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, tags: event.target.value })} placeholder="battery, Dell, HP" /></label></div>
+      <div className="assistant-knowledge-import"><label className="secondary-button tech-photo-button">Choose List Image<input ref={sourceFileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectSupplierImage} /></label>{sourceImage && <><span>{sourceImage.name}</span><button type="button" className="secondary-button" disabled={extracting} onClick={extractSupplierList}>{extracting ? 'Reading with Gemini...' : 'Extract Text with Gemini'}</button><button type="button" className="small-button" onClick={clearSupplierImage}>Remove</button></>}</div>
+      <label>Reviewed supplier information<textarea className="assistant-knowledge-content" maxLength={12000} value={knowledgeForm.content} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, content: event.target.value })} placeholder={'One item per line, for example:\nWDX0R battery · Dell Latitude 5480/5490 · 11.4V · In stock · LKR ...'} required /><small>{knowledgeForm.content.length}/12000 · Check unclear model numbers before saving.</small></label>
+      <div className="assistant-knowledge-save"><label className="checkbox-label"><input type="checkbox" checked={knowledgeForm.is_active} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, is_active: event.target.checked })} /> Available to Tech Assistant</label><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save to Shared Memory'}</button></div>
+    </form>
+
+    <div className="panel-card assistant-knowledge-list"><div className="section-title-row"><div><h3>Shared supplier knowledge</h3><p>{knowledge.length}/100 saved lists. These remain until an admin edits or removes them.</p></div></div><div className="table-wrap"><table><thead><tr><th>Supplier</th><th>List</th><th>Tags</th><th>Updated</th><th>Status</th><th>Actions</th></tr></thead><tbody>{knowledge.map((entry) => <tr key={entry.id}><td><strong>{entry.supplier_name}</strong></td><td>{entry.title}<small className="assistant-knowledge-preview">{entry.content}</small></td><td>{(entry.tags || []).join(', ') || '-'}</td><td>{fmtDate(entry.updated_at)}</td><td><span className={entry.is_active ? 'status-pill active' : 'status-pill inactive'}>{entry.is_active ? 'Active' : 'Hidden'}</span></td><td><button className="small-button" onClick={() => editKnowledge(entry)}>Edit</button><button className="small-button danger" onClick={() => deleteKnowledge(entry)}>Delete</button></td></tr>)}{!knowledge.length && <EmptyRow colSpan={6} text="No supplier lists saved yet." />}</tbody></table></div></div>
+  </section>;
 }
 
 
@@ -9344,11 +9870,13 @@ function BackupsPage() {
   const [backups, setBackups] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [restoreText, setRestoreText] = useState('');
+  const [resetText, setResetText] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [restoreComplete, setRestoreComplete] = useState(null);
+  const [resetComplete, setResetComplete] = useState(null);
 
   const selected = backups.find((backup) => backup.id === selectedId) || backups[0] || null;
   const latestDaily = backups.find((backup) => backup.backup_type === 'daily') || null;
@@ -9441,6 +9969,28 @@ function BackupsPage() {
     }
   }
 
+  async function resetShopData() {
+    if (resetText !== 'RESET SHOP DATA') return;
+    if (!window.confirm('Start fresh now? Products, stock, customers, suppliers, documents, cashflow, warranties and order history will be cleared. Staff accounts, PINs and settings will stay. A safety backup is created first.')) return;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const { data, error: resetError } = await supabase.rpc('admin_reset_business_data_v50', {
+        p_confirmation: resetText
+      });
+      if (resetError) throw resetError;
+      setResetComplete(data || {});
+      setResetText('');
+      setMessage('Shop business data was cleared. Administrator accounts and settings were preserved.');
+      await loadBackups();
+    } catch (resetError) {
+      setError(`${resetError.message || String(resetError)}. Run migration 050_admin_start_fresh.sql in Supabase if it has not been applied.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const counts = selected?.row_counts || {};
 
   return (
@@ -9501,9 +10051,28 @@ function BackupsPage() {
         </div>
       </div>
 
-      <div className="backup-safety-note"><strong>Important:</strong> These are logical backups stored inside the same Supabase project. Download periodic JSON copies and keep Supabase managed backups enabled for protection if the whole project is lost.</div>
+      <div className="panel-card backup-reset-zone">
+        <div className="backup-reset-copy">
+          <span className="backup-reset-eyebrow">Admin only · irreversible without restoring the backup</span>
+          <h3>Start Fresh</h3>
+          <p>Use this once when you are ready to remove testing records and begin using the shop with clean business data. The database creates a manual safety backup immediately before clearing anything.</p>
+          <div className="backup-reset-lists">
+            <div><strong>Cleared</strong><span>Products, categories and stock</span><span>Customers and suppliers</span><span>Documents, jobs, COD and cashflow</span><span>Online orders, warranties and accounting activity</span><span>Saved assistant conversations</span></div>
+            <div><strong>Preserved</strong><span>All admin and staff accounts</span><span>PINs, trusted devices and permissions</span><span>Company, printing and application settings</span><span>Payment types and bank setup</span><span>Store settings and assistant supplier knowledge</span></div>
+          </div>
+        </div>
+        <div className="backup-reset-confirm">
+          <strong>Confirm the clean start</strong>
+          <p>Type <b>RESET SHOP DATA</b> exactly. The active user must be an administrator, and the reset will stop if no active admin exists.</p>
+          <label>Confirmation phrase<input value={resetText} onChange={(event) => setResetText(event.target.value)} placeholder="RESET SHOP DATA" autoComplete="off" /></label>
+          <button className="danger-button" disabled={busy || resetText !== 'RESET SHOP DATA'} onClick={resetShopData}>{busy ? 'Working…' : 'Create Backup & Start Fresh'}</button>
+        </div>
+      </div>
+
+      <div className="backup-safety-note"><strong>Important:</strong> These are logical backups stored inside the same Supabase project. Download periodic JSON copies and keep Supabase managed backups enabled for protection if the whole project is lost. Start Fresh removes storefront image links but deliberately leaves uploaded image files in Supabase Storage so a safety restore can use them again.</div>
 
       {restoreComplete && <div className="modal-backdrop"><div className="modal-card restore-complete-modal"><div className="pos-save-success-icon">✓</div><h3>Restore complete</h3><p>The database now matches the selected backup. Reload so every screen reads the restored data.</p><button className="primary-button" onClick={() => window.location.reload()}>Reload App Now</button></div></div>}
+      {resetComplete && <div className="modal-backdrop"><div className="modal-card restore-complete-modal"><div className="pos-save-success-icon">✓</div><h3>Shop data cleared</h3><p>The clean database is ready. {resetComplete.active_admins_preserved || 1} active administrator account{Number(resetComplete.active_admins_preserved || 1) === 1 ? '' : 's'} and all settings were preserved. Reload before adding the current product list.</p><button className="primary-button" onClick={() => window.location.reload()}>Reload Clean App</button></div></div>}
     </section>
   );
 }

@@ -1,1 +1,7 @@
-supabase/.temp/
+.env
+node_modules/
+dist/
+tmp/
+.vite/
+*.log
+supabase/.temp/supabase/.temp/
