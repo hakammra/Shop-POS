@@ -4,4 +4,4 @@ dist/
 tmp/
 .vite/
 *.log
-supabase/.temp/supabase/.temp/
+supabase/.temp/
