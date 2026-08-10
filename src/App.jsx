@@ -67,10 +67,24 @@ const DEFAULT_STAFF_PERMISSIONS = Object.fromEntries(
 const POS_DEVICE_TOKEN_KEY = 'computer_shop_trusted_device_token_v38';
 const APP_LOGO_URL = '/gslogo.jpeg';
 
+function createClientId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues === 'function') globalThis.crypto.getRandomValues(bytes);
+  else {
+    const seed = `${Date.now()}-${Math.random()}-${Math.random()}`;
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor((seed.charCodeAt(index % seed.length) * Math.random()) % 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
 function getOrCreateDeviceToken() {
   let token = window.localStorage.getItem(POS_DEVICE_TOKEN_KEY);
   if (!token) {
-    token = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    token = `${createClientId()}-${createClientId()}`;
     window.localStorage.setItem(POS_DEVICE_TOKEN_KEY, token);
   }
   return token;
@@ -196,7 +210,7 @@ function useRealtimeRefresh(tables, refresh, debounceMs = 280) {
 }
 
 const emptyBill = (name = 'Bill 1') => ({
-  id: crypto.randomUUID(),
+  id: createClientId(),
   name,
   documentNo: '',
   customerId: '',
@@ -492,7 +506,7 @@ export default function App() {
     }
 
     setRealtimeStatus('connecting');
-    const channel = supabase.channel(`shop-pos-live-${crypto.randomUUID()}`);
+    const channel = supabase.channel(`shop-pos-live-${createClientId()}`);
     REALTIME_TABLES.forEach((table) => {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
         window.dispatchEvent(new CustomEvent(REALTIME_SYNC_EVENT, {
@@ -901,7 +915,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         customerId: quote.customerId || '',
         customerName: quote.customerName || '',
         items: quote.items.map((item) => recalcItem({
-          id: crypto.randomUUID(),
+          id: createClientId(),
           product_id: item.product_id,
           item_code: item.item_code,
           name: item.description || item.name || item.item_code || 'Quote item',
@@ -1099,7 +1113,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return true;
     }
     const item = recalcItem({
-      id: crypto.randomUUID(),
+      id: createClientId(),
       product_id: product.product_id,
       item_code: product.item_code,
       name: product.name,
@@ -1143,7 +1157,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
 
-    const groupId = crypto.randomUUID();
+    const groupId = createClientId();
     const componentGrosses = components.map((component) => (
       roundMoney(numberValue(component.qty) * numberValue(component.selling_price))
     ));
@@ -1166,7 +1180,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         : Math.min(Math.round(proportionalDiscount), remainingDiscount);
       remainingDiscount = roundMoney(remainingDiscount - lineDiscount);
       return recalcItem({
-        id: crypto.randomUUID(), product_id: component.product_id, item_code: component.item_code,
+        id: createClientId(), product_id: component.product_id, item_code: component.item_code,
         name: component.name, qty, unitPrice: numberValue(component.selling_price), unitCost: numberValue(component.avg_cost),
         discountType: 'amount', discountValue: lineDiscount,
         isReturn: false, returnCondition: 'sellable', availableQty: numberValue(component.available_qty),
@@ -1301,8 +1315,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       const proportionalDiscount = row.discount_type === 'amount' ? roundMoney(numberValue(row.discount_value) * qty / Math.abs(numberValue(row.qty))) : numberValue(row.discount_value);
       const stock = stockMap.get(row.product_id);
       const shared = { product_id: row.product_id, item_code: row.item_code, name: row.description, unitPrice: numberValue(row.unit_price), unitCost: numberValue(row.unit_cost), discountType: row.discount_type || 'none', discountValue: proportionalDiscount, trackInventory: stock?.trackInventory !== false };
-      added.push(recalcItem({ id: crypto.randomUUID(), ...shared, qty: -qty, isReturn: true, returnCondition: row.damaged ? 'warranty_damaged' : 'sellable', sourceDocumentItemId: row.id, returnReason: row.reason || '', sourceInvoiceNo: returnInvoice.document_no }));
-      if (exchangeSameItem) added.push(recalcItem({ id: crypto.randomUUID(), ...shared, qty, isReturn: false, returnCondition: 'sellable', availableQty: numberValue(stock?.availableQty), sourceDocumentItemId: null, returnReason: '' }));
+      added.push(recalcItem({ id: createClientId(), ...shared, qty: -qty, isReturn: true, returnCondition: row.damaged ? 'warranty_damaged' : 'sellable', sourceDocumentItemId: row.id, returnReason: row.reason || '', sourceInvoiceNo: returnInvoice.document_no }));
+      if (exchangeSameItem) added.push(recalcItem({ id: createClientId(), ...shared, qty, isReturn: false, returnCondition: 'sellable', availableQty: numberValue(stock?.availableQty), sourceDocumentItemId: null, returnReason: '' }));
     });
     updateActiveBill({ items: [...activeBill.items, ...added], customerId: activeBill.customerId || returnInvoice.customer_id || '', selectedItemId: added[0]?.id || '', paymentLines: [], notes: `${activeBill.notes || ''}${activeBill.notes ? '\n' : ''}${exchangeSameItem ? 'Exchange' : 'Return'} from ${returnInvoice.document_no}` });
     setShowReturnLookup(false); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnBusy(false);
@@ -1416,7 +1430,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     if (!method || amount <= 0) return;
     if (requestedAmount > remaining + 0.005) setMessage('POS payments cannot exceed the current bill. Record old-balance payments from Customers & Suppliers.');
     const line = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       paymentMethodId: method.id,
       paymentMethodName: method.name,
       amount,
@@ -1437,7 +1451,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
     const line = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       paymentMethodId: method.id,
       paymentMethodName: method.name,
       amount: target.amount,
@@ -1463,7 +1477,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
     const line = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       paymentMethodId: method.id,
       paymentMethodName: method.name,
       amount: target.amount,
@@ -2359,7 +2373,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
     }
     if (type === 'purchase' || type === 'stock_in_transit') {
       const tab = {
-        id: crypto.randomUUID(),
+        id: createClientId(),
         kind: 'new_purchase_like',
         documentType: type,
         label: type === 'stock_in_transit' ? 'New Stock in Transit' : 'New Purchase'
@@ -2370,7 +2384,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
     }
     if (type === 'trade_in') {
       const tab = {
-        id: crypto.randomUUID(),
+        id: createClientId(),
         kind: 'trade_in_intake',
         documentType: type,
         label: 'New Trade-In'
@@ -2381,7 +2395,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
     }
     if (type === 'stock_adjustment') {
       const tab = {
-        id: crypto.randomUUID(),
+        id: createClientId(),
         kind: 'stock_adjustment',
         documentType: type,
         label: 'New Stock Adjustment'
@@ -2396,7 +2410,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
     }
     if (type === 'quotation') {
       const tab = {
-        id: crypto.randomUUID(),
+        id: createClientId(),
         kind: 'quotation_document',
         documentType: type,
         label: 'New Quotation'
@@ -2407,7 +2421,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
     }
     if (type === 'cod_order') {
       const tab = {
-        id: crypto.randomUUID(),
+        id: createClientId(),
         kind: 'cod_order',
         documentType: type,
         label: 'New COD Order'
@@ -2438,7 +2452,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, onOpenPOS, onOpenPar
       return;
     }
     const tab = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       kind: 'edit_document',
       document: selected,
       label: selected.document_no || 'Edit document'
@@ -2957,7 +2971,7 @@ function selectAllText(event) {
 
 function emptyPurchaseLine() {
   return {
-    id: crypto.randomUUID(),
+    id: createClientId(),
     product_id: '',
     item_code: '',
     description: '',
@@ -3075,7 +3089,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     if (itemRes.error) setError(itemRes.error.message);
     else {
       const loadedLines = (itemRes.data || []).map((item) => ({
-        id: item.id || crypto.randomUUID(),
+        id: item.id || createClientId(),
         product_id: item.product_id,
         item_code: item.item_code || '',
         description: item.description || '',
@@ -3091,7 +3105,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       const existingLines = (cashRes.data || [])
         .filter((row) => Number(row.amount || 0) > 0)
         .map((row) => ({
-          id: row.id || crypto.randomUUID(),
+          id: row.id || createClientId(),
           paymentMethodId: row.payment_method_id,
           paymentMethodName: row.account_name || 'Payment',
           amount: numberValue(row.amount),
@@ -3100,7 +3114,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         }));
       if (existingLines.length) setPaymentLines(existingLines);
       else if (Number(document?.paid_amount || 0) > 0 && document?.payment_method_id) {
-        setPaymentLines([{ id: crypto.randomUUID(), paymentMethodId: document.payment_method_id, paymentMethodName: 'Payment', amount: Number(document.paid_amount || 0), isPaidMethod: true, affectsCashflow: true }]);
+        setPaymentLines([{ id: createClientId(), paymentMethodId: document.payment_method_id, paymentMethodName: 'Payment', amount: Number(document.paid_amount || 0), isPaidMethod: true, affectsCashflow: true }]);
       }
     }
   }
@@ -3269,7 +3283,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       return;
     }
     const newLine = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       product_id: selectedLineProduct.product_id,
       item_code: selectedLineProduct.item_code,
       description: selectedLineProduct.name,
@@ -3312,7 +3326,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     const amount = Number(amountOverride !== null ? amountOverride : paymentAmountInput || suggestedAmount || 0);
     if (amount <= 0) return;
     const line = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       paymentMethodId: method.id,
       paymentMethodName: method.name,
       amount,
@@ -3953,7 +3967,7 @@ function quotationLineTotal(line) {
 
 function emptyQuotationLine() {
   return {
-    id: crypto.randomUUID(),
+    id: createClientId(),
     product_id: '',
     item_code: '',
     description: '',
@@ -4071,7 +4085,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
       return;
     }
     const mapped = (data || []).map((item) => ({
-      id: item.id || crypto.randomUUID(),
+      id: item.id || createClientId(),
       product_id: item.product_id || '',
       item_code: item.item_code || '',
       description: item.description || '',
@@ -4119,7 +4133,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
       return;
     }
     const newLine = {
-      id: crypto.randomUUID(),
+      id: createClientId(),
       product_id: selectedLineProduct.product_id,
       item_code: selectedLineProduct.item_code,
       description: selectedLineProduct.name,
@@ -4484,7 +4498,7 @@ function codStatusLabel(status) {
 
 function emptyCodLine() {
   return {
-    id: crypto.randomUUID(),
+    id: createClientId(),
     product_id: '',
     item_code: '',
     description: '',
@@ -5294,7 +5308,7 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
         const trackInventory = stock?.track_inventory !== false;
         return {
           ...item,
-          id: item.id || crypto.randomUUID(),
+          id: item.id || createClientId(),
           track_inventory: trackInventory,
           max_available_qty: trackInventory ? numberValue(stock?.available_qty) + (document?.cod_stock_reserved ? numberValue(item.qty) : 0) : null
         };
@@ -6703,9 +6717,9 @@ function InventoryDocumentsPage() {
       <div className="section-title-row inventory-documents-heading">
         <div><h3>Inventory Documents</h3><p>Create and manage every document that changes incoming or on-hand stock.</p></div>
         <div className="inventory-create-actions">
-          <button className="primary-button" onClick={() => setFormMode({ type: 'purchase', tabId: crypto.randomUUID() })}>New Purchase</button>
-          <button className="secondary-button" onClick={() => setFormMode({ type: 'stock_in_transit', tabId: crypto.randomUUID() })}>New Stock in Transit</button>
-          <button className="secondary-button" onClick={() => setFormMode({ type: 'trade_in', tabId: crypto.randomUUID() })}>New Trade-In</button>
+          <button className="primary-button" onClick={() => setFormMode({ type: 'purchase', tabId: createClientId() })}>New Purchase</button>
+          <button className="secondary-button" onClick={() => setFormMode({ type: 'stock_in_transit', tabId: createClientId() })}>New Stock in Transit</button>
+          <button className="secondary-button" onClick={() => setFormMode({ type: 'trade_in', tabId: createClientId() })}>New Trade-In</button>
           <button className="secondary-button" onClick={() => setFormMode({ type: 'stock_adjustment' })}>New Stock Adjustment</button>
         </div>
       </div>
@@ -6734,7 +6748,7 @@ function InventoryDocumentsPage() {
           {!selected ? <div className="muted-box">Select an inventory document to view its items and actions.</div> : <>
             <div className="inventory-document-detail-head"><div><span>{documentTypeLabel(selected.document_type)}</span><h3>{selected.document_no}</h3><small>{fmtDate(selected.document_date || selected.created_at)} · {selected.status}</small></div><div className="inventory-document-actions">
               <button className="secondary-button" onClick={() => setPreviewId(selected.id)}>Print or Save PDF</button>
-              {['purchase', 'stock_in_transit'].includes(selected.document_type) && <button className="secondary-button" disabled={busy} onClick={() => setFormMode({ type: selected.document_type, document: selected, tabId: crypto.randomUUID() })}>Edit</button>}
+              {['purchase', 'stock_in_transit'].includes(selected.document_type) && <button className="secondary-button" disabled={busy} onClick={() => setFormMode({ type: selected.document_type, document: selected, tabId: createClientId() })}>Edit</button>}
               {selected.document_type === 'stock_in_transit' && selected.status !== 'converted' && <button className="primary-button" disabled={busy} onClick={convertTransit}>Receive Stock</button>}
               {['purchase', 'stock_in_transit'].includes(selected.document_type) && <button className="danger-button" disabled={busy} onClick={deletePurchaseLike}>Delete</button>}
             </div></div>
@@ -6773,7 +6787,7 @@ function StockAdjustmentForm({ onClose, onSaved }) {
 
   function addLine(product) {
     if (lines.some((line) => line.product_id === product.product_id && line.bucket === 'sellable')) return;
-    setLines((current) => [...current, { id: crypto.randomUUID(), product_id: product.product_id, item_code: product.item_code, description: product.name, unit_cost: numberValue(product.avg_cost), qty: 1, bucket: 'sellable' }]);
+    setLines((current) => [...current, { id: createClientId(), product_id: product.product_id, item_code: product.item_code, description: product.name, unit_cost: numberValue(product.avg_cost), qty: 1, bucket: 'sellable' }]);
   }
 
   function updateLine(id, changes) { setLines((current) => current.map((line) => line.id === id ? { ...line, ...changes } : line)); }
