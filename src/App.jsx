@@ -404,7 +404,6 @@ function PosApplication() {
   const [securityLoading, setSecurityLoading] = useState(false);
   const [securityError, setSecurityError] = useState('');
   const [activeStaff, setActiveStaff] = useState(null);
-  const [realtimeStatus, setRealtimeStatus] = useState('paused');
   const [appSettings, setAppSettings] = useState(DEFAULT_APP_SETTINGS);
   const [assistantProductTarget, setAssistantProductTarget] = useState(null);
   const [assistantDocumentTarget, setAssistantDocumentTarget] = useState(null);
@@ -518,12 +517,8 @@ function PosApplication() {
   }, [activeStaff?.id, securityState?.auto_lock_minutes]);
 
   useEffect(() => {
-    if (!session?.user?.id || !activeStaff?.id) {
-      setRealtimeStatus('paused');
-      return undefined;
-    }
+    if (!session?.user?.id || !activeStaff?.id) return undefined;
 
-    setRealtimeStatus('connecting');
     const channel = supabase.channel(`shop-pos-live-${createClientId()}`);
     REALTIME_TABLES.forEach((table) => {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
@@ -536,11 +531,7 @@ function PosApplication() {
         }));
       });
     });
-    channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') setRealtimeStatus('live');
-      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setRealtimeStatus('error');
-      else if (status === 'CLOSED') setRealtimeStatus('paused');
-    });
+    channel.subscribe();
 
     return () => {
       supabase.removeChannel(channel);
@@ -625,8 +616,6 @@ function PosApplication() {
             <p>Trusted device</p>
           </div>
           <div className="topbar-session-actions">
-            <a className="pos-store-link" href="/store" target="_blank" rel="noreferrer" title="Open the public online store">Online Store ↗</a>
-            <div className={`realtime-sync-badge ${realtimeStatus}`} title="Automatically refreshes shared changes from other devices"><span className="realtime-sync-dot" /><strong>{realtimeStatus === 'live' ? 'Live sync' : realtimeStatus === 'connecting' ? 'Connecting' : realtimeStatus === 'error' ? 'Sync retrying' : 'Sync paused'}</strong></div>
             <div className="active-operator-badge"><span className="operator-dot" /><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
             <button className="secondary-button" onClick={lockPos}>Lock / Switch</button>
             <button className="secondary-button" onClick={logoutDevice}>Logout Device</button>
@@ -1156,8 +1145,15 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = fa
             {image && <div className="tech-image-preview"><img src={image.preview} alt="Selected technical reference" /><div><strong>{image.name}</strong><small>Compressed securely before sending</small></div><button type="button" className="secondary-button" onClick={clearImage}>Remove</button></div>}
             <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={canUseBusiness ? 'Ask about a repair, product stock, customer purchase, document or outstanding balance...' : 'Ask about a repair, compatible part, product stock or supplier list...'} maxLength={2000} />
             <div className="tech-composer-actions">
-              <label className="secondary-button tech-photo-button">Add Photo<input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectImage} /></label>
-              <button type="button" className={listening ? 'secondary-button tech-voice-button listening' : 'secondary-button tech-voice-button'} onClick={startVoiceInput}>{listening ? 'Stop Listening' : language === 'ta' ? 'Speak Tamil' : 'Voice Input'}</button>
+              <label className="secondary-button tech-photo-button tech-tool-icon-button" aria-label="Add photo" title="Add photo">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h3l1.4-2h7.2l1.4 2h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2Z" /><circle cx="12" cy="13" r="4" /></svg>
+                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={selectImage} />
+              </label>
+              <button type="button" aria-label={listening ? 'Stop listening' : language === 'ta' ? 'Speak Tamil' : 'Voice input'} title={listening ? 'Stop listening' : language === 'ta' ? 'Speak Tamil' : 'Voice input'} className={listening ? 'secondary-button tech-voice-button tech-tool-icon-button listening' : 'secondary-button tech-voice-button tech-tool-icon-button'} onClick={startVoiceInput}>
+                {listening
+                  ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                  : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7" /></svg>}
+              </button>
               <small>{question.length}/2000</small>
               <button className="primary-button" disabled={busy || !question.trim()}>{busy ? 'Asking Gemini...' : 'Ask Gemini'}</button>
             </div>
@@ -5326,8 +5322,25 @@ function printableCompanyHeader(settings, documentTitle, documentNo) {
   return `<div class="brand-row"><div class="brand-block-print">${logoUrl ? `<img class="brand-logo-print" src="${escapePrintHtml(logoUrl)}" alt="Logo">` : ''}<div class="brand-copy"><h1>${escapePrintHtml(company.shop_name || 'Computer Shop')}</h1><p>${escapePrintHtml(contactLines.join('\n'))}</p></div></div><div class="doc-heading"><h2>${escapePrintHtml(documentTitle)}</h2><strong>${escapePrintHtml(documentNo || '')}</strong></div></div>`;
 }
 
+function isMobilePdfPreview() {
+  const mobileUserAgent = /Android|iPhone|iPad|iPod|Mobile/i.test(window.navigator?.userAgent || '');
+  const compactTouchScreen = window.matchMedia?.('(max-width: 760px) and (pointer: coarse)')?.matches;
+  return mobileUserAgent || Boolean(compactTouchScreen);
+}
+
 function showPdfBlobPreview(popup, blob, title, autoPrint = false) {
-  const pdfUrl = URL.createObjectURL(blob);
+  const filename = `${safePdfFilename(title || 'document')}.pdf`;
+  const pdfFile = typeof File === 'function'
+    ? new File([blob], filename, { type: 'application/pdf' })
+    : blob;
+  const pdfUrl = URL.createObjectURL(pdfFile);
+  if (isMobilePdfPreview()) {
+    popup.document.open();
+    popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapePrintHtml(title)}</title><style>*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Arial,Helvetica,sans-serif;background:#171a1d;color:#f4f7f8}body{display:grid;place-items:center;padding:20px}.mobile-pdf-card{width:min(100%,460px);padding:24px;border:1px solid #465159;background:#252a2e;box-shadow:0 14px 38px rgba(0,0,0,.34)}.mobile-pdf-card h1{margin:0 0 8px;font-size:21px;line-height:1.25;overflow-wrap:anywhere}.mobile-pdf-card p{margin:0 0 20px;color:#bac4ca;font-size:14px;line-height:1.5}.mobile-pdf-actions{display:grid;gap:10px}.mobile-pdf-actions a,.mobile-pdf-actions button{display:flex;min-height:52px;align-items:center;justify-content:center;border:1px solid #1688bd;border-radius:4px;background:#1688bd;color:#fff;text-decoration:none;font:700 16px Arial;cursor:pointer}.mobile-pdf-actions a.secondary,.mobile-pdf-actions button.secondary{border-color:#59656d;background:#343b40}.mobile-pdf-help{margin-top:16px!important;margin-bottom:0!important;font-size:12px!important;color:#94a2aa!important}</style></head><body><main class="mobile-pdf-card"><h1>${escapePrintHtml(title)}</h1><p>Your PDF is ready. Mobile browsers cannot reliably show temporary PDFs inside the desktop preview frame.</p><div class="mobile-pdf-actions"><a id="downloadPdf" href="${escapePrintHtml(pdfUrl)}" download="${escapePrintHtml(filename)}">Download PDF</a><button id="openPdf" type="button" class="secondary">Open PDF</button><button type="button" class="secondary" onclick="window.close()">Close</button></div><p class="mobile-pdf-help">If Open PDF is not supported by this browser, use Download PDF and open the named file from Downloads.</p></main><script>document.getElementById('openPdf').onclick=()=>window.location.assign(${JSON.stringify(pdfUrl)});</script></body></html>`);
+    popup.document.close();
+    window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 1800000);
+    return;
+  }
   popup.document.open();
   popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapePrintHtml(title)}</title><style>*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:Arial;background:#222}.pdf-preview-toolbar{height:58px;display:flex;align-items:center;justify-content:center;gap:10px;background:#20252a;border-bottom:1px solid #42484d}.pdf-preview-toolbar button{min-width:110px;padding:10px 16px;border:0;border-radius:4px;background:#1688bd;color:#fff;font-weight:800;cursor:pointer}.pdf-preview-toolbar button.secondary{background:#4a535a}.pdf-frame{display:block;width:100%;height:calc(100% - 58px);border:0;background:#d8dde1}</style></head><body><div class="pdf-preview-toolbar"><button id="printPdf">Print</button><button class="secondary" onclick="window.close()">Close Preview</button></div><iframe id="pdfFrame" class="pdf-frame" src="${escapePrintHtml(pdfUrl)}" title="${escapePrintHtml(title)}"></iframe><script>const frame=document.getElementById('pdfFrame');const printPdf=()=>{try{frame.contentWindow.focus();frame.contentWindow.print();}catch(error){window.print();}};document.getElementById('printPdf').onclick=printPdf;${autoPrint ? "frame.onload=()=>setTimeout(printPdf,350);" : ''}</script></body></html>`);
   popup.document.close();
@@ -8119,7 +8132,6 @@ function CashflowPage() {
           <span>{rangeLabel}</span>
           <button className="secondary-button" disabled={!!pdfBusy} onClick={() => exportCashflow('print')}>{pdfBusy === 'print' ? 'Preparing...' : 'Print A5'}</button>
           <button className="secondary-button" disabled={!!pdfBusy} onClick={() => exportCashflow('download')}>{pdfBusy === 'download' ? 'Preparing...' : 'Download A5 PDF'}</button>
-          <button className="secondary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button>
           <button className="primary-button" onClick={() => setShowAdd(true)}>+ Add Cash Document</button>
         </div>
       </div>

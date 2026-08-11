@@ -4607,6 +4607,9 @@ body.pos-resizing {
 .tech-composer-actions .primary-button { min-width: 140px; }
 .tech-photo-button { width: auto; display: inline-flex; align-items: center; justify-content: center; margin: 0; cursor: pointer; }
 .tech-photo-button input { display: none; }
+.tech-tool-icon-button { width: 44px; min-width: 44px; height: 40px; min-height: 40px; flex: 0 0 44px; padding: 0; border-radius: 7px; }
+.tech-tool-icon-button svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tech-tool-icon-button.listening svg rect { fill: currentColor; stroke: none; }
 .tech-image-preview { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-bottom: 9px; padding: 8px; border: 1px solid #48616c; border-radius: 7px; background: #203039; }
 .tech-image-preview img { width: 58px; height: 52px; display: block; border-radius: 4px; object-fit: cover; }
 .tech-image-preview div { min-width: 0; display: grid; gap: 3px; }
