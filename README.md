@@ -40,6 +40,8 @@ Product and supplier results are only queried when the question explicitly asks 
 
 Run `supabase/sql/048_assistant_business_data.sql` after migration 045, then redeploy the `tech-assistant` Edge Function to add read-only business questions. Administrators automatically have access. Staff require the separate **Allow AI to read customer, supplier and financial data** permission. The assistant can then look up matching customer purchases, documents, customer balances, supplier payables and operational totals. Contact details are not sent to Gemini, the assistant cannot edit records, and saved business conversations are hidden automatically if the permission is later removed.
 
+Run `supabase/sql/051_assistant_product_search.sql` after migration 050, then redeploy the `tech-assistant` Edge Function. Migration 051 improves product ranking for item codes, barcodes, model numbers, capacity and wattage searches, while keeping the lookup read-only. Staff with Tech Assistant permission also receive the floating Assistant launcher on every POS page, including the mobile layout.
+
 ## Online storefront
 
 Run `supabase/sql/046_online_storefront.sql` in the Supabase SQL Editor after migration 045. It creates the public catalogue API, separate website-content tables and the public product-image bucket.

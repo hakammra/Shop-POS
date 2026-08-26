@@ -65,9 +65,12 @@ function preparedImage(raw: any): GeminiPart | null {
 
 function hasProductLookupIntent(question: string) {
   const explicitStoreRequest = /\b(stock|in\s*stock|price|availability|inventory|product\s*match|item\s*code|sku|barcode|do\s+(?:we|you)\s+(?:have|sell|stock)|carry)\b/i.test(question);
-  const searchForItem = /\b(?:find|search|show|lookup|look\s*up|check)\b.{0,40}\b(?:products?|items?|battery|charger|screen|keyboard|ram|ssd|hard\s*drive|adapter|cable|part)\b/i.test(question);
-  const explicitCatalogueRequest = /\b(?:shop|store|our|pos)\b.{0,35}\b(?:products?|items?|availability|available)\b|\b(?:products?|items?)\b.{0,35}\b(?:shop|store|our|pos|available)\b/i.test(question);
-  return explicitStoreRequest || explicitCatalogueRequest || (!hasVideoIntent(question) && searchForItem)
+  const searchForItem = /\b(?:find|search|show|lookup|look\s*up|check)\b.{0,70}\b(?:products?|items?|batter(?:y|ies)|chargers?|screens?|keyboards?|ram|memory|ssds?|hard\s*drives?|hdds?|adapters?|cables?|parts?|mice|mouse|monitors?|laptops?|desktops?)\b/i.test(question);
+  const explicitCatalogueRequest = /\b(?:shop|store|our|pos)\b.{0,50}\b(?:products?|items?|availability|available)\b|\b(?:products?|items?)\b.{0,50}\b(?:shop|store|our|pos|available)\b/i.test(question);
+  const modelShorthand = question.trim().length <= 120
+    && /\b(?:batter(?:y|ies)|chargers?|screens?|keyboards?|ram|memory|ssds?|hard\s*drives?|hdds?|adapters?|cables?|parts?|mice|mouse|monitors?|laptops?|desktops?)\b/i.test(question)
+    && /\b(?:[a-z]+[-_/]?\d+[a-z0-9-_/]*|\d+(?:\.\d+)?\s*(?:gb|tb|mb|w|v|mah|hz|inch|in))\b/i.test(question);
+  return explicitStoreRequest || explicitCatalogueRequest || (!hasVideoIntent(question) && (searchForItem || modelShorthand))
     || /(ஸ்டாக்|விலை|கிடைக்குமா|பொருள்|தேடு|இருக்கிறதா)/i.test(question);
 }
 

@@ -637,6 +637,17 @@ function PosApplication() {
         {activePage === 'customers_suppliers' && <CustomersSuppliersPage />}
         {activePage === 'online_orders' && <OnlineOrdersPage />}
         {activePage === 'settings' && <SettingsPage activeStaff={activeStaff} appSettings={appSettings} autoLockMinutes={securityState.auto_lock_minutes || 5} onSettingsSaved={setAppSettings} onAutoLockChanged={(minutes) => setSecurityState((current) => ({ ...current, auto_lock_minutes: minutes }))} />}
+        {staffCan(activeStaff, 'use_ai_assistant') && <button
+          type="button"
+          className={activePage === 'tech_assistant' ? 'assistant-floating-button active' : 'assistant-floating-button'}
+          aria-label={activePage === 'tech_assistant' ? 'Tech Assistant is open' : 'Open Tech Assistant'}
+          aria-current={activePage === 'tech_assistant' ? 'page' : undefined}
+          title={activePage === 'tech_assistant' ? 'Tech Assistant is open' : 'Open Tech Assistant'}
+          onClick={() => { setActivePage('tech_assistant'); setSidebarOpen(false); }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 4.2h7.4A4.3 4.3 0 0 1 20 8.5v4.1a4.3 4.3 0 0 1-4.3 4.3h-4.1l-4.4 3v-3.2A4.3 4.3 0 0 1 4 12.6V8.5a4.3 4.3 0 0 1 4.3-4.3Z" /><path d="m11.8 7.1.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z" /></svg>
+          <span>AI</span>
+        </button>}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
           {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span>{item.icon}</span><strong>{item.label === 'COD Orders' ? 'COD' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
           <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
@@ -836,9 +847,14 @@ const DEFAULT_ASSISTANT_SETTINGS = {
 
 function assistantQuestionRequestsProducts(question = '') {
   const text = String(question || '');
-  return /\b(stock|in\s*stock|price|availability|inventory|product\s*match|item\s*code|sku|barcode|do\s+(?:we|you)\s+(?:have|sell|stock)|carry)\b/i.test(text)
-    || /\b(?:find|search|show|lookup|look\s*up|check)\b.{0,40}\b(?:products?|items?|battery|charger|screen|keyboard|ram|ssd|hard\s*drive|adapter|cable|part)\b/i.test(text)
-    || /\b(?:shop|store|our|pos)\b.{0,35}\b(?:products?|items?|availability|available)\b|\b(?:products?|items?)\b.{0,35}\b(?:shop|store|our|pos|available)\b/i.test(text);
+  const explicitStoreRequest = /\b(stock|in\s*stock|price|availability|inventory|product\s*match|item\s*code|sku|barcode|do\s+(?:we|you)\s+(?:have|sell|stock)|carry)\b/i.test(text);
+  const searchForItem = /\b(?:find|search|show|lookup|look\s*up|check)\b.{0,70}\b(?:products?|items?|batter(?:y|ies)|chargers?|screens?|keyboards?|ram|memory|ssds?|hard\s*drives?|hdds?|adapters?|cables?|parts?|mice|mouse|monitors?|laptops?|desktops?)\b/i.test(text);
+  const explicitCatalogueRequest = /\b(?:shop|store|our|pos)\b.{0,50}\b(?:products?|items?|availability|available)\b|\b(?:products?|items?)\b.{0,50}\b(?:shop|store|our|pos|available)\b/i.test(text);
+  const modelShorthand = text.trim().length <= 120
+    && /\b(?:batter(?:y|ies)|chargers?|screens?|keyboards?|ram|memory|ssds?|hard\s*drives?|hdds?|adapters?|cables?|parts?|mice|mouse|monitors?|laptops?|desktops?)\b/i.test(text)
+    && /\b(?:[a-z]+[-_/]?\d+[a-z0-9-_/]*|\d+(?:\.\d+)?\s*(?:gb|tb|mb|w|v|mah|hz|inch|in))\b/i.test(text);
+  return explicitStoreRequest || explicitCatalogueRequest || searchForItem || modelShorthand
+    || /(ஸ்டாக்|விலை|கிடைக்குமா|பொருள்|தேடு|இருக்கிறதா)/i.test(text);
 }
 
 function assistantQuestionRequestsDocuments(question = '') {
@@ -1132,7 +1148,21 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = fa
             {messages.map((message, messageIndex) => <article key={message.id} className={`tech-message ${message.role}`}>
               <div className="tech-message-heading"><strong>{message.role === 'user' ? 'You' : 'Tech Assistant'}</strong><div>{message.imageName && <small>Photo: {message.imageName}</small>}{message.role === 'assistant' && <button type="button" className={speakingMessageId === message.id ? 'tech-speak-button speaking' : 'tech-speak-button'} onClick={() => speakAnswer(message.text, message.language || language, message.id)}>{speakingMessageId === message.id ? 'Stop' : 'Read aloud'}</button>}</div></div>
               <AssistantMessageText text={message.text} />
-              {message.productMatches?.length > 0 && assistantQuestionRequestsProducts(messages[messageIndex - 1]?.role === 'user' ? messages[messageIndex - 1].text : '') && <div className="tech-database-results"><strong>Matching POS products</strong>{message.productMatches.slice(0, 6).map((product) => <div key={product.product_id} className="tech-product-result"><span><b>{product.item_code}</b>{product.name}</span><small>{money(product.selling_price)} · {product.track_inventory === false ? 'Non-stock item' : `Available ${numberValue(product.available_qty)} · Damaged ${numberValue(product.damaged_qty)}`}</small>{canOpenProducts && <button type="button" onClick={() => onOpenProduct?.(product)}>Open Product</button>}</div>)}</div>}
+              {message.productMatches?.length > 0 && assistantQuestionRequestsProducts(messages[messageIndex - 1]?.role === 'user' ? messages[messageIndex - 1].text : '') && <div className="tech-database-results">
+                <div className="tech-database-results-heading"><strong>Matching POS products</strong><small>{message.productMatches.length} found · best matches first</small></div>
+                {message.productMatches.slice(0, 8).map((product) => <div key={product.product_id} className="tech-product-result">
+                  <div className="tech-product-main"><span><b>{product.item_code}</b>{product.name}</span>{product.category && <small>{product.category}</small>}</div>
+                  <strong className="tech-product-price">{money(product.selling_price)}</strong>
+                  <div className="tech-product-facts">
+                    <span className={product.track_inventory === false || numberValue(product.available_qty) > 0 ? 'available' : 'unavailable'}>{product.track_inventory === false ? 'Non-stock item' : `${numberValue(product.available_qty)} available`}</span>
+                    {product.track_inventory !== false && numberValue(product.reserved_qty) > 0 && <span>{numberValue(product.reserved_qty)} reserved</span>}
+                    {product.track_inventory !== false && numberValue(product.in_transit_qty) > 0 && <span>{numberValue(product.in_transit_qty)} in transit</span>}
+                    {product.track_inventory !== false && numberValue(product.damaged_qty) > 0 && <span className="warning">{numberValue(product.damaged_qty)} damaged</span>}
+                    {numberValue(product.warranty_months) > 0 && <span>{numberValue(product.warranty_months)}-month warranty</span>}
+                  </div>
+                  {canOpenProducts && <button type="button" onClick={() => onOpenProduct?.(product)}>Open Product</button>}
+                </div>)}
+              </div>}
               {message.supplierMatches?.length > 0 && <div className="tech-source-note">Supplier memory used: {message.supplierMatches.map((entry) => `${entry.supplier_name} · ${entry.title}`).join(', ')}</div>}
               <AssistantBusinessResults context={message.businessContext} question={messages[messageIndex - 1]?.role === 'user' ? messages[messageIndex - 1].text : ''} canOpenDocuments={canOpenDocuments} onOpenDocument={onOpenDocument} />
               {message.videoLinks?.length > 0 && <div className="tech-video-suggestions"><strong>Suggested YouTube searches</strong>{message.videoLinks.map((link, index) => <a key={`${link.url}-${index}`} href={link.url} target="_blank" rel="noreferrer"><span>{link.title}</span><b>Open YouTube</b></a>)}</div>}
