@@ -5,17 +5,17 @@ import Storefront from './Storefront';
 
 const NAV_ITEMS = [
   { key: 'pos', label: 'POS', icon: '▦', group: 'Checkout', permission: 'pos_sales' },
-  { key: 'dashboard', label: 'Dashboard', icon: '▤', group: 'Checkout', permission: 'view_dashboard' },
+  { key: 'dashboard', label: 'Dashboard', icon: 'chart', group: 'Checkout', permission: 'view_dashboard' },
   { key: 'cod_orders', label: 'COD Orders', icon: '\uD83D\uDE9A', group: 'Orders & Service', permission: 'manage_cod_orders' },
-  { key: 'online_orders', label: 'Online Orders', icon: '◉', group: 'Orders & Service', permission: 'manage_online_orders' },
-  { key: 'jobs', label: 'Jobs & Repairs', icon: '⌁', group: 'Orders & Service', permission: 'manage_jobs' },
+  { key: 'online_orders', label: 'Online Orders', icon: 'globe', group: 'Orders & Service', permission: 'manage_online_orders' },
+  { key: 'jobs', label: 'Jobs & Repairs', icon: 'wrench', group: 'Orders & Service', permission: 'manage_jobs' },
   { key: 'tech_assistant', label: 'Tech Assistant', icon: 'AI', group: 'Orders & Service', permission: 'use_ai_assistant' },
-  { key: 'documents', label: 'Documents', icon: '▰', group: 'Records & Stock', permission: 'view_documents' },
+  { key: 'documents', label: 'Documents', icon: 'document', group: 'Records & Stock', permission: 'view_documents' },
   { key: 'customers_suppliers', label: 'Customers & Suppliers', icon: '♟', group: 'Records & Stock', permission: 'manage_parties' },
-  { key: 'products', label: 'Products', icon: '◇', group: 'Records & Stock', permission: 'manage_products' },
-  { key: 'stock', label: 'Stock', icon: '▣', group: 'Records & Stock', permission: 'view_stock' },
+  { key: 'products', label: 'Products', icon: 'cube', group: 'Records & Stock', permission: 'manage_products' },
+  { key: 'stock', label: 'Stock', icon: 'clipboard', group: 'Records & Stock', permission: 'view_stock' },
   { key: 'warranty', label: 'Warranty', icon: '◆', group: 'Records & Stock', permission: 'manage_warranty' },
-  { key: 'cashflow', label: 'Cashflow', icon: '↕', group: 'Finance & Reports', permission: 'manage_cashflow' },
+  { key: 'cashflow', label: 'Cashflow', icon: 'cash', group: 'Finance & Reports', permission: 'manage_cashflow' },
   { key: 'reports', label: 'Reporting', icon: '▥', group: 'Finance & Reports', permission: 'view_reports' },
   { key: 'accounting', label: 'Accounting', icon: 'Σ', group: 'Finance & Reports', adminOnly: true },
   { key: 'settings', label: 'Settings', icon: '⚙', group: 'Settings', adminOnly: true }
@@ -107,6 +107,7 @@ function staffCan(staff, permission) {
 const DOCUMENT_TYPES = [
   { value: '', label: 'All document types' },
   { value: 'invoice', label: 'Sales Invoice' },
+  { value: 'unconfirmed_sale', label: 'Unconfirmed Sale' },
   { value: 'refund', label: 'Refund' },
   { value: 'quotation', label: 'Quotation' },
   { value: 'purchase', label: 'Purchase' },
@@ -172,6 +173,8 @@ const REALTIME_TABLES = [
   'categories',
   'brands',
   'payment_methods',
+  'cheque_payments',
+  'register_shifts',
   'cashflow_entries',
   'company_settings',
   'app_settings',
@@ -187,6 +190,7 @@ const REALTIME_TABLES = [
   'accounting_settings',
   'assistant_settings',
   'assistant_supplier_knowledge',
+  'assistant_pos_guides',
   'online_store_orders',
   'online_store_order_items'
 ];
@@ -237,7 +241,12 @@ const emptyBill = (name = 'Bill 1') => ({
   customPaymentDirection: 'in',
   notes: '',
   sourceQuoteId: '',
-  sourceQuoteNo: ''
+  sourceQuoteNo: '',
+  sourceDocumentId: '',
+  sourceDocumentNo: '',
+  sourceDocumentType: '',
+  editUnconfirmedId: '',
+  unconfirmedMode: false
 });
 
 function safeReadJson(key, fallback) {
@@ -285,6 +294,7 @@ const DEFAULT_APP_SETTINGS = {
   allow_negative_pos_stock: false,
   show_pos_stock_badges: true,
   confirm_pos_sale: false,
+  minimum_profit_percent: 5,
   default_payment_method_id: '',
   updated_at: null
 };
@@ -312,8 +322,78 @@ function fmtDate(value) {
   return new Date(value).toLocaleDateString('en-LK');
 }
 
+function escapeLabelHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+}
+
+function ThermalLabelModal({ code, kindLabel, onClose }) {
+  const [options, setOptions] = useState({
+    width: 20,
+    height: 10,
+    copies: 1,
+    margin: 0.5,
+    codeSize: 12
+  });
+
+  const previewWidth = Math.min(460, Math.max(260, Number(options.width) * 7));
+  const previewHeight = previewWidth * Math.max(Number(options.height), 10) / Math.max(Number(options.width), 10);
+  const previewScale = previewWidth / (Math.max(Number(options.width), 10) * 96 / 25.4);
+  const previewCodeSize = Math.max(Number(options.codeSize), 6) * 96 / 72 * previewScale;
+
+  function applyPreset(value) {
+    const [width, height] = value.split('x').map(Number);
+    if (width && height) setOptions((current) => ({ ...current, width, height }));
+  }
+
+  function swapOrientation() {
+    setOptions((current) => ({ ...current, width: current.height, height: current.width }));
+  }
+
+  function printLabels() {
+    const popup = window.open('', '_blank', 'width=820,height=760');
+    if (!popup) {
+      window.alert('Allow pop-ups for this site to choose your thermal printer and print labels.');
+      return;
+    }
+    const labelMarkup = `<section class="label"><strong class="code">${escapeLabelHtml(code)}</strong></section>`;
+    const copies = Math.min(Math.max(Math.floor(numberValue(options.copies)), 1), 100);
+    popup.document.open();
+    popup.document.write(`<!doctype html><html><head><title>Print ${escapeLabelHtml(kindLabel)} labels</title><style>
+      @page{size:${Number(options.width)}mm ${Number(options.height)}mm;margin:0}
+      *{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif}
+      .label{position:relative;width:${Number(options.width)}mm;height:${Number(options.height)}mm;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;padding:${Number(options.margin)}mm;text-align:center;page-break-after:always;break-after:page}
+      .label:last-child{page-break-after:auto;break-after:auto}
+      .code{max-width:100%;overflow:hidden;font-size:${Number(options.codeSize)}pt;font-weight:800;line-height:1;letter-spacing:.025em;text-overflow:ellipsis;white-space:nowrap}
+      @media screen{body{background:#d6d6d6}.label{margin:12px auto;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.22)}}
+    </style></head><body>${Array.from({ length: copies }, () => labelMarkup).join('')}<script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250));<\/script></body></html>`);
+    popup.document.close();
+  }
+
+  return <div className="modal-backdrop thermal-label-backdrop"><div className="modal-card thermal-label-modal">
+    <div className="section-title-row thermal-label-title"><div><span>Thermal sticker</span><h3>Print {kindLabel}</h3><p>The printer is selected in your system print dialog.</p></div><button type="button" className="secondary-button" onClick={onClose}>Close</button></div>
+    <div className="thermal-label-layout">
+      <div className="thermal-label-controls">
+        <label>Common label size<select value={`${options.width}x${options.height}`} onChange={(event) => applyPreset(event.target.value)}><option value="20x10">20 × 10 mm · landscape</option><option value="10x20">10 × 20 mm · portrait</option><option value="30x15">30 × 15 mm · landscape</option><option value="15x30">15 × 30 mm · portrait</option><option value="40x20">40 × 20 mm · landscape</option><option value="20x40">20 × 40 mm · portrait</option><option value="50x30">50 × 30 mm · landscape</option><option value="30x50">30 × 50 mm · portrait</option></select></label>
+        <button type="button" className="secondary-button thermal-orientation-button" onClick={swapOrientation}>Swap orientation ({options.width} × {options.height} → {options.height} × {options.width})</button>
+        <div className="thermal-label-field-grid"><label>Width (mm)<input type="number" min="10" max="150" step="1" value={options.width} onChange={(event) => setOptions({ ...options, width: event.target.value })} /></label><label>Height (mm)<input type="number" min="10" max="100" step="1" value={options.height} onChange={(event) => setOptions({ ...options, height: event.target.value })} /></label><label>Copies<input type="number" min="1" max="100" step="1" value={options.copies} onChange={(event) => setOptions({ ...options, copies: event.target.value })} /></label><label>Margin (mm)<input type="number" min="0" max="8" step="0.5" value={options.margin} onChange={(event) => setOptions({ ...options, margin: event.target.value })} /></label><label>Code size (pt)<input type="number" min="6" max="30" step="1" value={options.codeSize} onChange={(event) => setOptions({ ...options, codeSize: event.target.value })} /></label></div>
+        <div className="thermal-printer-note"><strong>Printer and darkness settings</strong><span>Choose the thermal printer, paper source, speed, density/darkness, and scaling in the system dialog. Use 100% or Actual size and disable margins.</span></div>
+      </div>
+      <div className="thermal-label-preview-panel"><span>Live preview · {options.width} × {options.height} mm</span><div className="thermal-label-preview" style={{ width: `${previewWidth}px`, height: `${previewHeight}px`, padding: `${Math.max(Number(options.margin), 0) * 3}px` }}>
+        <strong className="code" style={{ fontSize: `${previewCodeSize}px` }}>{code}</strong>
+      </div></div>
+    </div>
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="button" className="primary-button" onClick={printLabels}>Choose Printer &amp; Print</button></div>
+  </div></div>;
+}
+
 function documentTypeLabel(value) {
   return DOCUMENT_TYPES.find((item) => item.value === value)?.label || value || '-';
+}
+
+// Unconfirmed sales are an internal workflow state. Customer copies deliberately
+// use the normal invoice title and never expose the internal review status.
+function customerDocumentTypeLabel(value) {
+  return value === 'unconfirmed_sale' ? 'Sales Invoice' : documentTypeLabel(value);
 }
 
 function documentOutstandingBalance(document) {
@@ -343,6 +423,25 @@ function InfoTip({ text }) {
 
 function AppLogo({ className = '' }) {
   return <span className={`${className} app-logo-mark`.trim()}><img src={APP_LOGO_URL} alt="Computer Shop logo" /></span>;
+}
+
+function WhatsAppIcon({ className = '' } = {}) {
+  return <svg className={`whatsapp-icon ${className}`.trim()} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M20.5 11.8a8.5 8.5 0 0 1-12.6 7.4L3.5 20.5l1.3-4.3a8.5 8.5 0 1 1 15.7-4.4Z" />
+    <path d="M8.1 7.6c.2-.4.4-.4.7-.4h.5c.2 0 .4.1.5.4l.9 2.1c.1.3.1.5-.1.7l-.7.8c-.2.2-.1.4 0 .6.7 1.2 1.7 2.2 3 2.9.2.1.4.1.6-.1l.9-1.1c.2-.2.4-.3.7-.2l2.1 1c.3.1.4.3.4.5 0 .4-.2 1.3-.7 1.8-.5.6-1.4.9-2.3.9-1.1 0-2.7-.5-4.5-2-2.1-1.7-3.5-4.2-3.6-5.8 0-.8.2-1.5.6-2.1Z" />
+  </svg>;
+}
+
+function NavigationIcon({ name, fallback = '' } = {}) {
+  const common = { className: 'navigation-svg-icon', viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' };
+  if (name === 'wrench') return <svg {...common}><path d="M14.8 6.2a4.3 4.3 0 0 0-5.2 5.5L4 17.3 6.7 20l5.6-5.6a4.3 4.3 0 0 0 5.5-5.2l-2.6 2.6-3-3 2.6-2.6Z" /><path d="m5.8 17.8.4.4" /></svg>;
+  if (name === 'document') return <svg {...common}><path d="M6 3h8l4 4v14H6Z" /><path d="M14 3v5h5M9 12h6M9 16h6" /></svg>;
+  if (name === 'chart') return <svg {...common}><path d="M4 20V5M4 20h16" /><path d="M7 16v-4h3v4M12 16V9h3v7M17 16V6h3v10" /></svg>;
+  if (name === 'cash') return <svg {...common}><rect x="3" y="6" width="18" height="12" rx="2" /><circle cx="12" cy="12" r="3" /><path d="M6 9h.01M18 15h.01" /></svg>;
+  if (name === 'globe') return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M3.5 12h17M12 3c2.2 2.5 3.2 5.5 3.2 9S14.2 18.5 12 21M12 3C9.8 5.5 8.8 8.5 8.8 12S9.8 18.5 12 21" /></svg>;
+  if (name === 'cube') return <svg {...common}><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></svg>;
+  if (name === 'clipboard') return <svg {...common}><path d="M8 5H5v16h14V5h-3" /><rect x="8" y="3" width="8" height="4" rx="1" /><path d="m8 12 1.5 1.5L12 11M13 13h3m-8 4 1.5 1.5L12 16M13 18h3" /></svg>;
+  return <>{fallback || name}</>;
 }
 
 function QuickCustomerModal({ initialName = '', alsoSupplier = false, onClose, onCreated }) {
@@ -399,7 +498,8 @@ function PosApplication() {
   const [activePage, setActivePage] = useState('pos');
   const [loadingSession, setLoadingSession] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [assistantDrawerOpen, setAssistantDrawerOpen] = useState(false);
   const [securityState, setSecurityState] = useState(null);
   const [securityLoading, setSecurityLoading] = useState(false);
   const [securityError, setSecurityError] = useState('');
@@ -407,6 +507,8 @@ function PosApplication() {
   const [appSettings, setAppSettings] = useState(DEFAULT_APP_SETTINGS);
   const [assistantProductTarget, setAssistantProductTarget] = useState(null);
   const [assistantDocumentTarget, setAssistantDocumentTarget] = useState(null);
+  const [customerDocumentTarget, setCustomerDocumentTarget] = useState(null);
+  const [customerProfileTarget, setCustomerProfileTarget] = useState(null);
   const deviceToken = useMemo(() => getOrCreateDeviceToken(), []);
 
   useEffect(() => {
@@ -555,6 +657,30 @@ function PosApplication() {
     return () => document.body.classList.remove('mobile-navigation-open');
   }, [sidebarOpen]);
 
+  useEffect(() => {
+    if (!assistantDrawerOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setAssistantDrawerOpen(false);
+    };
+    document.body.classList.add('assistant-drawer-open');
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.classList.remove('assistant-drawer-open');
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [assistantDrawerOpen]);
+
+  function toggleAssistantDrawer() {
+    if (activePage === 'tech_assistant') return;
+    if (assistantDrawerOpen) {
+      setAssistantDrawerOpen(false);
+      return;
+    }
+    setSidebarOpen(false);
+    setSidebarCollapsed(true);
+    setAssistantDrawerOpen(true);
+  }
+
   if (loadingSession) return <FullScreenMessage title="Loading" message="Checking login session..." />;
   if (!session) return <AuthScreen />;
   if (securityLoading && !securityState) return <FullScreenMessage title="Security" message="Checking this device..." />;
@@ -594,12 +720,15 @@ function PosApplication() {
               {(index === 0 || visibleNavItems[index - 1].group !== item.group) && <div className="nav-section-label">{item.group}</div>}
               <button
                 className={activePage === item.key ? 'nav-item active' : 'nav-item'}
+                title={sidebarCollapsed ? item.label : undefined}
+                aria-label={sidebarCollapsed ? item.label : undefined}
                 onClick={() => {
                   setActivePage(item.key);
                   setSidebarOpen(false);
+                  setAssistantDrawerOpen(false);
                 }}
               >
-                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-icon"><NavigationIcon name={item.icon} fallback={item.icon} /></span>
                 <span className="nav-label">{item.label}</span>
               </button>
             </div>
@@ -617,39 +746,59 @@ function PosApplication() {
           </div>
           <div className="topbar-session-actions">
             <div className="active-operator-badge"><span className="operator-dot" /><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
-            <button className="secondary-button" onClick={lockPos}>Lock / Switch</button>
-            <button className="secondary-button" onClick={logoutDevice}>Logout Device</button>
+            <button className="secondary-button topbar-lock-button" onClick={lockPos}>Lock / Switch</button>
+            <button className="secondary-button topbar-logout-button" onClick={logoutDevice}>Logout Device</button>
+            {staffCan(activeStaff, 'use_ai_assistant') && <button
+              type="button"
+              className={activePage === 'tech_assistant' || assistantDrawerOpen ? 'assistant-header-button active' : 'assistant-header-button'}
+              aria-label={activePage === 'tech_assistant' ? 'Tech Assistant page is open' : assistantDrawerOpen ? 'Hide Tech Assistant panel' : 'Show Tech Assistant panel'}
+              aria-current={activePage === 'tech_assistant' ? 'page' : undefined}
+              aria-expanded={activePage === 'tech_assistant' ? undefined : assistantDrawerOpen}
+              title={activePage === 'tech_assistant' ? 'Tech Assistant page is open' : assistantDrawerOpen ? 'Hide Tech Assistant' : 'Show Tech Assistant'}
+              onClick={toggleAssistantDrawer}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 4.2h7.4A4.3 4.3 0 0 1 20 8.5v4.1a4.3 4.3 0 0 1-4.3 4.3h-4.1l-4.4 3v-3.2A4.3 4.3 0 0 1 4 12.6V8.5a4.3 4.3 0 0 1 4.3-4.3Z" /><path d="m11.8 7.1.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z" /></svg>
+              <span>AI</span>
+            </button>}
           </div>
         </header>
 
-        {activePage === 'pos' && <POSScreen permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} appSettings={appSettings} />}
+        {activePage === 'pos' && <POSScreen permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} appSettings={appSettings} onOpenCustomerDocuments={(customer) => { setCustomerDocumentTarget({ ...customer, nonce: Date.now() }); setActivePage('documents'); }} onOpenCustomerProfile={(customer) => { setCustomerProfileTarget({ ...customer, nonce: Date.now() }); setActivePage('customers_suppliers'); }} />}
         {activePage === 'dashboard' && <Dashboard onNavigate={setActivePage} canViewOnlineOrders={staffCan(activeStaff, 'manage_online_orders')} />}
-        {activePage === 'documents' && <DocumentsPage permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} assistantTarget={assistantDocumentTarget} onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
+        {activePage === 'documents' && <DocumentsPage permissions={activeStaff.permissions || {}} isAdmin={activeStaff.role === 'admin'} assistantTarget={assistantDocumentTarget} customerTarget={customerDocumentTarget} onCustomerTargetHandled={() => setCustomerDocumentTarget(null)} onOpenPOS={() => setActivePage('pos')} onOpenParties={() => setActivePage('customers_suppliers')} onOpenCashflow={() => setActivePage('cashflow')} onOpenJobs={() => setActivePage('jobs')} />}
         {activePage === 'cod_orders' && <CodOrdersPage />}
         {activePage === 'jobs' && <JobsPage />}
-        {activePage === 'tech_assistant' && <TechAssistantPage canUseBusiness={staffCan(activeStaff, 'assistant_business_data')} canOpenProducts={staffCan(activeStaff, 'manage_products')} canOpenDocuments={staffCan(activeStaff, 'view_documents')} onOpenProduct={(product) => { setAssistantProductTarget({ ...product, nonce: Date.now() }); setActivePage('products'); }} onOpenDocument={(document) => { setAssistantDocumentTarget({ ...document, nonce: Date.now() }); setActivePage('documents'); }} />}
         {activePage === 'products' && <ProductsPage assistantTarget={assistantProductTarget} />}
         {activePage === 'stock' && <StockPage onOpenDocuments={() => setActivePage('documents')} />}
         {activePage === 'warranty' && <WarrantyPage />}
         {activePage === 'reports' && <ReportsPage />}
         {activePage === 'cashflow' && <CashflowPage />}
         {activePage === 'accounting' && <AccountingPage activeStaff={activeStaff} />}
-        {activePage === 'customers_suppliers' && <CustomersSuppliersPage />}
+        {activePage === 'customers_suppliers' && <CustomersSuppliersPage customerTarget={customerProfileTarget} onCustomerTargetHandled={() => setCustomerProfileTarget(null)} />}
         {activePage === 'online_orders' && <OnlineOrdersPage />}
         {activePage === 'settings' && <SettingsPage activeStaff={activeStaff} appSettings={appSettings} autoLockMinutes={securityState.auto_lock_minutes || 5} onSettingsSaved={setAppSettings} onAutoLockChanged={(minutes) => setSecurityState((current) => ({ ...current, auto_lock_minutes: minutes }))} />}
-        {staffCan(activeStaff, 'use_ai_assistant') && <button
+        {staffCan(activeStaff, 'use_ai_assistant') && activePage !== 'tech_assistant' && assistantDrawerOpen && <button
           type="button"
-          className={activePage === 'tech_assistant' ? 'assistant-floating-button active' : 'assistant-floating-button'}
-          aria-label={activePage === 'tech_assistant' ? 'Tech Assistant is open' : 'Open Tech Assistant'}
-          aria-current={activePage === 'tech_assistant' ? 'page' : undefined}
-          title={activePage === 'tech_assistant' ? 'Tech Assistant is open' : 'Open Tech Assistant'}
-          onClick={() => { setActivePage('tech_assistant'); setSidebarOpen(false); }}
+          className="assistant-drawer-backdrop"
+          aria-label="Close Tech Assistant"
+          onClick={() => setAssistantDrawerOpen(false)}
+        />}
+        {staffCan(activeStaff, 'use_ai_assistant') && <div
+          className={activePage === 'tech_assistant' ? 'assistant-workspace assistant-full-page' : `assistant-workspace assistant-drawer-shell ${assistantDrawerOpen ? 'open' : ''}`}
+          aria-hidden={activePage !== 'tech_assistant' && !assistantDrawerOpen}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 4.2h7.4A4.3 4.3 0 0 1 20 8.5v4.1a4.3 4.3 0 0 1-4.3 4.3h-4.1l-4.4 3v-3.2A4.3 4.3 0 0 1 4 12.6V8.5a4.3 4.3 0 0 1 4.3-4.3Z" /><path d="m11.8 7.1.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z" /></svg>
-          <span>AI</span>
-        </button>}
+          <TechAssistantPage
+            drawerMode={activePage !== 'tech_assistant'}
+            onClose={() => setAssistantDrawerOpen(false)}
+            canUseBusiness={staffCan(activeStaff, 'assistant_business_data')}
+            canOpenProducts={staffCan(activeStaff, 'manage_products')}
+            canOpenDocuments={staffCan(activeStaff, 'view_documents')}
+            onOpenProduct={(product) => { setAssistantProductTarget({ ...product, nonce: Date.now() }); setAssistantDrawerOpen(false); setActivePage('products'); }}
+            onOpenDocument={(document) => { setAssistantDocumentTarget({ ...document, nonce: Date.now() }); setAssistantDrawerOpen(false); setActivePage('documents'); }}
+          />
+        </div>}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
-          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span>{item.icon}</span><strong>{item.label === 'COD Orders' ? 'COD' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
+          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'COD Orders' ? 'COD' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
           <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
           <button type="button" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
         </nav>
@@ -904,7 +1053,7 @@ function AssistantBusinessResults({ context, question = '', canOpenDocuments = f
   </div>;
 }
 
-function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = false, canOpenDocuments = false, canUseBusiness = false } = {}) {
+function TechAssistantPage({ onOpenProduct, onOpenDocument, onClose, drawerMode = false, canOpenProducts = false, canOpenDocuments = false, canUseBusiness = false } = {}) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
   const [image, setImage] = useState(null);
@@ -1128,10 +1277,10 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = fa
   }
 
   return (
-    <section className="page-section tech-assistant-page">
+    <section className={drawerMode ? 'page-section tech-assistant-page tech-assistant-drawer-mode' : 'page-section tech-assistant-page'}>
       <div className="tech-assistant-header">
-        <div><span className="tech-assistant-kicker">Gemini + shop database</span><h3>Shop Assistant</h3><p>Ask about repairs, stock and supplier lists{canUseBusiness ? ', or permission-approved customers, documents and balances' : ''}. Speak in English or Tamil.</p></div>
-        <div className="tech-header-actions"><label>Answer language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="en">English</option><option value="ta">Tamil · தமிழ்</option></select></label>{assistantSettings.save_conversations && conversations.length > 0 && <label className="tech-mobile-history">Saved chat<select value={conversationId} onChange={(event) => event.target.value ? openConversation(event.target.value) : resetConversation()}><option value="">New conversation</option>{conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}</option>)}</select></label>}<button type="button" className="secondary-button" onClick={resetConversation}>New Conversation</button></div>
+        <div><span className="tech-assistant-kicker">Gemini + shop database + staff handbook</span><h3>Shop Assistant</h3><p>Ask how to use the POS, or ask about repairs, stock and supplier lists{canUseBusiness ? ', or permission-approved customers, documents and balances' : ''}. Speak in English or Tamil.</p></div>
+        <div className="tech-header-actions"><label>Answer language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="en">English</option><option value="ta">Tamil · தமிழ்</option></select></label>{assistantSettings.save_conversations && conversations.length > 0 && <label className="tech-mobile-history">Saved chat<select value={conversationId} onChange={(event) => event.target.value ? openConversation(event.target.value) : resetConversation()}><option value="">New conversation</option>{conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}</option>)}</select></label>}<button type="button" className="secondary-button" onClick={resetConversation}>New Conversation</button>{drawerMode && <button type="button" className="secondary-button tech-drawer-close" aria-label="Close Tech Assistant" title="Close Tech Assistant" onClick={onClose}>×</button>}</div>
       </div>
 
       <div className="tech-assistant-layout">
@@ -1142,9 +1291,9 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = fa
         </aside>
 
         <div className="panel-card tech-chat-card">
-          <div className="tech-chat-status"><div><span className="realtime-sync-dot" /><strong>{model}</strong></div><small>{canUseBusiness ? 'Technical help and permission-aware read-only business lookup' : 'Technical guidance and read-only product lookup'}</small></div>
+          <div className="tech-chat-status"><div><span className="realtime-sync-dot" /><strong>{model}</strong></div><small>{canUseBusiness ? 'POS guidance, technical help and permission-aware read-only lookup' : 'POS staff guidance, technical help and read-only product lookup'}</small></div>
           <div className="tech-conversation" ref={conversationRef}>
-            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>{loadingConversation ? 'Loading conversation...' : 'What do you need?'}</h4><p>Ask for product stock, supplier parts or technical help{canUseBusiness ? ', or ask about purchases, documents and balances' : ''}. You can speak Tamil using the microphone.</p></div>}
+            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>{loadingConversation ? 'Loading conversation...' : 'What do you need?'}</h4><p>Ask how to complete a task in this POS, or ask for product stock, supplier parts or technical help{canUseBusiness ? ', purchases, documents and balances' : ''}. You can speak Tamil using the microphone.</p><div className="tech-staff-help-examples"><button type="button" onClick={() => setQuestion('How do I make an exchange bill?')}>How do I exchange an item?</button><button type="button" onClick={() => setQuestion('How do I create and process a COD order?')}>How do COD orders work?</button><button type="button" onClick={() => setQuestion('How do I save a sale for admin review?')}>Save a sale for review</button></div></div>}
             {messages.map((message, messageIndex) => <article key={message.id} className={`tech-message ${message.role}`}>
               <div className="tech-message-heading"><strong>{message.role === 'user' ? 'You' : 'Tech Assistant'}</strong><div>{message.imageName && <small>Photo: {message.imageName}</small>}{message.role === 'assistant' && <button type="button" className={speakingMessageId === message.id ? 'tech-speak-button speaking' : 'tech-speak-button'} onClick={() => speakAnswer(message.text, message.language || language, message.id)}>{speakingMessageId === message.id ? 'Stop' : 'Read aloud'}</button>}</div></div>
               <AssistantMessageText text={message.text} />
@@ -1173,7 +1322,7 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = fa
           {error && <div className="error-box tech-assistant-error">{error}</div>}
           <form className="tech-assistant-composer" onSubmit={askAssistant}>
             {image && <div className="tech-image-preview"><img src={image.preview} alt="Selected technical reference" /><div><strong>{image.name}</strong><small>Compressed securely before sending</small></div><button type="button" className="secondary-button" onClick={clearImage}>Remove</button></div>}
-            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={canUseBusiness ? 'Ask about a repair, product stock, customer purchase, document or outstanding balance...' : 'Ask about a repair, compatible part, product stock or supplier list...'} maxLength={2000} />
+            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={canUseBusiness ? 'Ask how to use the POS, or ask about repairs, stock, customers, documents or balances...' : 'Ask how to use the POS, or ask about repairs, compatible parts, stock or supplier lists...'} maxLength={2000} />
             <div className="tech-composer-actions">
               <label className="secondary-button tech-photo-button tech-tool-icon-button" aria-label="Add photo" title="Add photo">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h3l1.4-2h7.2l1.4 2h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2Z" /><circle cx="12" cy="13" r="4" /></svg>
@@ -1197,7 +1346,7 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, canOpenProducts = fa
 
 
 
-function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_APP_SETTINGS } = {}) {
+function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_APP_SETTINGS, onOpenCustomerDocuments, onOpenCustomerProfile } = {}) {
   const can = (permission) => isAdmin || permissions?.[permission] === true;
   const allowNegativeStock = appSettings.allow_negative_pos_stock === true;
   const savedBills = safeReadJson(POS_DRAFTS_KEY, null);
@@ -1210,6 +1359,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [assemblyPreview, setAssemblyPreview] = useState(null);
   const [selectedPosProduct, setSelectedPosProduct] = useState(null);
   const [posProductDraft, setPosProductDraft] = useState({ qty: 1, unitPrice: 0 });
+  const [customerPriceHistory, setCustomerPriceHistory] = useState([]);
+  const [customerPriceHistoryLoading, setCustomerPriceHistoryLoading] = useState(false);
+  const [customerPriceHistoryError, setCustomerPriceHistoryError] = useState('');
   const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
   const [savedInvoiceReceipt, setSavedInvoiceReceipt] = useState(null);
   const [categories, setCategories] = useState([]);
@@ -1225,6 +1377,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [customPaymentAmount, setCustomPaymentAmount] = useState('');
   const [customPaymentDirection, setCustomPaymentDirection] = useState('in');
   const [lineAmountInput, setLineAmountInput] = useState('');
+  const [pendingChequePayment, setPendingChequePayment] = useState(null);
+  const [chequeDraft, setChequeDraft] = useState({ cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
   const [showReturnLookup, setShowReturnLookup] = useState(false);
   const [returnSearch, setReturnSearch] = useState('');
   const [returnInvoice, setReturnInvoice] = useState(null);
@@ -1235,6 +1389,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address: '' });
   const posGridRef = useRef(null);
   const returnLookupRequestRef = useRef(0);
+  const priceHistoryRequestRef = useRef(0);
   const [posLeftPercent, setPosLeftPercent] = useState(() => Number(window.localStorage.getItem('computer_shop_pos_split_left_percent') || 52));
   const [isResizingPos, setIsResizingPos] = useState(false);
   const [mobilePosPanel, setMobilePosPanel] = useState('products');
@@ -1320,8 +1475,11 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       const quote = JSON.parse(rawQuote);
       window.localStorage.removeItem(QUOTE_TO_POS_KEY);
       if (!quote?.items?.length) return;
+      const sourceType = quote.sourceDocumentType || (quote.quoteId ? 'quotation' : '');
+      const isUnconfirmedEdit = quote.mode === 'unconfirmed_edit';
+      const isUnconfirmedConvert = quote.mode === 'unconfirmed_convert';
       const quoteBill = {
-        ...emptyBill(quote.quoteNo ? `From ${quote.quoteNo}` : `Quote to invoice`),
+        ...emptyBill(quote.sourceDocumentNo || quote.quoteNo ? `From ${quote.sourceDocumentNo || quote.quoteNo}` : 'Document to invoice'),
         customerId: quote.customerId || '',
         customerName: quote.customerName || '',
         items: quote.items.map((item) => recalcItem({
@@ -1339,14 +1497,37 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           lineTotal: Number(item.line_total || 0)
         })),
         selectedItemId: '',
-        notes: quote.notes || `Converted from quotation ${quote.quoteNo || ''}`.trim(),
+        cartDiscountType: quote.cartDiscountType || quote.cart_discount_type || 'amount',
+        cartDiscountValue: Number(quote.cartDiscountValue ?? quote.cart_discount_value ?? 0),
+        paymentLines: (quote.paymentLines || []).map((line) => ({
+          id: createClientId(),
+          paymentMethodId: line.paymentMethodId || line.payment_method_id || '',
+          paymentMethodName: line.paymentMethodName || line.payment_method_name || 'Payment',
+          isPaidMethod: line.isPaidMethod ?? line.is_paid_method ?? true,
+          amount: Number(line.amount || 0),
+          direction: line.direction || 'in',
+          chequeNumber: line.chequeNumber || line.cheque_number || '',
+          chequeDate: line.chequeDate || line.cheque_date || '',
+          chequeBankName: line.chequeBankName || line.cheque_bank_name || ''
+        })),
+        notes: quote.notes || (sourceType === 'quotation' ? `Converted from quotation ${quote.quoteNo || ''}` : ''),
         sourceQuoteId: quote.quoteId || '',
-        sourceQuoteNo: quote.quoteNo || ''
+        sourceQuoteNo: quote.quoteNo || '',
+        sourceDocumentId: quote.sourceDocumentId || '',
+        sourceDocumentNo: quote.sourceDocumentNo || '',
+        sourceDocumentType: sourceType,
+        editUnconfirmedId: isUnconfirmedEdit ? quote.sourceDocumentId || '' : '',
+        documentNo: isUnconfirmedEdit ? quote.sourceDocumentNo || '' : '',
+        unconfirmedMode: isUnconfirmedEdit
       };
       quoteBill.selectedItemId = quoteBill.items[0]?.id || '';
       setBills((current) => [...current, quoteBill]);
       setActiveBillId(quoteBill.id);
-      setMessage(`Loaded quotation ${quote.quoteNo || ''} into POS. Select payment and save as invoice.`);
+      setMessage(isUnconfirmedEdit
+        ? `Loaded ${quote.sourceDocumentNo || ''} for internal review and editing.`
+        : isUnconfirmedConvert
+          ? `Loaded ${quote.sourceDocumentNo || ''}. Review it, then save to confirm the sale.`
+          : `Loaded quotation ${quote.quoteNo || ''} into POS. Select payment and save as invoice.`);
     } catch {
       window.localStorage.removeItem(QUOTE_TO_POS_KEY);
     }
@@ -1445,7 +1626,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   async function loadPaymentMethods() {
     const { data, error } = await supabase
       .from('payment_methods')
-      .select('id, name, affects_cashflow, is_active, is_paid_method')
+      .select('*')
       .eq('is_active', true)
       .order('name');
     if (error) {
@@ -1469,6 +1650,72 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     updateBillById(activeBill.id, patch);
   }
 
+  async function loadCustomerPriceHistory(product, customer) {
+    const requestId = ++priceHistoryRequestRef.current;
+    setCustomerPriceHistory([]);
+    setCustomerPriceHistoryError('');
+    if (!customer?.id || !product?.product_id) {
+      setCustomerPriceHistoryLoading(false);
+      return;
+    }
+
+    setCustomerPriceHistoryLoading(true);
+    const { data: customerDocuments, error: documentError } = await supabase
+      .from('documents')
+      .select('id, document_no, document_date, created_at, status')
+      .eq('customer_id', customer.id)
+      .eq('document_type', 'invoice')
+      .order('document_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(75);
+
+    if (requestId !== priceHistoryRequestRef.current) return;
+    if (documentError) {
+      setCustomerPriceHistoryError(documentError.message);
+      setCustomerPriceHistoryLoading(false);
+      return;
+    }
+
+    const validDocuments = (customerDocuments || []).filter((document) => !['void', 'voided', 'cancelled'].includes(String(document.status || '').toLowerCase()));
+    if (!validDocuments.length) {
+      setCustomerPriceHistoryLoading(false);
+      return;
+    }
+
+    const documentMap = new Map(validDocuments.map((document) => [document.id, document]));
+    const { data: soldLines, error: lineError } = await supabase
+      .from('document_items')
+      .select('id, document_id, qty, unit_price, discount_type, discount_value, line_total')
+      .in('document_id', validDocuments.map((document) => document.id))
+      .eq('product_id', product.product_id)
+      .gt('qty', 0)
+      .limit(100);
+
+    if (requestId !== priceHistoryRequestRef.current) return;
+    if (lineError) {
+      setCustomerPriceHistoryError(lineError.message);
+      setCustomerPriceHistoryLoading(false);
+      return;
+    }
+
+    const history = (soldLines || [])
+      .map((line) => {
+        const document = documentMap.get(line.document_id);
+        const qty = Math.abs(numberValue(line.qty));
+        return document ? {
+          ...line,
+          document,
+          effectiveUnitPrice: qty > 0 ? roundMoney(Math.abs(numberValue(line.line_total)) / qty) : numberValue(line.unit_price)
+        } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.document.document_date || b.document.created_at) - new Date(a.document.document_date || a.document.created_at))
+      .slice(0, 8);
+
+    setCustomerPriceHistory(history);
+    setCustomerPriceHistoryLoading(false);
+  }
+
   function openPosProductPicker(product) {
     const trackInventory = product.track_inventory !== false;
     const availableQty = Number(product.available_qty || 0);
@@ -1482,6 +1729,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     setMessage('');
     setSelectedPosProduct(product);
     setPosProductDraft({ qty: 1, unitPrice: Number(product.selling_price || 0) });
+    loadCustomerPriceHistory(product, selectedCustomer);
   }
 
   function addProduct(product, requestedQty = 1, requestedUnitPrice = null) {
@@ -1502,6 +1750,12 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     const cleanRequestedQty = Math.max(Number(requestedQty || 0), 0);
     const qty = trackInventory && !allowNegativeStock ? Math.min(cleanRequestedQty, remainingQty) : cleanRequestedQty;
     const unitPrice = Number(requestedUnitPrice ?? product.selling_price ?? 0);
+    const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
+    const minimumPrice = numberValue(product.avg_cost) * (1 + minimumProfitPercent / 100);
+    if (minimumProfitPercent > 0 && numberValue(product.avg_cost) > 0 && unitPrice + 0.005 < minimumPrice) {
+      setMessage(`${product.item_code || product.name} cannot be sold below ${money(minimumPrice)} (${minimumProfitPercent}% above cost).`);
+      return false;
+    }
     if (qty <= 0) {
       setMessage('Quantity must be greater than zero.');
       return false;
@@ -1839,6 +2093,11 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     const amount = Math.min(requestedAmount, remaining);
     if (!method || amount <= 0) return;
     if (requestedAmount > remaining + 0.005) setMessage('POS payments cannot exceed the current bill. Record old-balance payments from Customers & Suppliers.');
+    if (method.requires_cheque_details) {
+      setPendingChequePayment({ method, amount, direction: target.direction });
+      setChequeDraft({ cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
+      return;
+    }
     const line = {
       id: createClientId(),
       paymentMethodId: method.id,
@@ -1850,6 +2109,26 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     };
     setPaymentDraft((current) => [...current, line]);
     setLineAmountInput('');
+  }
+
+  function confirmChequePayment(event) {
+    event.preventDefault();
+    if (!pendingChequePayment || !chequeDraft.cheque_number.trim() || !chequeDraft.cheque_date) return;
+    const { method, amount, direction } = pendingChequePayment;
+    setPaymentDraft((current) => [...current, {
+      id: createClientId(),
+      paymentMethodId: method.id,
+      paymentMethodName: method.name,
+      amount,
+      direction,
+      isPaidMethod: true,
+      affectsCashflow: true,
+      chequeNumber: chequeDraft.cheque_number.trim(),
+      chequeDate: chequeDraft.cheque_date,
+      chequeBankName: chequeDraft.cheque_bank_name.trim()
+    }]);
+    setLineAmountInput('');
+    setPendingChequePayment(null);
   }
 
   function quickPayment(method) {
@@ -1945,6 +2224,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
   async function saveInvoice(paymentLinesOverride = null, options = {}) {
     const linesForSave = paymentLinesOverride || paymentLines;
+    const isUnconfirmed = activeBill.unconfirmedMode === true;
+    const isConfirmingUnconfirmed = !isUnconfirmed && activeBill.sourceDocumentType === 'unconfirmed_sale' && activeBill.sourceDocumentId;
     const useCreditForSave = options.useExistingCustomerCredit ?? useExistingCustomerCredit;
     const saveTarget = currentBillTarget(useCreditForSave);
     setMessage('');
@@ -1952,7 +2233,24 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage('Add at least one item.');
       return;
     }
-    if (!linesForSave.length && saveTarget.amount > 0.005) {
+    const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
+    const positiveLineTotal = activeBill.items.filter((item) => numberValue(item.qty) > 0).reduce((sum, item) => sum + Math.max(numberValue(item.lineTotal), 0), 0);
+    const positiveCartDiscount = activeBill.cartDiscountType === 'percent'
+      ? positiveLineTotal * numberValue(activeBill.cartDiscountValue) / 100
+      : Math.max(numberValue(activeBill.cartDiscountValue), 0);
+    const billDiscountFactor = positiveLineTotal > 0 ? Math.max(positiveLineTotal - Math.min(positiveCartDiscount, positiveLineTotal), 0) / positiveLineTotal : 1;
+    const belowMinimum = minimumProfitPercent > 0 ? activeBill.items.find((item) => {
+      const qty = numberValue(item.qty);
+      const cost = numberValue(item.unitCost);
+      if (qty <= 0 || cost <= 0) return false;
+      const effectiveUnitPrice = Math.max(numberValue(item.lineTotal), 0) * billDiscountFactor / qty;
+      return effectiveUnitPrice + 0.005 < cost * (1 + minimumProfitPercent / 100);
+    }) : null;
+    if (belowMinimum) {
+      setMessage(`${belowMinimum.name} cannot be sold below ${money(numberValue(belowMinimum.unitCost) * (1 + minimumProfitPercent / 100))} after discounts (${minimumProfitPercent}% above cost).`);
+      return;
+    }
+    if (!isUnconfirmed && !linesForSave.length && saveTarget.amount > 0.005) {
       openPaymentPanel();
       setMessage('Select payment details before saving.');
       return;
@@ -1973,12 +2271,14 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setShowCustomerPanel(true);
       return;
     }
-    if (appSettings.confirm_pos_sale && !window.confirm(`Save this invoice for ${money(total)}?`)) return;
+    if (appSettings.confirm_pos_sale && !window.confirm(`${isUnconfirmed ? 'Save this sale for internal confirmation' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : 'Save this invoice'} for ${money(total)}?`)) return;
 
     setSaving(true);
     const payload = {
+      document_id: activeBill.editUnconfirmedId || null,
       document_no: activeBill.documentNo,
       customer_id: activeBill.customerId || null,
+      document_date: todayInputDate(),
       cart_discount_type: activeBill.cartDiscountType,
       cart_discount_value: Number(activeBill.cartDiscountValue || 0),
       use_existing_customer_credit: useCreditForSave,
@@ -1998,30 +2298,39 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return_reason: item.isReturn ? item.returnReason || null : null
     }));
     const paymentPayload = linesForSave.map((line) => ({
+      source_line_id: line.id,
       payment_method_id: line.paymentMethodId,
       payment_method_name: line.paymentMethodName,
+      is_paid_method: line.isPaidMethod !== false,
       amount: Number(line.amount || 0),
-      direction: line.direction || 'in'
+      direction: line.direction || 'in',
+      cheque_number: line.chequeNumber || null,
+      cheque_date: line.chequeDate || null,
+      cheque_bank_name: line.chequeBankName || null
     }));
 
-    let { data, error } = await supabase.rpc('save_pos_invoice_v41', {
-      p_header: payload,
-      p_items: itemsPayload,
-      p_payments: paymentPayload
-    });
-    if (error && /save_pos_invoice_v41|schema cache|could not find the function/i.test(error.message || '')) {
-      ({ data, error } = await supabase.rpc('save_pos_invoice_v37', {
-        p_header: payload,
-        p_items: itemsPayload,
-        p_payments: paymentPayload
-      }));
+    const rpcName = isUnconfirmed
+      ? 'save_unconfirmed_sale_v57'
+      : isConfirmingUnconfirmed
+        ? 'confirm_unconfirmed_sale_v57'
+        : 'save_pos_invoice_v56';
+    const rpcArgs = isConfirmingUnconfirmed
+      ? { p_source_document_id: activeBill.sourceDocumentId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
+      : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
+    let { data, error } = await supabase.rpc(rpcName, rpcArgs);
+    if (error && /save_pos_invoice_v56|save_unconfirmed_sale_v57|confirm_unconfirmed_sale_v57|schema cache|could not find the function/i.test(error.message || '')) {
+      setSaving(false);
+      setMessage(isUnconfirmed || isConfirmingUnconfirmed
+        ? 'Run migration 057_unconfirmed_sales_job_documents.sql in Supabase before using unconfirmed sales.'
+        : 'Run migration 056_whatsapp_register_margin_cheques.sql in Supabase before saving new sales.');
+      return;
     }
     if (error) {
       setSaving(false);
       setMessage(error.message);
       return;
     }
-    if (activeBill.sourceQuoteId && data?.id) {
+    if (!isUnconfirmed && activeBill.sourceQuoteId && data?.id) {
       await supabase
         .from('documents')
         .update({ status: 'converted', linked_document_id: data.id, notes: `${activeBill.notes || ''}\nConverted to invoice ${data.document_no || activeBill.documentNo}`.trim() })
@@ -2030,8 +2339,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     let savedDocument = {
       id: data?.id,
       document_no: data?.document_no || activeBill.documentNo,
-      document_type: 'invoice',
-      status: Math.abs(resultingOutstanding) <= 0.005 ? 'completed' : 'unpaid',
+      document_type: isUnconfirmed ? 'unconfirmed_sale' : 'invoice',
+      status: isUnconfirmed ? 'unconfirmed' : Math.abs(resultingOutstanding) <= 0.005 ? 'completed' : 'unpaid',
       total_amount: total,
       paid_amount: Math.min(Math.max(total, 0), paidIn),
       balance_amount: Math.max(resultingOutstanding, 0),
@@ -2039,7 +2348,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       notes: activeBill.notes || '',
       payment_method_name: linesForSave.map((line) => line.paymentMethodName).filter(Boolean).join(' + '),
       party: selectedCustomer || null,
-      party_outstanding_after: resultingOutstanding
+      party_outstanding_after: isUnconfirmed ? null : resultingOutstanding,
+      unconfirmed_payments: isUnconfirmed ? paymentPayload : []
     };
     let savedItems = itemsPayload.map((item) => ({ ...item, line_total: recalcItem({ qty: item.qty, unitPrice: item.unit_price, discountType: item.discount_type, discountValue: item.discount_value }).lineTotal }));
     let savedFlows = [];
@@ -2055,7 +2365,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }
     setSavedInvoiceReceipt({ document: savedDocument, items: savedItems, flows: savedFlows });
     setSaving(false);
-    setMessage(`Invoice saved: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : ''}.`);
+    setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : ''}.`);
     await loadCustomers();
     await loadPosAssemblies();
     await loadProducts();
@@ -2097,7 +2407,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <button className="pos-action" onClick={addBill}>＋<span>New Sale</span></button>
             <button className="pos-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
             <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
-            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : 'Save Sale'}</span></button>
+            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save for Review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : 'Save Sale'}</span></button>
           </div>
         </div>
         <div className="pos-command-group payment-command-group">
@@ -2122,19 +2432,49 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           ))}
           <button className="tab add-tab" onClick={addBill}>+ New Bill</button>
         </div>
-        <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
+        <div className="pos-bill-row-actions">
+          <label className={`pos-unconfirmed-toggle ${activeBill.unconfirmedMode ? 'active' : ''}`} title="Internal only. The customer invoice remains a normal sales invoice.">
+            <input
+              type="checkbox"
+              checked={activeBill.unconfirmedMode === true}
+              disabled={Boolean(activeBill.editUnconfirmedId || activeBill.sourceDocumentType === 'unconfirmed_sale')}
+              onChange={(event) => updateActiveBill({ unconfirmedMode: event.target.checked })}
+            />
+            <span aria-hidden="true">◇</span>
+            {activeBill.editUnconfirmedId ? 'Internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming saved sale' : 'Save for review'}
+          </label>
+          <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
+        </div>
       </div>
 
       <div className="pos-customer-strip pos-customer-strip-v16">
         <label>Invoice No.<input value={activeBill.documentNo || ''} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => updateActiveBill({ documentNo: e.target.value })} /></label>
-        <label>Customer
-          <select value={activeBill.customerId || ''} onChange={(e) => setCustomer(e.target.value)}>
-            <option value="">Walk-in customer</option>
-            {customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` - ${customer.phone}` : ''}</option>
-            ))}
-          </select>
-        </label>
+        <div className="pos-customer-picker">
+          <label>Customer
+            <select value={activeBill.customerId || ''} onChange={(e) => setCustomer(e.target.value)}>
+              <option value="">Walk-in customer</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` - ${customer.phone}` : ''}</option>
+              ))}
+            </select>
+          </label>
+          <div className="pos-customer-shortcuts">
+            <button
+              type="button"
+              className="secondary-button customer-profile-button"
+              disabled={!selectedCustomer || !can('manage_parties')}
+              title={!can('manage_parties') ? 'Customer profile permission required' : !selectedCustomer ? 'Select a customer first' : `Open ${selectedCustomer.name}'s profile`}
+              onClick={() => onOpenCustomerProfile?.({ id: selectedCustomer.id, name: selectedCustomer.name })}
+            >Profile</button>
+            <button
+              type="button"
+              className="secondary-button customer-documents-button"
+              disabled={!selectedCustomer || !can('view_documents')}
+              title={!can('view_documents') ? 'Document viewing permission required' : !selectedCustomer ? 'Select a customer first' : `Show documents for ${selectedCustomer.name}`}
+              onClick={() => onOpenCustomerDocuments?.({ id: selectedCustomer.id, name: selectedCustomer.name })}
+            >Documents</button>
+          </div>
+        </div>
         <div className={`customer-balance-chip balance-chip-v16 ${currentOutstanding < 0 ? 'has-credit' : currentOutstanding > 0 ? 'has-due' : ''}`}><strong>{customerBalanceText}</strong><small>Details and credit use are available in F10 Payment.</small></div>
       </div>
 
@@ -2289,9 +2629,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         <div className="pos-save-success-card">
           <div className="pos-save-success-icon">✓</div>
           <div className="pos-save-success-copy">
-            <span>Invoice saved successfully</span>
+            <span>{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? 'Sale saved for internal review' : 'Invoice saved successfully'}</span>
             <h3>{savedInvoiceReceipt.document.document_no}</h3>
-            <p>{money(savedInvoiceReceipt.document.total_amount)} has been saved to Documents. Choose what you want to do next.</p>
+            <p>{money(savedInvoiceReceipt.document.total_amount)} has been saved to Documents{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? ' without posting stock or payment' : ''}. Choose what you want to do next.</p>
           </div>
           <div className="pos-save-success-actions">
             <button className="primary-button" onClick={() => printAccountingDocument(savedInvoiceReceipt.document, savedInvoiceReceipt.items, savedInvoiceReceipt.flows, companySettings)}>Print A5 Invoice</button>
@@ -2303,6 +2643,14 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 setMessage(pdfError.message || String(pdfError));
               }
             }}>Save PDF</button>
+            <button className="secondary-button whatsapp-share-button" onClick={async () => {
+              try {
+                const resultMessage = await shareAccountingDocumentOnWhatsApp(savedInvoiceReceipt.document, savedInvoiceReceipt.items, savedInvoiceReceipt.flows, companySettings);
+                setMessage(resultMessage);
+              } catch (shareError) {
+                if (shareError?.name !== 'AbortError') setMessage(shareError.message || String(shareError));
+              }
+            }}>WhatsApp</button>
             <button className="secondary-button" onClick={() => setSavedInvoiceReceipt(null)}>Continue to New Sale</button>
           </div>
         </div>
@@ -2325,13 +2673,30 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         {returnInvoice && <><div className="return-source-summary"><div><strong>{returnInvoice.document_no}</strong><small>{returnInvoice.customers?.name || 'Walk-in Customer'}</small></div><span>{fmtDate(returnInvoice.document_date)} · {money(returnInvoice.total_amount)}</span></div><div className="table-wrap return-item-table"><table><thead><tr><th>Return</th><th>Code</th><th>Item</th><th>Paid value</th><th>Available</th><th>Qty</th><th>Damaged</th><th>Reason</th></tr></thead><tbody>{returnItems.map((row) => <tr key={row.id} className={row.remainingQty <= 0 ? 'disabled-row' : ''}><td><input type="checkbox" disabled={row.remainingQty <= 0} checked={row.selected} onChange={(event) => setReturnItems((current) => current.map((item) => item.id === row.id ? { ...item, selected: event.target.checked } : item))} /></td><td>{row.item_code}</td><td>{row.description}{row.trackInventory === false && <small className="non-stock-inline">Non-stock item</small>}</td><td>{money(Math.abs(numberValue(row.line_total)) / Math.max(Math.abs(numberValue(row.qty)), 1))}</td><td>{row.remainingQty}</td><td><input type="number" min="0.001" max={row.remainingQty} step="0.001" disabled={!row.selected} value={row.returnQty} onChange={(event) => setReturnItems((current) => current.map((item) => item.id === row.id ? { ...item, returnQty: Math.min(numberValue(event.target.value), item.remainingQty) } : item))} /></td><td>{row.trackInventory === false ? <span className="muted-text">Not applicable</span> : <label className="return-damaged-check"><input type="checkbox" disabled={!row.selected} checked={row.damaged} onChange={(event) => setReturnItems((current) => current.map((item) => item.id === row.id ? { ...item, damaged: event.target.checked } : item))} /> Damaged</label>}</td><td><input disabled={!row.selected} value={row.reason} onChange={(event) => setReturnItems((current) => current.map((item) => item.id === row.id ? { ...item, reason: event.target.value } : item))} placeholder="Optional" /></td></tr>)}{!returnItems.length && <EmptyRow colSpan={8} text="No sold items found." />}</tbody></table></div><div className="return-stock-help"><span><b>Damaged off:</b> add tracked items to sellable stock.</span><span><b>Non-stock items:</b> accounting only; inventory is unchanged.</span></div><div className="modal-actions"><button className="secondary-button" disabled={returnBusy} onClick={() => addInvoiceReturns(false)}>Add Return to POS</button><button className="primary-button" disabled={returnBusy} onClick={() => addInvoiceReturns(true)}>Exchange Same Item</button></div></>}
       </div></div>}
 
-      {selectedPosProduct && <div className="modal-backdrop">
+      {selectedPosProduct && <div className="modal-backdrop customer-price-history-backdrop">
         <form className="modal-card item-entry-modal" onSubmit={confirmPosProduct}>
           <div className="item-entry-heading"><div><span>Add to current bill</span><h3>{selectedPosProduct.name}</h3><p>{selectedPosProduct.item_code || 'Product'} · {selectedPosProduct.track_inventory === false ? 'Non-stock item' : `Available ${numberValue(selectedPosProduct.available_qty)}`}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Close</button></div>
           <div className="item-entry-fields">
-            <label>Selling price<input type="number" min="0" step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price')} /></label>
+            <label>Selling price<input type="number" min={numberValue(selectedPosProduct.avg_cost) > 0 ? roundMoney(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100)) : 0} step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price')} />{numberValue(selectedPosProduct.avg_cost) > 0 && numberValue(appSettings.minimum_profit_percent, 5) > 0 && <small>Minimum before further discounts: {money(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100))}</small>}</label>
             <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false || allowNegativeStock ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} autoFocus={!can('change_sale_price')} /></label>
           </div>
+          <section className="customer-price-history" aria-live="polite">
+            <div className="customer-price-history-heading">
+              <div><span>Previous selling prices</span><strong>{selectedCustomer?.name || 'Select a customer to view history'}</strong></div>
+              {selectedCustomer && <small>Recent sales of this exact item</small>}
+            </div>
+            {!selectedCustomer && <p className="customer-price-history-empty">Choose a customer on the POS before selecting a product to see their price history.</p>}
+            {selectedCustomer && customerPriceHistoryLoading && <p className="customer-price-history-empty">Checking previous sales...</p>}
+            {selectedCustomer && !customerPriceHistoryLoading && customerPriceHistoryError && <p className="customer-price-history-error">Could not load history: {customerPriceHistoryError}</p>}
+            {selectedCustomer && !customerPriceHistoryLoading && !customerPriceHistoryError && !customerPriceHistory.length && <p className="customer-price-history-empty">No previous sale of this item was found for this customer.</p>}
+            {selectedCustomer && !customerPriceHistoryLoading && !customerPriceHistoryError && customerPriceHistory.length > 0 && <div className="customer-price-history-list">
+              {customerPriceHistory.map((row) => <div className="customer-price-history-row" key={row.id}>
+                <div><strong>{money(row.effectiveUnitPrice)}</strong><small>{fmtDate(row.document.document_date || row.document.created_at)} · {row.document.document_no}</small></div>
+                <span>{numberValue(row.qty)} sold{roundMoney(row.effectiveUnitPrice) !== roundMoney(row.unit_price) ? ` · listed ${money(row.unit_price)}` : ''}</span>
+                <button type="button" className="small-button" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : 'Use this previous net unit price'} onClick={() => setPosProductDraft((current) => ({ ...current, unitPrice: row.effectiveUnitPrice }))}>Use price</button>
+              </div>)}
+            </div>}
+          </section>
           <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button><button type="submit" className="primary-button">Add Item</button></div>
         </form>
@@ -2430,7 +2795,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                   <tbody>
                     {paymentDraft.map((line) => (
                       <tr key={line.id}>
-                        <td>{line.paymentMethodName}{line.isPaidMethod === false ? ' / Credit' : ''}</td>
+                        <td>{line.paymentMethodName}{line.isPaidMethod === false ? ' / Credit' : ''}{line.chequeNumber && <small className="payment-line-detail">Cheque {line.chequeNumber} · {line.chequeDate}</small>}</td>
                         <td>{line.direction === 'out' ? 'Refund / out' : 'Receive / in'}</td>
                         <td><input type="number" min="0" max={currentTarget.amount} step="0.01" value={line.amount} onFocus={selectAllText} onChange={(e) => setPaymentDraft((rows) => rows.map((row) => row.id === line.id ? { ...row, amount: Math.min(Math.max(Number(e.target.value), 0), currentTarget.amount) } : row))} /></td>
                         <td><button className="link-button" onClick={() => setPaymentDraft((rows) => rows.filter((row) => row.id !== line.id))}>Remove</button></td>
@@ -2443,12 +2808,21 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
               <div className="payment-popup-footer payment-screen-footer">
                 <button className="secondary-button" onClick={() => setPaymentDraft([])}>Clear payment lines</button>
-                <button className="primary-button green-button" onClick={() => { updateActiveBill({ paymentLines: paymentDraft }); setShowPaymentPanel(false); saveInvoice(paymentDraft); }}>Save invoice</button>
+                <button className="primary-button green-button" onClick={() => { updateActiveBill({ paymentLines: paymentDraft }); setShowPaymentPanel(false); saveInvoice(paymentDraft); }}>{activeBill.unconfirmedMode ? 'Save for internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm and save sale' : 'Save invoice'}</button>
               </div>
             </div>
           </div>
         </div>
       )}
+      {pendingChequePayment && <div className="modal-backdrop cheque-payment-backdrop">
+        <form className="modal-card compact-modal cheque-payment-modal" onSubmit={confirmChequePayment}>
+          <div className="section-title-row"><div><h3>Cheque details</h3><p>{money(pendingChequePayment.amount)} will be recorded in the bank account and cashflow.</p></div><button type="button" className="secondary-button" onClick={() => setPendingChequePayment(null)}>Close</button></div>
+          <label>Cheque number<input value={chequeDraft.cheque_number} onChange={(event) => setChequeDraft({ ...chequeDraft, cheque_number: event.target.value })} autoFocus required /></label>
+          <label>Cheque date<input type="date" value={chequeDraft.cheque_date} onChange={(event) => setChequeDraft({ ...chequeDraft, cheque_date: event.target.value })} required /></label>
+          <label>Bank name (optional)<input value={chequeDraft.cheque_bank_name} onChange={(event) => setChequeDraft({ ...chequeDraft, cheque_bank_name: event.target.value })} placeholder="Bank written on cheque" /></label>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setPendingChequePayment(null)}>Cancel</button><button className="primary-button">Add Cheque Payment</button></div>
+        </form>
+      </div>}
     </section>
   );
 }
@@ -2539,11 +2913,12 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
   );
 }
 
-function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = null, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
+function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = null, customerTarget = null, onCustomerTargetHandled, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
   const can = (permission) => isAdmin || permissions?.[permission] === true;
   const canManageDocumentType = (type) => {
     if (['purchase', 'stock_in_transit', 'stock_adjustment', 'trade_in'].includes(type)) return can('manage_inventory_documents');
     if (type === 'quotation') return can('create_quotes');
+    if (type === 'unconfirmed_sale') return can('pos_sales');
     if (type === 'job') return can('manage_jobs');
     if (type === 'cod_order') return can('manage_cod_orders');
     if (['customer_payment', 'supplier_payment'].includes(type)) return can('manage_parties');
@@ -2579,6 +2954,14 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     setFilters((current) => ({ ...current, number: assistantTarget.document_no }));
     setMessage(`Showing document ${assistantTarget.document_no} from the assistant.`);
   }, [assistantTarget?.nonce]);
+
+  useEffect(() => {
+    if (!customerTarget?.name) return;
+    setActiveDocumentTabId('view');
+    setFilters({ product: '', customer: customerTarget.name, number: '', user: '', type: '', paid: '', periodFrom: '', periodTo: '' });
+    setMessage(`Showing documents for ${customerTarget.name}.`);
+    onCustomerTargetHandled?.();
+  }, [customerTarget?.nonce]);
 
   useRealtimeRefresh(['documents', 'document_items', 'payment_methods', 'cashflow_entries'], () => {
     loadDocuments(true);
@@ -2637,7 +3020,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
     let query = supabase
       .from('documents')
-      .select('id, document_no, job_no, job_status, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason')
+      .select('id, document_no, job_no, job_status, device_type, device_specs, job_problem, job_accessories, estimated_days, job_ready_at, job_completed_at, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, unconfirmed_payments, unconfirmed_header, confirmed_at')
       .neq('document_type', 'cod_order')
       .order('document_date', { ascending: false })
       .order('created_at', { ascending: false })
@@ -2803,6 +3186,28 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     }
   }
 
+  async function shareSelectedDocumentWhatsApp() {
+    if (!selected) { setError('Select a document first.'); return; }
+    setBusyAction(true);
+    setError('');
+    try {
+      const [itemRes, flowRes, partyRes] = await Promise.all([
+        supabase.from('document_items').select('*').eq('document_id', selected.id).order('created_at'),
+        supabase.from('cashflow_entries').select('id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name)').eq('document_id', selected.id).order('created_at'),
+        selected.customer_id ? supabase.from('customers').select('id, name, phone, address').eq('id', selected.customer_id).maybeSingle() : Promise.resolve({ data: null, error: null })
+      ]);
+      if (itemRes.error) throw itemRes.error;
+      if (flowRes.error) throw flowRes.error;
+      if (partyRes.error) throw partyRes.error;
+      const result = await shareAccountingDocumentOnWhatsApp({ ...selected, party: partyRes.data || null }, itemRes.data || [], flowRes.data || [], companySettings);
+      setMessage(result);
+    } catch (shareError) {
+      setError(shareError.message || String(shareError));
+    } finally {
+      setBusyAction(false);
+    }
+  }
+
   function openAddDocument(type) {
     setShowAddMenu(false);
     if (!canManageDocumentType(type)) {
@@ -2884,6 +3289,10 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       setError('Select a document first.');
       return;
     }
+    if (selected.document_type === 'unconfirmed_sale') {
+      loadUnconfirmedSaleIntoPOS('unconfirmed_edit');
+      return;
+    }
     if (!['purchase', 'stock_in_transit', 'quotation', 'cod_order'].includes(selected.document_type)) {
       setError('Full tab editing is available for Purchase, Stock in Transit, Quotation, and COD Order documents.');
       return;
@@ -2955,6 +3364,34 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     onOpenPOS?.();
   }
 
+  async function loadUnconfirmedSaleIntoPOS(mode) {
+    if (!can('pos_sales')) { setError('POS sales permission required.'); return; }
+    if (!selected || selected.document_type !== 'unconfirmed_sale' || selected.status !== 'unconfirmed') return;
+    if (mode === 'unconfirmed_convert' && !isAdmin) { setError('Only an administrator can confirm and post this sale.'); return; }
+    setBusyAction(true);
+    setError('');
+    setMessage('');
+    const { data: saleItems, error: itemError } = await supabase.from('document_items').select('*').eq('document_id', selected.id).order('created_at');
+    setBusyAction(false);
+    if (itemError) { setError(itemError.message); return; }
+    if (!saleItems?.length) { setError('This saved sale has no items.'); return; }
+    window.localStorage.setItem(QUOTE_TO_POS_KEY, JSON.stringify({
+      mode,
+      sourceDocumentId: selected.id,
+      sourceDocumentNo: selected.document_no,
+      sourceDocumentType: 'unconfirmed_sale',
+      customerId: selected.customer_id || '',
+      customerName: selected.party_name || '',
+      notes: selected.notes || '',
+      paymentLines: selected.unconfirmed_payments || [],
+      cartDiscountType: selected.unconfirmed_header?.cart_discount_type || 'amount',
+      cartDiscountValue: Number(selected.unconfirmed_header?.cart_discount_value || 0),
+      items: saleItems
+    }));
+    setMessage(mode === 'unconfirmed_convert' ? `${selected.document_no} loaded into POS for admin confirmation.` : `${selected.document_no} loaded into POS for editing.`);
+    onOpenPOS?.();
+  }
+
   async function applySelectedDocumentStock() {
     if (!can('manage_inventory_documents')) { setError('Inventory-document permission required.'); return; }
     if (!selected || !['purchase', 'stock_in_transit'].includes(selected.document_type)) return;
@@ -2976,6 +3413,17 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       setError('Select a document first.');
       return;
     }
+    if (selected.document_type === 'unconfirmed_sale') {
+      if (!window.confirm(`Delete internal sale ${selected.document_no}? This has no stock or cashflow effect.`)) return;
+      setBusyAction(true);
+      setError('');
+      setMessage('');
+      const { error: deleteError } = await supabase.rpc('delete_unconfirmed_sale_v57', { p_document_id: selected.id });
+      if (deleteError) setError(deleteError.message); else setMessage(`${selected.document_no} deleted.`);
+      setBusyAction(false);
+      await loadDocuments();
+      return;
+    }
     if (!['purchase', 'stock_in_transit'].includes(selected.document_type)) {
       setError('Delete with stock reversal is currently enabled for Purchase and Stock in Transit documents only.');
       return;
@@ -2995,6 +3443,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
   const canConvertTransit = selected?.document_type === 'stock_in_transit' && selected?.status === 'in_transit';
   const canConvertQuote = selected?.document_type === 'quotation' && selected?.status !== 'converted';
+  const canConvertUnconfirmed = isAdmin && selected?.document_type === 'unconfirmed_sale' && selected?.status === 'unconfirmed';
   const canApplyStock = selected && ['purchase', 'stock_in_transit'].includes(selected.document_type) && selected.status === 'draft';
   const activeDocumentTab = documentTabs.find((tab) => tab.id === activeDocumentTabId) || documentTabs[0];
 
@@ -3009,10 +3458,10 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     <section className="documents-screen">
       <div className="action-toolbar">
         <div className="toolbar-menu-wrap">
-          <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
+          <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && !['cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
           {showAddMenu && (
             <div className="add-menu">
-              {DOCUMENT_TYPES.filter((type) => type.value && type.value !== 'cod_order' && canManageDocumentType(type.value)).map((type) => (
+              {DOCUMENT_TYPES.filter((type) => type.value && !['cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value)).map((type) => (
                 <button key={type.value} onClick={() => openAddDocument(type.value)}>{type.label}</button>
               ))}
             </div>
@@ -3021,11 +3470,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(true)}><span>▣</span>Print</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
         <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
+        <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
         <button className="toolbar-button" disabled={!selected || !canManageDocumentType(selected?.document_type)} onClick={openEditDocument}><span>✎</span>Edit</button>
         <button className="toolbar-button" disabled={!selected || busyAction || !can('delete_documents')} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
         <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
         <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
         <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
+        <button className="toolbar-button bright" disabled={!canConvertUnconfirmed || busyAction} onClick={() => loadUnconfirmedSaleIntoPOS('unconfirmed_convert')}><span>✓</span>Confirm Sale</button>
       </div>
 
       <div className="document-tabbar">
@@ -3132,14 +3583,14 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
                     <td>{document.document_no}</td>
                     <td>{document.job_no || '-'}</td>
                     <td>{document.external_document_no || '-'}</td>
-                    <td>{documentTypeLabel(document.document_type)}</td>
+                    <td>{document.document_type === 'unconfirmed_sale' ? <span className="internal-document-mark" title="Internal review required">◇ {documentTypeLabel(document.document_type)}</span> : documentTypeLabel(document.document_type)}</td>
                     <td>{paidStatusLabel(document)}</td>
                     <td>{name}</td>
                     <td>{document.user_name || '-'}</td>
                     <td>{fmtDate(document.document_date || document.created_at)}</td>
                     <td>{document.payment_method_name || '-'}</td>
                     <td>{money(document.total_amount)}</td>
-                    <td>{document.document_type === 'cod_order' ? codStatusLabel(document.status) : document.status === 'converted' && ['stock_in_transit', 'quotation'].includes(document.document_type) ? 'Converted ✓' : document.status}</td>
+                    <td>{document.document_type === 'cod_order' ? codStatusLabel(document.status) : document.status === 'converted' && ['stock_in_transit', 'quotation', 'unconfirmed_sale'].includes(document.document_type) ? 'Converted ✓' : document.status}</td>
                   </tr>
                 );
               })}
@@ -3456,6 +3907,8 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
   const [paymentLines, setPaymentLines] = useState(isDraftForSameType && Array.isArray(savedDraft?.paymentLines) ? savedDraft.paymentLines : []);
   const [showPaymentPanel, setShowPaymentPanel] = useState(false);
   const [paymentAmountInput, setPaymentAmountInput] = useState('');
+  const [pendingPurchaseCheque, setPendingPurchaseCheque] = useState(null);
+  const [purchaseChequeDraft, setPurchaseChequeDraft] = useState({ cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
 
   const [productSearch, setProductSearch] = useState('');
   const [categories, setCategories] = useState([]);
@@ -3527,9 +3980,10 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
   async function loadExistingDocumentItemsAndPayments() {
     if (!document?.id) return;
-    const [itemRes, cashRes] = await Promise.all([
+    const [itemRes, cashRes, chequeRes] = await Promise.all([
       supabase.from('document_items').select('*').eq('document_id', document.id).order('created_at', { ascending: true }),
-      supabase.from('cashflow_entries').select('id, entry_type, account_name, payment_method_id, amount').eq('document_id', document.id).order('created_at', { ascending: true })
+      supabase.from('cashflow_entries').select('id, entry_type, account_name, payment_method_id, amount').eq('document_id', document.id).order('created_at', { ascending: true }),
+      supabase.from('cheque_payments').select('*').eq('document_id', document.id).order('created_at', { ascending: true })
     ]);
 
     if (itemRes.error) setError(itemRes.error.message);
@@ -3548,16 +4002,24 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
     if (cashRes.error) setError(cashRes.error.message);
     else {
+      const availableCheques = [...(chequeRes.data || [])];
       const existingLines = (cashRes.data || [])
         .filter((row) => Number(row.amount || 0) > 0)
-        .map((row) => ({
+        .map((row) => {
+          const chequeIndex = availableCheques.findIndex((cheque) => cheque.payment_method_id === row.payment_method_id && Math.abs(numberValue(cheque.amount) - numberValue(row.amount)) < .005);
+          const cheque = chequeIndex >= 0 ? availableCheques.splice(chequeIndex, 1)[0] : null;
+          return ({
           id: row.id || createClientId(),
           paymentMethodId: row.payment_method_id,
           paymentMethodName: row.account_name || 'Payment',
           amount: numberValue(row.amount),
           isPaidMethod: row.entry_type !== 'non_cash',
-          affectsCashflow: row.entry_type !== 'non_cash'
-        }));
+          affectsCashflow: row.entry_type !== 'non_cash',
+          chequeNumber: cheque?.cheque_number || '',
+          chequeDate: cheque?.cheque_date || '',
+          chequeBankName: cheque?.bank_name || ''
+        });
+        });
       if (existingLines.length) setPaymentLines(existingLines);
       else if (Number(document?.paid_amount || 0) > 0 && document?.payment_method_id) {
         setPaymentLines([{ id: createClientId(), paymentMethodId: document.payment_method_id, paymentMethodName: 'Payment', amount: Number(document.paid_amount || 0), isPaidMethod: true, affectsCashflow: true }]);
@@ -3569,7 +4031,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     const [supplierRes, customerRes, paymentRes] = await Promise.all([
       supabase.from('suppliers').select('id, name, phone, address').order('name', { ascending: true }).limit(1000),
       supabase.from('customers').select('id, name, phone, address, is_customer, is_supplier, due_balance, store_credit_balance').order('name', { ascending: true }).limit(1500),
-      supabase.from('payment_methods').select('id, name, affects_cashflow, is_paid_method, is_active').eq('is_active', true).order('name')
+      supabase.from('payment_methods').select('*').eq('is_active', true).order('name')
     ]);
 
     const customers = customerRes.data || [];
@@ -3771,6 +4233,11 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     const suggestedAmount = method.is_paid_method === false ? creditRemaining : remaining;
     const amount = Number(amountOverride !== null ? amountOverride : paymentAmountInput || suggestedAmount || 0);
     if (amount <= 0) return;
+    if (method.requires_cheque_details) {
+      setPendingPurchaseCheque({ method, amount });
+      setPurchaseChequeDraft({ cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
+      return;
+    }
     const line = {
       id: createClientId(),
       paymentMethodId: method.id,
@@ -3781,6 +4248,19 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     };
     setPaymentLines((current) => [...current, line]);
     setPaymentAmountInput('');
+  }
+
+  function confirmPurchaseCheque(event) {
+    event.preventDefault();
+    if (!pendingPurchaseCheque || !purchaseChequeDraft.cheque_number.trim() || !purchaseChequeDraft.cheque_date) return;
+    const { method, amount } = pendingPurchaseCheque;
+    setPaymentLines((current) => [...current, {
+      id: createClientId(), paymentMethodId: method.id, paymentMethodName: method.name, amount,
+      isPaidMethod: true, affectsCashflow: true, chequeNumber: purchaseChequeDraft.cheque_number.trim(),
+      chequeDate: purchaseChequeDraft.cheque_date, chequeBankName: purchaseChequeDraft.cheque_bank_name.trim()
+    }]);
+    setPaymentAmountInput('');
+    setPendingPurchaseCheque(null);
   }
 
   async function saveDocument(event) {
@@ -3812,9 +4292,14 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
     try {
       const validPaymentLines = paymentLines.map((line) => ({
+        source_line_id: line.id,
         payment_method_id: line.paymentMethodId,
         payment_method_name: line.paymentMethodName,
-        amount: numberValue(line.amount)
+        amount: numberValue(line.amount),
+        direction: 'out',
+        cheque_number: line.chequeNumber || null,
+        cheque_date: line.chequeDate || null,
+        cheque_bank_name: line.chequeBankName || null
       })).filter((line) => line.payment_method_id && line.amount > 0);
       if (!validPaymentLines.length) throw new Error('Add at least one valid payment line.');
 
@@ -3839,7 +4324,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       }));
 
       if (isEditing) {
-        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v18', {
+        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v56', {
           p_document_id: document.id,
           p_header: header,
           p_items: itemPayload,
@@ -3851,7 +4336,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         return;
       }
 
-      const { data, error: saveError } = await supabase.rpc('save_purchase_like_document_v18', {
+      const { data, error: saveError } = await supabase.rpc('save_purchase_like_document_v56', {
         p_header: header,
         p_items: itemPayload,
         p_payments: validPaymentLines
@@ -4031,7 +4516,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
                   <tbody>
                     {paymentLines.map((line) => (
                       <tr key={line.id}>
-                        <td>{line.paymentMethodName}</td>
+                        <td>{line.paymentMethodName}{line.chequeNumber && <small className="payment-line-detail">Cheque {line.chequeNumber} · {line.chequeDate}</small>}</td>
                         <td><input type="number" step="0.01" value={line.amount} onFocus={selectAllText} onChange={(e) => setPaymentLines((rows) => rows.map((row) => row.id === line.id ? { ...row, amount: Number(e.target.value) } : row))} /></td>
                         <td>{line.isPaidMethod === false ? 'Outstanding only' : 'Cashflow out'}</td>
                         <td><button type="button" className="link-button" onClick={() => setPaymentLines((rows) => rows.filter((row) => row.id !== line.id))}>Remove</button></td>
@@ -4049,6 +4534,15 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
             </div>
           </div>
         )}
+        {pendingPurchaseCheque && <div className="modal-backdrop cheque-payment-backdrop">
+          <div className="modal-card compact-modal cheque-payment-modal">
+            <div className="section-title-row"><div><h3>Cheque details</h3><p>{money(pendingPurchaseCheque.amount)} will be recorded as a bank payment.</p></div><button type="button" className="secondary-button" onClick={() => setPendingPurchaseCheque(null)}>Close</button></div>
+            <label>Cheque number<input value={purchaseChequeDraft.cheque_number} onChange={(event) => setPurchaseChequeDraft({ ...purchaseChequeDraft, cheque_number: event.target.value })} autoFocus required /></label>
+            <label>Cheque date<input type="date" value={purchaseChequeDraft.cheque_date} onChange={(event) => setPurchaseChequeDraft({ ...purchaseChequeDraft, cheque_date: event.target.value })} required /></label>
+            <label>Bank name (optional)<input value={purchaseChequeDraft.cheque_bank_name} onChange={(event) => setPurchaseChequeDraft({ ...purchaseChequeDraft, cheque_bank_name: event.target.value })} /></label>
+            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setPendingPurchaseCheque(null)}>Cancel</button><button type="button" className="primary-button" disabled={!purchaseChequeDraft.cheque_number.trim() || !purchaseChequeDraft.cheque_date} onClick={confirmPurchaseCheque}>Add Cheque Payment</button></div>
+          </div>
+        </div>}
       </form>
     </div>
   );
@@ -4258,13 +4752,15 @@ function JobsPage() {
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState(null);
+  const [showThermalLabel, setShowThermalLabel] = useState(false);
+  const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
   const [statusDraft, setStatusDraft] = useState('received');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => { loadJobs(); }, []);
+  useEffect(() => { loadJobs(); fetchCompanySettings().then(setCompanySettings).catch(() => {}); }, []);
   useRealtimeRefresh(['documents', 'customers'], () => loadJobs(selectedId));
 
   async function loadJobs(preferredId = '') {
@@ -4339,6 +4835,26 @@ function JobsPage() {
     setEditingJob(null);
   }
 
+  async function printJobDocument(autoPrint = true) {
+    if (!selected) return;
+    const popup = window.open('', '_blank', 'width=1100,height=760');
+    if (!popup) { setError('Allow pop-ups for this site to print the job document.'); return; }
+    try {
+      await printAccountingDocument({ ...selected, party: selected.customers || null }, [], [], companySettings, { popup, autoPrint });
+    } catch (printError) {
+      popup.close();
+      setError(printError.message || String(printError));
+    }
+  }
+
+  async function saveJobDocumentPdf() {
+    if (!selected) return;
+    try {
+      await downloadAccountingDocumentPdf({ ...selected, party: selected.customers || null }, [], [], companySettings);
+      setMessage(`Job document downloaded: ${selected.job_no || selected.document_no}.pdf`);
+    } catch (pdfError) { setError(pdfError.message || String(pdfError)); }
+  }
+
   return (
     <section className="page-section jobs-page">
       <div className="page-actions jobs-page-heading">
@@ -4394,12 +4910,13 @@ function JobsPage() {
             </div>
             {nextAction && <button className="primary-button job-next-button" disabled={busy} onClick={() => updateJobStatus(nextAction.status)}>{busy ? 'Updating…' : nextAction.label}</button>}
             <div className="job-status-control"><label>Change status<select value={statusDraft} onChange={(e) => setStatusDraft(e.target.value)}>{JOB_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><button className="secondary-button" disabled={busy || statusDraft === (selected.job_status || selected.status)} onClick={() => updateJobStatus(statusDraft)}>Update Status</button></div>
-            <div className="job-detail-actions"><button className="secondary-button" onClick={() => { setEditingJob(selected); setShowForm(true); }}>Edit Job Details</button>{!['completed', 'cancelled'].includes(selected.job_status || selected.status) && <button className="danger-button" disabled={busy} onClick={() => updateJobStatus('cancelled')}>Cancel Job</button>}</div>
+            <div className="job-detail-actions"><button className="primary-button" onClick={() => printJobDocument(true)}>Print Job Receipt</button><button className="secondary-button" onClick={saveJobDocumentPdf}>Save PDF</button><button className="secondary-button" onClick={() => setShowThermalLabel(true)}>Print Device Tag</button><button className="secondary-button" onClick={() => { setEditingJob(selected); setShowForm(true); }}>Edit Job Details</button>{!['completed', 'cancelled'].includes(selected.job_status || selected.status) && <button className="danger-button" disabled={busy} onClick={() => updateJobStatus('cancelled')}>Cancel Job</button>}</div>
           </> : <div className="muted-box">Select a job to view its details.</div>}
         </div>
       </div>
 
       {showForm && <div className="modal-backdrop jobs-form-backdrop"><div className="modal-card jobs-form-modal"><JobDocumentForm document={editingJob} onClose={closeJobForm} onSaved={async () => { const id = editingJob?.id || ''; closeJobForm(); await loadJobs(id); setMessage(editingJob ? 'Job details updated.' : 'New job saved.'); }} /></div></div>}
+      {showThermalLabel && selected && <ThermalLabelModal code={selected.job_no || selected.document_no} kindLabel="Job / device tag" onClose={() => setShowThermalLabel(false)} />}
     </section>
   );
 }
@@ -5142,12 +5659,121 @@ function documentPaymentSummary(document, flows = []) {
     const label = flow.payment_methods?.name || flow.account_name || (flow.entry_type === 'non_cash' ? 'Credit' : 'Payment');
     grouped.set(label, roundMoney(numberValue(grouped.get(label)) + Math.abs(numberValue(flow.amount))));
   });
+  if (!grouped.size && document?.document_type === 'unconfirmed_sale') {
+    (document.unconfirmed_payments || []).forEach((payment) => {
+      if (payment.is_paid_method === false) return;
+      const label = payment.payment_method_name || 'Payment';
+      grouped.set(label, roundMoney(numberValue(grouped.get(label)) + Math.abs(numberValue(payment.amount))));
+    });
+  }
   if (!grouped.size && document?.payment_method_name && numberValue(document?.paid_amount) > 0) grouped.set(document.payment_method_name, Math.abs(numberValue(document.paid_amount)));
   return [...grouped.entries()].map(([label, amount]) => ({ label, amount }));
 }
 
+async function createJobDocumentPdf(document, companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
+  const { jsPDF } = await import('jspdf');
+  const settings = { ...DEFAULT_COMPANY_SETTINGS, ...(companySettings || {}) };
+  const format = settings.paper_size === 'A4' ? 'a4' : 'a5';
+  const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format });
+  const width = pdf.internal.pageSize.getWidth();
+  const height = pdf.internal.pageSize.getHeight();
+  const margin = Math.min(Math.max(numberValue(settings.page_margin_mm, 8), 5), 15);
+  const logoUrl = companyLogoUrl(settings);
+  let logoData = '';
+  if (logoUrl) { try { logoData = await imageUrlToDataUrl(logoUrl); } catch { logoData = ''; } }
+  const compact = format === 'a5';
+  const bodySize = compact ? 7.4 : 9;
+  const sectionTitleSize = compact ? 7 : 8.4;
+  const lineHeight = compact ? 3.4 : 4.1;
+  const fitLines = (value, maxWidth, maxLines = 4) => {
+    const lines = pdf.splitTextToSize(String(value || '-'), maxWidth);
+    if (lines.length <= maxLines) return lines;
+    const kept = lines.slice(0, maxLines);
+    kept[maxLines - 1] = `${String(kept[maxLines - 1]).replace(/\s+$/, '')}…`;
+    return kept;
+  };
+  const drawBox = (x, y, boxWidth, boxHeight, label, value, maxLines = 4) => {
+    pdf.setFillColor(248, 250, 251);
+    pdf.setDrawColor(205, 214, 220);
+    pdf.rect(x, y, boxWidth, boxHeight, 'FD');
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(sectionTitleSize);
+    pdf.setTextColor(22, 136, 189);
+    pdf.text(String(label).toUpperCase(), x + 3, y + 4.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(bodySize);
+    pdf.setTextColor(23, 32, 42);
+    pdf.text(fitLines(value, boxWidth - 6, maxLines), x + 3, y + 9, { lineHeightFactor: 1.15 });
+  };
+
+  let companyX = margin;
+  if (logoData) {
+    const logoFormat = logoData.startsWith('data:image/png') ? 'PNG' : logoData.startsWith('data:image/webp') ? 'WEBP' : 'JPEG';
+    pdf.addImage(logoData, logoFormat, margin, margin, 16, 16, undefined, 'FAST');
+    companyX += 20;
+  }
+  pdf.setTextColor(23, 32, 42);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(compact ? 15 : 18);
+  pdf.text(String(settings.shop_name || 'Computer Shop'), companyX, margin + 5);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(compact ? 7.2 : 8.5);
+  const contact = [settings.header_subtitle, settings.address, [settings.phone, settings.email].filter(Boolean).join(' | ')].filter(Boolean).join('\n');
+  pdf.text(pdf.splitTextToSize(contact, width * .48), companyX, margin + 9);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(compact ? 13 : 16);
+  pdf.text('REPAIR JOB RECEIPT', width - margin, margin + 5, { align: 'right' });
+  pdf.setFontSize(compact ? 10 : 12);
+  pdf.text(String(document.job_no || document.document_no || ''), width - margin, margin + 11, { align: 'right' });
+  pdf.setDrawColor(22, 136, 189);
+  pdf.setLineWidth(.7);
+  const headerBottom = margin + 20;
+  pdf.line(margin, headerBottom, width - margin, headerBottom);
+
+  const receivedDate = new Date(document.document_date || document.created_at || Date.now());
+  const estimate = new Date(receivedDate);
+  estimate.setDate(estimate.getDate() + Math.max(numberValue(document.estimated_days), 0));
+  const metaY = headerBottom + 4;
+  const gap = 4;
+  const half = (width - margin * 2 - gap) / 2;
+  drawBox(margin, metaY, half, compact ? 20 : 24, 'Customer', [document.party?.name || document.customers?.name || '-', document.party?.phone || document.customers?.phone || '', document.party?.address || document.customers?.address || ''].filter(Boolean).join('\n'), 3);
+  drawBox(margin + half + gap, metaY, half, compact ? 20 : 24, 'Job details', `Received: ${fmtDate(receivedDate)}\nExpected: ${fmtDate(estimate)} (${numberValue(document.estimated_days)} days)\nStatus: ${jobStatusLabel(document.job_status || document.status)}`, 3);
+
+  let y = metaY + (compact ? 24 : 28);
+  const rowHeight = compact ? 25 : 32;
+  drawBox(margin, y, half, rowHeight, 'Device / identification', `${document.device_type || 'Device'}\n${document.device_specs || '-'}`, compact ? 5 : 6);
+  drawBox(margin + half + gap, y, half, rowHeight, 'Problem / requested work', document.job_problem || '-', compact ? 5 : 6);
+  y += rowHeight + gap;
+  const secondHeight = compact ? 21 : 27;
+  drawBox(margin, y, half, secondHeight, 'Accessories received', document.job_accessories || 'None recorded', compact ? 4 : 5);
+  drawBox(margin + half + gap, y, half, secondHeight, 'Notes / customer instructions', document.notes || '-', compact ? 4 : 5);
+
+  const terms = 'Please present this receipt when collecting the device. Repair estimates may change after inspection; customer approval will be requested before additional work. Customers should keep their own data backups. The shop is not responsible for pre-existing faults, undisclosed damage, or data loss unrelated to the agreed repair.';
+  const signatureY = height - margin - (compact ? 14 : 18);
+  const termsY = y + secondHeight + 4;
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(compact ? 5.8 : 7);
+  pdf.setTextColor(70, 80, 87);
+  pdf.text(pdf.splitTextToSize(terms, width - margin * 2), margin, termsY);
+  const signatureWidth = (width - margin * 2 - 30) / 2;
+  pdf.setDrawColor(75, 84, 90);
+  pdf.line(margin + 5, signatureY, margin + 5 + signatureWidth, signatureY);
+  pdf.line(width - margin - 5 - signatureWidth, signatureY, width - margin - 5, signatureY);
+  pdf.setFontSize(compact ? 6.5 : 8);
+  pdf.text('Received by', margin + 5 + signatureWidth / 2, signatureY + 4, { align: 'center' });
+  pdf.text('Customer signature', width - margin - 5 - signatureWidth / 2, signatureY + 4, { align: 'center' });
+  pdf.setFontSize(compact ? 5.8 : 7);
+  pdf.setTextColor(100, 112, 120);
+  pdf.text(`${settings.shop_name || 'Computer Shop'} · ${document.job_no || document.document_no || ''}`, width / 2, height - 3.5, { align: 'center' });
+
+  if (options.output === 'blob') return pdf.output('blob');
+  pdf.save(`${safePdfFilename(document.job_no || document.document_no || 'job-receipt')}.pdf`);
+  return null;
+}
+
 async function downloadAccountingDocumentPdf(document, items = [], flows = [], companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
   if (!document) return;
+  if (document.document_type === 'job') return createJobDocumentPdf(document, companySettings, options);
   const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const settings = { ...DEFAULT_COMPANY_SETTINGS, ...(companySettings || {}) };
   const outstandingBalance = documentOutstandingBalance(document);
@@ -5173,15 +5799,15 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   pdf.setFontSize(14);
   pdf.text(String(settings.shop_name || 'Computer Shop'), companyX, margin + 5);
   pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(7.5);
+  pdf.setFontSize(8.5);
   const companyLines = [settings.header_subtitle, settings.address, [settings.phone, settings.email].filter(Boolean).join(' | '), settings.registration_no ? `Reg: ${settings.registration_no}` : ''].filter(Boolean);
   const companyText = pdf.splitTextToSize(companyLines.join('\n'), Math.max(pageWidth * .53 - companyX + margin, 45));
   pdf.text(companyText, companyX, margin + 9);
 
   pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(11);
-  pdf.text(documentTypeLabel(document.document_type).toUpperCase(), pageWidth - margin, margin + 5, { align: 'right' });
-  pdf.setFontSize(9);
+  pdf.setFontSize(12);
+  pdf.text(customerDocumentTypeLabel(document.document_type).toUpperCase(), pageWidth - margin, margin + 5, { align: 'right' });
+  pdf.setFontSize(10);
   pdf.text(String(document.document_no || ''), pageWidth - margin, margin + 10, { align: 'right' });
   pdf.setDrawColor(22, 136, 189);
   pdf.setLineWidth(.7);
@@ -5190,10 +5816,10 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   const partyName = document.party?.name || document.recipient_name || '-';
   const partyInfo = [document.party?.phone, document.party?.address].filter(Boolean).join(' | ');
   pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(8);
+  pdf.setFontSize(9);
   const metaY = margin + 27;
   pdf.text(`Date: ${fmtDate(document.document_date || document.created_at)}`, margin, metaY);
-  pdf.text(`Status: ${document.status || '-'}`, pageWidth / 2, metaY);
+  pdf.text(`Status: ${document.document_type === 'unconfirmed_sale' ? paidStatusLabel(document) : document.status || '-'}`, pageWidth / 2, metaY);
   pdf.text(`Customer / Supplier: ${partyName}`, margin, metaY + 5);
   let cursorY = metaY + 10;
   if (partyInfo) {
@@ -5229,7 +5855,7 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
       showHead: 'firstPage',
       rowPageBreak: 'avoid',
       theme: 'grid',
-      styles: { font: 'helvetica', fontSize: paperFormat === 'a5' ? 6.7 : 7.5, cellPadding: 1.7, textColor: [23, 32, 42], lineColor: [214, 221, 226], lineWidth: .15 },
+      styles: { font: 'helvetica', fontSize: paperFormat === 'a5' ? 7.6 : 8.4, cellPadding: 2, textColor: [23, 32, 42], lineColor: [214, 221, 226], lineWidth: .15 },
       headStyles: { fillColor: [237, 243, 246], textColor: [23, 32, 42], fontStyle: 'bold' },
       columnStyles: settings.show_item_code
         ? { 0: { cellWidth: 17 }, 1: { cellWidth: 'auto' }, 2: { halign: 'right', cellWidth: 10 }, 3: { halign: 'right', cellWidth: 24 }, 4: { halign: 'right', cellWidth: 18 }, 5: { halign: 'right', cellWidth: 25 } }
@@ -5242,10 +5868,10 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   const isRefund = totalValue < 0;
   const isExchange = Math.abs(totalValue) < .005 && items.some((item) => numberValue(item.qty) < 0) && items.some((item) => numberValue(item.qty) > 0);
   const paymentRows = documentPaymentSummary(document, flows);
-  pdf.setFontSize(4.1);
+  pdf.setFontSize(5.1);
   const policyLines = pdf.splitTextToSize(invoicePolicyText(settings), pageWidth - margin * 2 - 4);
-  const paymentHeight = 15.8 + Math.max(paymentRows.length, 1) * 2.5 + (outstandingBalance === null ? 0 : 3);
-  const policyHeight = Math.max(policyLines.length * 1.55 + 4.5, 9);
+  const paymentHeight = 19 + Math.max(paymentRows.length, 1) * 3.2 + (outstandingBalance === null ? 0 : 4);
+  const policyHeight = Math.max(policyLines.length * 1.9 + 5.5, 11);
   const footerHeight = 4.5 + policyHeight;
   const footerTop = pageHeight - margin - footerHeight;
   if (cursorY + paymentHeight + 4 > footerTop) {
@@ -5255,41 +5881,41 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   const totalsX = pageWidth - margin - 66;
   let summaryY = cursorY;
   pdf.setTextColor(23, 32, 42);
-  pdf.setFontSize(7.2);
+  pdf.setFontSize(8.4);
   pdf.setFont('helvetica', 'bold');
   pdf.text(isExchange ? 'Exchange total' : isRefund ? 'Return total' : 'Total', totalsX, summaryY + 3);
   pdf.text(money(totalValue), pageWidth - margin, summaryY + 3, { align: 'right' });
-  summaryY += 4;
+  summaryY += 5;
   pdf.setDrawColor(150, 158, 164);
   pdf.setLineWidth(.2);
   pdf.line(totalsX, summaryY, pageWidth - margin, summaryY);
-  pdf.setFontSize(6.2);
-  pdf.text('Payment method', totalsX, summaryY + 2.5);
-  summaryY += 5.8;
+  pdf.setFontSize(8.4);
+  pdf.text('Payment method', totalsX, summaryY + 3);
+  summaryY += 6.5;
   pdf.setFont('helvetica', 'normal');
   if (paymentRows.length) {
     paymentRows.forEach((row) => {
       pdf.text(String(row.label), totalsX + 2, summaryY);
       pdf.text(money(row.amount), pageWidth - margin, summaryY, { align: 'right' });
-      summaryY += 2.5;
+      summaryY += 3.2;
     });
   } else {
     pdf.text(isExchange ? 'No payment - even exchange' : 'Credit / unpaid', totalsX + 2, summaryY);
-    summaryY += 2.5;
+    summaryY += 3.2;
   }
   pdf.setFont('helvetica', 'bold');
-  pdf.text(isRefund ? 'Refunded amount' : 'Paid amount', totalsX, summaryY + .6);
-  pdf.text(money(Math.abs(numberValue(document.paid_amount))), pageWidth - margin, summaryY + .6, { align: 'right' });
-  summaryY += 3;
-  pdf.text(isRefund ? 'Refund due' : 'Amount due', totalsX, summaryY + .6);
-  pdf.text(money(Math.abs(numberValue(document.balance_amount))), pageWidth - margin, summaryY + .6, { align: 'right' });
-  summaryY += 3;
+  pdf.text(isRefund ? 'Refunded amount' : 'Paid amount', totalsX, summaryY + .8);
+  pdf.text(money(Math.abs(numberValue(document.paid_amount))), pageWidth - margin, summaryY + .8, { align: 'right' });
+  summaryY += 4;
+  pdf.text(isRefund ? 'Refund due' : 'Amount due', totalsX, summaryY + .8);
+  pdf.text(money(Math.abs(numberValue(document.balance_amount))), pageWidth - margin, summaryY + .8, { align: 'right' });
+  summaryY += 4;
   if (outstandingBalance !== null) {
     pdf.setDrawColor(110, 120, 126);
     pdf.line(totalsX, summaryY, pageWidth - margin, summaryY);
-    pdf.text('Outstanding balance', totalsX, summaryY + 2.5);
-    pdf.text(signedMoney(outstandingBalance), pageWidth - margin, summaryY + 2.5, { align: 'right' });
-    summaryY += 3;
+    pdf.text('Outstanding balance', totalsX, summaryY + 3);
+    pdf.text(signedMoney(outstandingBalance), pageWidth - margin, summaryY + 3, { align: 'right' });
+    summaryY += 4;
   }
 
   const signatureY = footerTop;
@@ -5308,12 +5934,12 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   pdf.setDrawColor(215, 220, 224);
   pdf.rect(margin, policyY, pageWidth - margin * 2, policyHeight, 'FD');
   pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(4.4);
+  pdf.setFontSize(5.5);
   pdf.setTextColor(68, 76, 82);
   pdf.text('STORE POLICIES', margin + 2, policyY + 2.5);
   pdf.setFont('helvetica', 'normal');
-  pdf.setFontSize(4.1);
-  pdf.text(policyLines, margin + 2, policyY + 4.2);
+  pdf.setFontSize(5.1);
+  pdf.text(policyLines, margin + 2, policyY + 4.8);
 
   const pageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
@@ -5328,6 +5954,38 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   if (options.output === 'blob') return pdf.output('blob');
   pdf.save(`${safePdfFilename(document.document_no)}.pdf`);
   return null;
+}
+
+async function shareAccountingDocumentOnWhatsApp(document, items = [], flows = [], companySettings = DEFAULT_COMPANY_SETTINGS) {
+  const filename = `${safePdfFilename(document?.document_no || 'invoice')}.pdf`;
+  const text = `${companySettings?.shop_name || 'Computer Shop'} ${customerDocumentTypeLabel(document?.document_type).toLowerCase()} ${document?.document_no || ''} · ${money(document?.total_amount)}`;
+  const shareProbe = new File([''], filename, { type: 'application/pdf' });
+  const canNativeShareFile = !!(navigator.share && navigator.canShare?.({ files: [shareProbe] }));
+  const whatsappWindow = canNativeShareFile ? null : window.open('', '_blank');
+  if (whatsappWindow) {
+    whatsappWindow.document.write('<!doctype html><title>Preparing WhatsApp invoice</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing invoice PDF...</body>');
+    whatsappWindow.document.close();
+  }
+  const blob = await downloadAccountingDocumentPdf(document, items, flows, companySettings, { output: 'blob' });
+  const file = new File([blob], filename, { type: 'application/pdf' });
+
+  if (canNativeShareFile) {
+    await navigator.share({ title: document?.document_no || 'Sales invoice', text, files: [file] });
+    return 'Invoice shared. Choose WhatsApp and then search for the recipient.';
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = globalThis.document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  globalThis.document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`${text}\nThe PDF has been downloaded—attach it to this WhatsApp chat.`)}`;
+  if (whatsappWindow) whatsappWindow.location.replace(whatsappUrl);
+  else window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+  return 'WhatsApp opened and the invoice PDF was downloaded. Choose a chat, then attach the downloaded PDF.';
 }
 
 function writePrintWindow(popup, title, body, companySettings = DEFAULT_COMPANY_SETTINGS, autoPrint = true) {
@@ -5389,7 +6047,7 @@ async function printAccountingDocument(document, items = [], flows = [], company
     popup.document.write('<!doctype html><title>Preparing PDF</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing the exact PDF preview...</body>');
     popup.document.close();
     const blob = await downloadAccountingDocumentPdf(document, items, flows, companySettings, { output: 'blob' });
-    const title = `${document.document_no} - ${documentTypeLabel(document.document_type)}`;
+    const title = `${document.document_no} - ${customerDocumentTypeLabel(document.document_type)}`;
     const shouldAutoPrint = options.autoPrint !== false;
     showPdfBlobPreview(popup, blob, title, shouldAutoPrint);
   } catch (printError) {
@@ -5680,7 +6338,6 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   const [documentNo, setDocumentNo] = useState(initial.documentNo || document?.document_no || '');
   const [documentDate, setDocumentDate] = useState(initial.documentDate || (document?.document_date || document?.created_at || '').slice(0, 10) || todayInputDate());
   const [orderSource, setOrderSource] = useState(initial.orderSource || document?.order_source || 'WhatsApp');
-  const [orderTakenBy, setOrderTakenBy] = useState(initial.orderTakenBy || document?.order_taken_by || '');
   const [recipientName, setRecipientName] = useState(initial.recipientName || document?.recipient_name || '');
   const [deliveryPhone, setDeliveryPhone] = useState(initial.deliveryPhone || document?.delivery_phone || '');
   const [deliveryAddress, setDeliveryAddress] = useState(initial.deliveryAddress || document?.delivery_address || '');
@@ -5691,7 +6348,6 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   const [codCollectAmount, setCodCollectAmount] = useState(initial.codCollectAmount ?? document?.cod_collect_amount ?? '');
   const [notes, setNotes] = useState(initial.notes || document?.notes || '');
   const [lines, setLines] = useState(useDraft && Array.isArray(initial.lines) && initial.lines.length ? initial.lines : []);
-  const [staff, setStaff] = useState([]);
   const [productSearch, setProductSearch] = useState('');
   const [products, setProducts] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -5701,7 +6357,6 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   const total = lines.reduce((sum, line) => sum + codLineTotal(line), 0);
 
   useEffect(() => {
-    loadCodSupport();
     if (isEditing && !lines.length) loadCodItems();
     if (documentNo) onNumberReady?.(documentNo);
   }, []);
@@ -5715,10 +6370,10 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
     if (!tabId) return;
     window.localStorage.setItem(documentDraftKey(tabId), JSON.stringify({
       documentType: 'cod_order', editDocumentId: document?.id || '', documentNo, documentDate,
-      orderSource, orderTakenBy, recipientName, deliveryPhone, deliveryAddress, deliveryService,
+      orderSource, recipientName, deliveryPhone, deliveryAddress, deliveryService,
       trackingNumber, deliveryCharge, deliveryFeeMode, codCollectAmount, notes, lines
     }));
-  }, [tabId, document?.id, documentNo, documentDate, orderSource, orderTakenBy, recipientName, deliveryPhone, deliveryAddress, deliveryService, trackingNumber, deliveryCharge, deliveryFeeMode, codCollectAmount, notes, lines]);
+  }, [tabId, document?.id, documentNo, documentDate, orderSource, recipientName, deliveryPhone, deliveryAddress, deliveryService, trackingNumber, deliveryCharge, deliveryFeeMode, codCollectAmount, notes, lines]);
 
   useEffect(() => {
     const nextCollectAmount = deliveryFeeMode === 'paid_on_handover'
@@ -5726,22 +6381,6 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
       : total;
     setCodCollectAmount(nextCollectAmount);
   }, [total, deliveryCharge, deliveryFeeMode]);
-
-  async function loadCodSupport() {
-    const [staffRes, userRes] = await Promise.all([
-      supabase.from('staff_directory_v38').select('id, auth_user_id, full_name, role').eq('is_active', true).order('full_name'),
-      supabase.auth.getUser()
-    ]);
-    if (staffRes.error) setError(staffRes.error.message);
-    else {
-      const rows = staffRes.data || [];
-      setStaff(rows);
-      if (!orderTakenBy) {
-        const current = rows.find((row) => row.auth_user_id === userRes.data?.user?.id);
-        if (current) setOrderTakenBy(current.id);
-      }
-    }
-  }
 
   async function loadCodProducts() {
     let query = supabase.from('product_stock_view').select('*').eq('is_active', true).order('item_code').limit(60);
@@ -5837,7 +6476,7 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
     }
     const header = {
       document_no: documentNo.trim(), document_date: documentDate, order_source: orderSource,
-      order_taken_by: orderTakenBy, recipient_name: recipientName, delivery_phone: deliveryPhone,
+      recipient_name: recipientName, delivery_phone: deliveryPhone,
       delivery_address: deliveryAddress, delivery_service: deliveryService, tracking_number: trackingNumber,
       delivery_charge: numberValue(deliveryCharge), delivery_fee_mode: deliveryFeeMode,
       cod_collect_amount: codCollectAmount === '' ? total : numberValue(codCollectAmount), notes
@@ -5879,7 +6518,7 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
           <label>Order number<input value={documentNo} placeholder="Assigned on save" onChange={(e) => setDocumentNo(e.target.value)} /></label>
           <label>Order date<input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} /></label>
           <label>Order source<select value={orderSource} onChange={(e) => setOrderSource(e.target.value)}><option>WhatsApp</option><option>Phone call</option><option>Facebook</option><option>Website</option><option>Other</option></select></label>
-          <label>Order taken by<select value={orderTakenBy} onChange={(e) => setOrderTakenBy(e.target.value)}><option value="">Not selected</option>{staff.map((row) => <option key={row.id} value={row.id}>{row.full_name}</option>)}</select></label>
+          <div className="cod-auto-staff-note"><span>Order placed by</span><strong>Active POS staff · recorded automatically</strong></div>
           <label>Customer / recipient<input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} required /></label>
           <label>Contact number<input value={deliveryPhone} onChange={(e) => setDeliveryPhone(e.target.value)} required /></label>
           <label className="wide-field">Delivery address<textarea value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} required /></label>
@@ -5931,6 +6570,7 @@ function CodOrdersPage() {
   const [filters, setFilters] = useState({ search: '', status: 'active' });
   const [labelSelection, setLabelSelection] = useState([]);
   const [formMode, setFormMode] = useState('');
+  const [showWorkflow, setShowWorkflow] = useState(false);
   const [action, setAction] = useState({ tracking: '', service: '', paymentMethodId: '', feePaidNow: 0, receivedAmount: 0, returnReason: '', returnFee: 0 });
   const [busy, setBusy] = useState(false);
   const [checkingTracking, setCheckingTracking] = useState(false);
@@ -5952,7 +6592,7 @@ function CodOrdersPage() {
 
   async function loadCodLookups() {
     const [staffRes, paymentRes] = await Promise.all([
-      supabase.from('staff_directory_v38').select('id, full_name').eq('is_active', true).order('full_name'),
+      supabase.from('staff_directory_v38').select('id, full_name, is_active').order('full_name'),
       supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name')
     ]);
     if (!staffRes.error) setStaff(staffRes.data || []);
@@ -5965,7 +6605,7 @@ function CodOrdersPage() {
   async function loadCodOrders() {
     setError('');
     const { data, error: loadError } = await supabase.from('documents')
-      .select('id, document_no, document_type, status, total_amount, paid_amount, balance_amount, document_date, created_at, linked_document_id, payment_method_id, notes, order_source, order_taken_by, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, courier_status, courier_status_checked_at, courier_tracking_data')
+      .select('id, document_no, document_type, status, total_amount, paid_amount, balance_amount, document_date, created_at, linked_document_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, courier_status, courier_status_checked_at, courier_tracking_data')
       .eq('document_type', 'cod_order').order('created_at', { ascending: false }).limit(500);
     if (loadError) setError(loadError.message);
     else {
@@ -5977,6 +6617,8 @@ function CodOrdersPage() {
 
   async function selectCodOrder(order) {
     setSelected(order);
+    setItems([]);
+    setShowWorkflow(false);
     setMessage('');
     setError('');
     const remainingFee = Math.max(numberValue(order.delivery_charge) - numberValue(order.delivery_charge_paid), 0);
@@ -6140,28 +6782,30 @@ function CodOrdersPage() {
 
   return (
     <section className="page-section cod-orders-page">
-      <div className="section-title-row"><div><h3>COD Order Queue</h3><p>Remote order entry, packing, dispatch, courier settlement, returns, labels, and bills.</p></div><button className="primary-button" onClick={() => setFormMode('new')}>+ New COD Order</button></div>
+      <div className="section-title-row"><div><h3>COD Order Queue</h3><p>Remote order entry, packing, dispatch, courier settlement, returns, labels, and bills.</p></div></div>
       {message && <div className="notice">{message}</div>}{error && <div className="error-box">{error}</div>}
+      <div className="action-toolbar cod-order-toolbar">
+        <button className="toolbar-button bright" onClick={() => setFormMode('new')}><span>＋</span>New Order</button>
+        <button className="toolbar-button" disabled={!selected || !canAct} onClick={() => setFormMode('edit')}><span>✎</span>Edit</button>
+        <button className="toolbar-button" disabled={!selected} onClick={() => printCodDocument(selected, items, 'label', companySettings)}><span>▣</span>Print Label</button>
+        <button className="toolbar-button" disabled={!selected} onClick={() => printCodDocument(selected, items, 'bill', companySettings)}><span>▤</span>Print Bill</button>
+        <button className="toolbar-button" disabled={!selected} onClick={() => openCourierTracking(action.service || selected?.delivery_service)}><span>⌕</span>Open Tracking</button>
+        <button className={`toolbar-button ${showWorkflow ? 'bright' : ''}`} disabled={!canAct} onClick={() => setShowWorkflow((current) => !current)}><span>⚙</span>{showWorkflow ? 'Hide Workflow' : 'Update / Workflow'}</button>
+        {canCancel && <button className="toolbar-button" disabled={busy} onClick={() => runStatus('cancelled')}><span>×</span>Cancel</button>}
+        {canDelete && <button className="toolbar-button danger-toolbar-button" disabled={busy} onClick={deleteCodOrder}><span>▥</span>Delete</button>}
+      </div>
       <div className="cod-queue-stats"><StatCard label="Awaiting packing" value={orders.filter((row) => row.status === 'awaiting_packing').length} /><StatCard label="Packed" value={orders.filter((row) => row.status === 'packed').length} /><StatCard label="Dispatched" value={orders.filter((row) => row.status === 'dispatched').length} /><StatCard label="Awaiting payment" value={orders.filter((row) => row.status === 'awaiting_settlement').length} /></div>
       <div className="panel-card cod-filter-row"><input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Search order, customer, phone, address, courier, tracking" /><select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="active">All active orders</option><option value="all">All orders</option><option value="awaiting_packing">Awaiting packing</option><option value="packed">Packed</option><option value="dispatched">Dispatched</option><option value="awaiting_settlement">Awaiting payment</option><option value="converted">Paid / Converted</option><option value="returned">Returned</option><option value="cancelled">Cancelled</option></select><button className="secondary-button" onClick={loadCodOrders}>Refresh</button></div>
       <div className="panel-card cod-label-batch-bar"><div><strong>Batch COD labels</strong><span>Three labels are arranged from top to bottom on each A5 sheet.</span></div><div><button className="secondary-button" onClick={selectPendingLabels}>Select Pending</button><button className="secondary-button" disabled={!labelSelection.length} onClick={() => setLabelSelection([])}>Clear</button><button className="primary-button" disabled={!labelSelection.length} onClick={printSelectedLabels}>Print Selected ({labelSelection.length})</button></div></div>
       <div className="cod-queue-layout">
-        <div className="panel-card table-wrap"><table><thead><tr><th className="cod-label-select-column">Label</th><th>Order</th><th>Status</th><th>Customer</th><th>Phone</th><th>Source</th><th>Order taker</th><th>Courier</th><th>Tracking</th><th>Courier status</th><th>COD</th></tr></thead><tbody>{filtered.map((order) => <tr key={order.id} className={selected?.id === order.id ? 'selected-row' : ''} onClick={() => selectCodOrder(order)}><td className="cod-label-select-column"><input type="checkbox" aria-label={`Select label ${order.document_no}`} checked={labelSelection.includes(order.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleLabelOrder(order.id)} /></td><td>{order.document_no}</td><td>{codStatusLabel(order.status)}</td><td>{order.recipient_name}</td><td>{order.delivery_phone}</td><td>{order.order_source || '-'}</td><td>{staffMap.get(order.order_taken_by) || '-'}</td><td>{order.delivery_service || '-'}</td><td>{order.tracking_number || '-'}</td><td>{order.courier_status || '-'}</td><td>{money(order.cod_collect_amount || order.total_amount)}</td></tr>)}{!filtered.length && <EmptyRow colSpan={11} text="No COD orders match this filter." />}</tbody></table></div>
+        <div className="panel-card table-wrap"><table><thead><tr><th className="cod-label-select-column">Label</th><th>Order</th><th>Status</th><th>Customer</th><th>Phone</th><th>Source</th><th>Placed by</th><th>Courier</th><th>Tracking</th><th>Courier status</th><th>COD</th></tr></thead><tbody>{filtered.map((order) => <tr key={order.id} className={selected?.id === order.id ? 'selected-row' : ''} onClick={() => selectCodOrder(order)}><td className="cod-label-select-column"><input type="checkbox" aria-label={`Select label ${order.document_no}`} checked={labelSelection.includes(order.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleLabelOrder(order.id)} /></td><td>{order.document_no}</td><td>{codStatusLabel(order.status)}</td><td>{order.recipient_name}</td><td>{order.delivery_phone}</td><td>{order.order_source || '-'}</td><td>{staffMap.get(order.order_taken_by || order.created_by_staff_id) || '-'}</td><td>{order.delivery_service || '-'}</td><td>{order.tracking_number || '-'}</td><td>{order.courier_status || '-'}</td><td>{money(order.cod_collect_amount || order.total_amount)}</td></tr>)}{!filtered.length && <EmptyRow colSpan={11} text="No COD orders match this filter." />}</tbody></table></div>
         <section className="panel-card cod-action-panel">
           {!selected && <div className="muted-box">Select an order to view items and actions.</div>}
           {selected && <>
             <div className="cod-selected-header"><div><h3>{selected.document_no}</h3><strong>{selected.recipient_name}</strong><span>{selected.delivery_phone}</span><p>{selected.delivery_address}</p></div><div className="cod-selected-summary"><span>Order status</span><strong>{codStatusLabel(selected.status)}</strong><span>COD amount</span><strong>{money(selected.cod_collect_amount || selected.total_amount)}</strong></div></div>
-            <div className="cod-action-buttons">
-              <button className="secondary-button" onClick={() => printCodDocument(selected, items, 'label', companySettings)}>Print Label</button>
-              <button className="secondary-button" onClick={() => printCodDocument(selected, items, 'bill', companySettings)}>Print Bill</button>
-              <button className="secondary-button" onClick={() => openCourierTracking(action.service || selected.delivery_service)}>Open Tracking</button>
-              <button className="secondary-button" disabled={!canAct} onClick={() => setFormMode('edit')}>Edit Order</button>
-              {(canCancel || canDelete) && <span className="cod-action-spacer" aria-hidden="true" />}
-              {canCancel && <button className="secondary-button cod-cancel-action" disabled={busy} onClick={() => runStatus('cancelled')}>Cancel Order</button>}
-              {canDelete && <button className="danger-button cod-delete-action" disabled={busy} onClick={deleteCodOrder}>Delete Order</button>}
-            </div>
+            <div className="cod-order-detail-grid"><div><span>Placed by</span><strong>{staffMap.get(selected.order_taken_by || selected.created_by_staff_id) || 'Not recorded'}</strong></div><div><span>Order source</span><strong>{selected.order_source || '-'}</strong></div><div><span>Order date</span><strong>{fmtDate(selected.document_date || selected.created_at)}</strong></div><div><span>Courier</span><strong>{selected.delivery_service || 'Not selected'}</strong></div><div><span>Tracking</span><strong>{selected.tracking_number || 'Not assigned'}</strong></div><div><span>Delivery charge</span><strong>{money(selected.delivery_charge)}</strong></div>{selected.notes && <div className="wide"><span>Notes</span><strong>{selected.notes}</strong></div>}</div>
             <div className="cod-selected-items"><h4>Items in this order</h4><div className="table-wrap"><table><thead><tr><th>Code</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Total</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.item_code}</td><td>{item.description}</td><td>{Number(item.qty)}</td><td>{money(item.unit_price)}</td><td>{money(numberValue(item.qty) * numberValue(item.unit_price))}</td></tr>)}{!items.length && <EmptyRow colSpan={5} text="No items found for this order." />}</tbody></table></div></div>
-            {canAct && <div className="cod-action-fields">
+            {showWorkflow && canAct && <div className="cod-action-fields cod-workflow-panel">
               <div className="cod-operational-grid"><label>Delivery service<select value={action.service} onChange={(e) => setAction({ ...action, service: e.target.value })}><option value="">Select later</option><option value="SLPOST">SLPOST</option><option value="Pronto">Pronto</option></select></label><label>Tracking number <InfoTip text="Add this after dispatch when the courier assigns the tracking number." /><input value={action.tracking} onChange={(e) => setAction({ ...action, tracking: e.target.value })} /></label><label>Payment method<select value={action.paymentMethodId} onChange={(e) => setAction({ ...action, paymentMethodId: e.target.value })}>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select></label><label>Delivery fee paid at handover <InfoTip text="Enter only the delivery fee paid when the parcel is handed to the courier. Fees deducted later are handled during settlement or return." /><input type="number" step="0.01" disabled={selected.status !== 'packed'} value={action.feePaidNow} onChange={(e) => setAction({ ...action, feePaidNow: e.target.value })} /></label></div>
               <div className="cod-tracking-result"><div><span>Latest courier status <InfoTip text="SLPOST can be checked manually here. Scheduled checks update dispatched orders automatically after the tracking number is saved." /></span><strong>{selected.courier_status || 'Not checked'}</strong>{selected.courier_status_checked_at && <small>Checked {new Date(selected.courier_status_checked_at).toLocaleString()}</small>}</div><button className="secondary-button" disabled={checkingTracking || String(action.service || '').toUpperCase() !== 'SLPOST' || !String(action.tracking || '').trim()} onClick={checkCourierStatus}>{checkingTracking ? 'Checking...' : 'Check SLPOST Status'}</button></div>
               {selected.courier_tracking_data && <div className="cod-tracking-details"><div><span>Accepting office</span><strong>{selected.courier_tracking_data.acceptingPostOffice || '-'}</strong></div><div><span>Accepted</span><strong>{selected.courier_tracking_data.acceptedAt || '-'}</strong></div><div><span>Delivery office</span><strong>{selected.courier_tracking_data.deliveryPostOffice || '-'}</strong></div><div><span>Received</span><strong>{selected.courier_tracking_data.receivedAt || '-'}</strong></div>{(selected.courier_tracking_data.settledPostOffice || selected.courier_tracking_data.settledAt) && <><div><span>Settled office</span><strong>{selected.courier_tracking_data.settledPostOffice || '-'}</strong></div><div><span>Settled</span><strong>{selected.courier_tracking_data.settledAt || '-'}</strong></div></>}</div>}
@@ -7601,7 +8245,7 @@ function cashflowDateRange(preset, customFrom = '', customTo = '') {
   return { start, end };
 }
 
-function CustomersSuppliersPage() {
+function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled } = {}) {
   const [rows, setRows] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [transactions, setTransactions] = useState([]);
@@ -7610,12 +8254,23 @@ function CustomersSuppliersPage() {
   const [search, setSearch] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState({ name: '', phone: '', address: '', is_customer: true, is_supplier: false });
-  const [paymentForm, setPaymentForm] = useState({ amount: '', method_id: '', document_type: 'customer_payment', direction: 'in', note: '' });
+  const [showEditForm, setShowEditForm] = useState(false);
+  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', is_customer: true, is_supplier: false });
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ amount: '', method_id: '', document_type: 'customer_payment', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
+  const [showThermalLabel, setShowThermalLabel] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   useEffect(() => { loadRows(); loadPaymentMethods(); }, []);
+  useEffect(() => {
+    if (!customerTarget?.id || !rows.some((row) => row.id === customerTarget.id)) return;
+    setFilter('customers');
+    setSearch('');
+    setSelectedId(customerTarget.id);
+    onCustomerTargetHandled?.();
+  }, [customerTarget?.nonce, rows]);
   useEffect(() => {
     if (selectedId) loadTransactions(selectedId);
     else setTransactions([]);
@@ -7628,17 +8283,19 @@ function CustomersSuppliersPage() {
 
   const selected = rows.find((row) => row.id === selectedId);
   const selectedOutstanding = selected ? Number(selected.due_balance || 0) - Number(selected.store_credit_balance || 0) : 0;
+  const hasOutstandingBalance = Math.abs(selectedOutstanding) > 0.005;
+  const automaticPaymentDirection = selectedOutstanding < -0.005 ? 'out' : 'in';
+  const balanceState = selectedOutstanding > 0.005 ? 'receivable' : selectedOutstanding < -0.005 ? 'payable' : 'settled';
+  const selectedPartyPaymentMethod = paymentMethods.find((method) => method.id === paymentForm.method_id);
 
   useEffect(() => {
     if (!selected) return;
-    const direction = selectedOutstanding < 0 ? 'out' : 'in';
     const documentType = selected.is_supplier && selected.is_customer === false ? 'supplier_payment' : 'customer_payment';
     setPaymentForm((current) => ({
       ...current,
       document_type: documentType,
-      direction,
-      amount: Math.abs(selectedOutstanding) > 0.005 ? String(Math.abs(selectedOutstanding)) : current.amount || '',
-      note: direction === 'out' ? 'Balance refund' : 'Balance payment'
+      amount: hasOutstandingBalance ? String(Math.abs(selectedOutstanding)) : '',
+      note: automaticPaymentDirection === 'out' ? 'Balance refund / payment' : 'Balance payment received'
     }));
   }, [selectedId, selectedOutstanding]);
 
@@ -7646,17 +8303,17 @@ function CustomersSuppliersPage() {
     setError('');
     const { data, error: rowError } = await supabase
       .from('customers')
-      .select('id, name, phone, address, due_balance, store_credit_balance, is_customer, is_supplier')
+      .select('id, name, phone, address, due_balance, store_credit_balance, is_customer, is_supplier, party_code')
       .order('name', { ascending: true })
       .limit(1500);
-    if (rowError) setError(rowError.message);
+    if (rowError) setError(`${rowError.message}${/party_code/i.test(rowError.message || '') ? '. Run migration 052_party_codes_thermal_labels.sql.' : ''}`);
     else setRows(data || []);
   }
 
   async function loadPaymentMethods() {
     const { data, error: methodError } = await supabase
       .from('payment_methods')
-      .select('id, name, is_paid_method, affects_cashflow, is_active')
+      .select('*')
       .eq('is_active', true)
       .eq('is_paid_method', true)
       .order('name');
@@ -7728,7 +8385,7 @@ function CustomersSuppliersPage() {
     const { data, error: insertError } = await supabase
       .from('customers')
       .insert(payload)
-      .select('id, name, phone, address, due_balance, store_credit_balance, is_customer, is_supplier')
+      .select('id, name, phone, address, due_balance, store_credit_balance, is_customer, is_supplier, party_code')
       .single();
     if (insertError) setError(insertError.message);
     else {
@@ -7743,6 +8400,54 @@ function CustomersSuppliersPage() {
     }
   }
 
+  function openEditProfile() {
+    if (!selected) return;
+    setEditForm({
+      name: selected.name || '',
+      phone: selected.phone || '',
+      address: selected.address || '',
+      is_customer: selected.is_customer !== false,
+      is_supplier: selected.is_supplier === true
+    });
+    setError('');
+    setMessage('');
+    setShowEditForm(true);
+  }
+
+  async function saveProfileChanges(event) {
+    event.preventDefault();
+    if (!selected) return;
+    const nextCustomerRole = selected.is_customer !== false || !!editForm.is_customer;
+    const nextSupplierRole = selected.is_supplier === true || !!editForm.is_supplier;
+    if (!nextCustomerRole && !nextSupplierRole) {
+      setError('A profile must remain a customer, supplier, or both.');
+      return;
+    }
+    setSavingProfile(true);
+    setError('');
+    setMessage('');
+    const { data, error: saveError } = await supabase.rpc('save_party_profile_v61', {
+      p_profile_id: selected.id,
+      p_profile: {
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim() || null,
+        address: editForm.address.trim() || null,
+        is_customer: nextCustomerRole,
+        is_supplier: nextSupplierRole
+      }
+    });
+    setSavingProfile(false);
+    if (saveError) {
+      const migrationMissing = /save_party_profile_v61|schema cache|could not find the function/i.test(saveError.message || '');
+      setError(`${saveError.message}${migrationMissing ? '. Run migration 061_party_profile_editing.sql in Supabase.' : ''}`);
+      return;
+    }
+    const updated = data || {};
+    setRows((current) => current.map((row) => row.id === selected.id ? { ...row, ...updated } : row).sort((a, b) => a.name.localeCompare(b.name)));
+    setShowEditForm(false);
+    setMessage(`${updated.name || editForm.name.trim()} saved as ${nextCustomerRole && nextSupplierRole ? 'Customer / Supplier' : nextSupplierRole ? 'Supplier' : 'Customer'}.`);
+  }
+
   async function saveBalancePayment(event) {
     event.preventDefault();
     setError('');
@@ -7755,19 +8460,29 @@ function CustomersSuppliersPage() {
       setError('Enter payment amount.');
       return;
     }
-    const { data, error: payError } = await supabase.rpc('save_party_payment_v29', {
+    if (selectedPartyPaymentMethod?.requires_cheque_details && (!paymentForm.cheque_number.trim() || !paymentForm.cheque_date)) {
+      setError('Enter the cheque number and cheque date.');
+      return;
+    }
+    const { data, error: payError } = await supabase.rpc('save_party_payment_v56', {
       p_profile_id: selectedId,
       p_document_type: paymentForm.document_type,
       p_payment_method_id: paymentForm.method_id || null,
       p_amount: Number(paymentForm.amount || 0),
-      p_direction: paymentForm.direction,
-      p_note: paymentForm.note || null
+      p_direction: automaticPaymentDirection,
+      p_note: paymentForm.note || null,
+      p_cheque_details: {
+        source_line_id: createClientId(),
+        cheque_number: paymentForm.cheque_number || null,
+        cheque_date: paymentForm.cheque_date || null,
+        cheque_bank_name: paymentForm.cheque_bank_name || null
+      }
     });
     if (payError) {
       setError(payError.message);
       return;
     }
-    setPaymentForm((current) => ({ ...current, amount: '', note: '' }));
+    setPaymentForm((current) => ({ ...current, amount: '', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' }));
     setMessage(`${documentTypeLabel(data?.document_type)} ${data?.document_no} saved. New outstanding: ${data?.new_outstanding < 0 ? '-' : ''}${money(Math.abs(Number(data?.new_outstanding || 0)))}`);
     await loadRows();
     await loadTransactions(selectedId);
@@ -7797,9 +8512,11 @@ function CustomersSuppliersPage() {
 
   if (selected) {
     const isSupplierPayment = paymentForm.document_type === 'supplier_payment';
-    const actionLabel = isSupplierPayment
-      ? paymentForm.direction === 'out' ? 'Pay supplier' : 'Receive supplier refund'
-      : paymentForm.direction === 'out' ? 'Refund / pay customer' : 'Receive customer payment';
+    const actionLabel = !hasOutstandingBalance
+      ? 'Balance settled'
+      : isSupplierPayment
+        ? automaticPaymentDirection === 'out' ? 'Pay supplier' : 'Receive supplier refund'
+        : automaticPaymentDirection === 'out' ? 'Refund customer' : 'Receive customer payment';
     const profileType = `${selected.is_customer !== false ? 'Customer' : ''}${selected.is_supplier ? `${selected.is_customer !== false ? ' / ' : ''}Supplier` : ''}`;
     return (
       <section className="page-section party-detail-page">
@@ -7812,14 +8529,15 @@ function CustomersSuppliersPage() {
               <p>{selected.phone || 'No phone'} {selected.address ? `• ${selected.address}` : ''}</p>
             </div>
           </div>
-          <button className="secondary-button" onClick={() => loadTransactions(selected.id)}>Refresh</button>
+          <div className="party-hero-actions"><button className="secondary-button" onClick={openEditProfile}>Edit Profile</button><button className="primary-button" disabled={!selected.party_code} title={!selected.party_code ? 'Run migration 052 first' : 'Design and print a thermal profile label'} onClick={() => setShowThermalLabel(true)}>Print Profile Tag</button><button className="secondary-button" onClick={() => loadTransactions(selected.id)}>Refresh</button></div>
         </div>
         {error && <div className="error-box">{error}</div>}
         {message && <div className="notice success">{message}</div>}
 
         <div className="party-summary-grid">
-          <StatCard label="Outstanding Balance" value={`${selectedOutstanding < 0 ? '-' : ''}${money(Math.abs(selectedOutstanding))}`} />
-          <StatCard label="Balance meaning" value={selectedOutstanding > 0 ? 'They owe the shop' : selectedOutstanding < 0 ? 'Shop owes them' : 'Settled'} />
+          <StatCard label="Profile Code" value={selected.party_code || 'Run migration 052'} />
+          <StatCard className={`party-balance-stat ${balanceState}`} label={balanceState === 'receivable' ? 'Outstanding receivable' : balanceState === 'payable' ? 'Outstanding payable' : 'Outstanding balance'} value={money(Math.abs(selectedOutstanding))} />
+          <StatCard className={`party-balance-status ${balanceState}`} label="Balance status" value={balanceState === 'receivable' ? 'They owe the shop' : balanceState === 'payable' ? 'Shop owes them' : 'Settled'} />
           <StatCard label="Documents" value={transactions.length} />
         </div>
 
@@ -7831,15 +8549,10 @@ function CustomersSuppliersPage() {
               <label>Document type
                 <select value={paymentForm.document_type} onChange={(e) => {
                   const nextType = e.target.value;
-                  setPaymentForm({ ...paymentForm, document_type: nextType, direction: nextType === 'supplier_payment' ? 'out' : 'in' });
+                  setPaymentForm({ ...paymentForm, document_type: nextType });
                 }}>
                   {selected.is_customer !== false && <option value="customer_payment">Customer Payment</option>}
                   {selected.is_supplier && <option value="supplier_payment">Supplier Payment</option>}
-                </select>
-              </label>
-              <label>Action
-                <select value={paymentForm.direction} onChange={(e) => setPaymentForm({ ...paymentForm, direction: e.target.value })}>
-                  {isSupplierPayment ? <><option value="out">Pay supplier</option><option value="in">Receive refund from supplier</option></> : <><option value="in">Receive payment from customer</option><option value="out">Refund / pay customer</option></>}
                 </select>
               </label>
               <label>Payment method
@@ -7850,13 +8563,18 @@ function CustomersSuppliersPage() {
               <label>Amount
                 <input type="number" step="0.01" value={paymentForm.amount} onFocus={selectAllText} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} />
               </label>
+              {selectedPartyPaymentMethod?.requires_cheque_details && <>
+                <label>Cheque number<input value={paymentForm.cheque_number} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_number: e.target.value })} required /></label>
+                <label>Cheque date<input type="date" value={paymentForm.cheque_date} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_date: e.target.value })} required /></label>
+                <label>Cheque bank<input value={paymentForm.cheque_bank_name} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_bank_name: e.target.value })} placeholder="Optional" /></label>
+              </>}
               <label>Note
                 <input value={paymentForm.note} onFocus={selectAllText} onChange={(e) => setPaymentForm({ ...paymentForm, note: e.target.value })} />
               </label>
             </div>
             <div className="button-row">
-              <button type="button" className="secondary-button" onClick={() => setPaymentForm((current) => ({ ...current, amount: String(Math.abs(selectedOutstanding)), direction: selectedOutstanding < 0 ? 'out' : 'in' }))}>Use full balance</button>
-              <button className="primary-button">Save payment document</button>
+              <button type="button" className="secondary-button" disabled={!hasOutstandingBalance} onClick={() => setPaymentForm((current) => ({ ...current, amount: String(Math.abs(selectedOutstanding)) }))}>Use full balance</button>
+              <button className={`primary-button party-balance-action ${automaticPaymentDirection === 'out' ? 'payable' : 'receivable'}`} disabled={!hasOutstandingBalance}>{actionLabel}</button>
             </div>
           </form>
 
@@ -7885,6 +8603,22 @@ function CustomersSuppliersPage() {
           </div>
         </div>
         {previewDocumentId && <DocumentPreviewModal documentId={previewDocumentId} onClose={() => setPreviewDocumentId('')} />}
+        {showThermalLabel && selected.party_code && <ThermalLabelModal code={selected.party_code} kindLabel={`${profileType} profile tag`} onClose={() => setShowThermalLabel(false)} />}
+        {showEditForm && <div className="modal-backdrop party-profile-edit-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingProfile) setShowEditForm(false); }}><div className="modal-card party-profile-edit-modal">
+          <div className="section-title-row"><div><h3>Edit Customer / Supplier</h3><p>Update this one profile instead of creating a duplicate.</p></div><button type="button" className="secondary-button" disabled={savingProfile} onClick={() => setShowEditForm(false)}>Close</button></div>
+          <form onSubmit={saveProfileChanges}>
+            <label>Name<input value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} required autoFocus /></label>
+            <label>Phone<input value={editForm.phone} onChange={(event) => setEditForm({ ...editForm, phone: event.target.value })} /></label>
+            <label>Address<textarea value={editForm.address} onChange={(event) => setEditForm({ ...editForm, address: event.target.value })} /></label>
+            <div className="party-profile-role-editor">
+              <strong>Profile roles</strong>
+              <label className="checkbox-label"><input type="checkbox" checked={editForm.is_customer} disabled={selected.is_customer !== false} onChange={(event) => setEditForm({ ...editForm, is_customer: event.target.checked })} /> Customer</label>
+              <label className="checkbox-label"><input type="checkbox" checked={editForm.is_supplier} disabled={selected.is_supplier === true} onChange={(event) => setEditForm({ ...editForm, is_supplier: event.target.checked })} /> Supplier</label>
+              <small>Existing roles stay enabled to preserve document history. Tick the other role when a supplier also becomes a customer, or a customer also becomes a supplier.</small>
+            </div>
+            <div className="modal-actions"><button type="button" className="secondary-button" disabled={savingProfile} onClick={() => setShowEditForm(false)}>Cancel</button><button className="primary-button" disabled={savingProfile}>{savingProfile ? 'Saving...' : 'Save Profile'}</button></div>
+          </form>
+        </div></div>}
       </section>
     );
   }
@@ -7978,12 +8712,20 @@ function CashflowPage() {
   const [transferForm, setTransferForm] = useState({ from_payment_method_id: '', to_payment_method_id: '', amount: '', transfer_date: todayInputDate(), description: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
   const [pdfBusy, setPdfBusy] = useState('');
+  const [registerState, setRegisterState] = useState({ current: null, history: [] });
+  const [chequePayments, setChequePayments] = useState([]);
+  const [showOpenRegister, setShowOpenRegister] = useState(false);
+  const [showCloseRegister, setShowCloseRegister] = useState(false);
+  const [registerForm, setRegisterForm] = useState({ opening_cash: '', counted_cash: '', note: '' });
+  const [registerBusy, setRegisterBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     loadPaymentMethods();
     loadCashAccounts();
+    loadRegisterState();
+    loadChequePayments();
     fetchCompanySettings().then(setCompanySettings).catch((settingsError) => setError(settingsError.message));
   }, []);
   useEffect(() => {
@@ -7993,6 +8735,56 @@ function CashflowPage() {
   useRealtimeRefresh(['cashflow_entries', 'documents'], () => { loadEntries(); loadCashAccounts(); });
   useRealtimeRefresh(['payment_methods'], () => { loadPaymentMethods(); loadCashAccounts(); });
   useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
+  useRealtimeRefresh(['register_shifts', 'cashflow_entries'], loadRegisterState);
+  useRealtimeRefresh(['cheque_payments'], loadChequePayments);
+
+  async function loadChequePayments() {
+    const { data, error: chequeError } = await supabase.from('cheque_payments').select('id, document_id, direction, amount, cheque_number, cheque_date, bank_name, status, created_at, payment_methods(name), documents(document_no, document_type)').order('cheque_date', { ascending: false }).limit(200);
+    if (chequeError) {
+      if (!/cheque_payments|schema cache|does not exist/i.test(chequeError.message || '')) setError(chequeError.message);
+      return;
+    }
+    setChequePayments(data || []);
+  }
+
+  async function loadRegisterState() {
+    const { data, error: registerError } = await supabase.rpc('get_register_state_v56');
+    if (registerError) {
+      if (!/get_register_state_v56|schema cache|could not find the function/i.test(registerError.message || '')) setError(registerError.message);
+      return;
+    }
+    setRegisterState({ current: data?.current || null, history: data?.history || [] });
+  }
+
+  async function openDailyRegister(event) {
+    event.preventDefault();
+    setRegisterBusy(true); setError(''); setMessage('');
+    const { data, error: registerError } = await supabase.rpc('open_register_v56', {
+      p_opening_cash: numberValue(registerForm.opening_cash),
+      p_note: registerForm.note || null
+    });
+    setRegisterBusy(false);
+    if (registerError) { setError(registerError.message); return; }
+    setShowOpenRegister(false);
+    setRegisterForm({ opening_cash: '', counted_cash: '', note: '' });
+    setMessage(`Register opened with ${money(data?.opening_cash)}.`);
+    loadRegisterState();
+  }
+
+  async function closeDailyRegister(event) {
+    event.preventDefault();
+    setRegisterBusy(true); setError(''); setMessage('');
+    const { data, error: registerError } = await supabase.rpc('close_register_v56', {
+      p_counted_cash: numberValue(registerForm.counted_cash),
+      p_note: registerForm.note || null
+    });
+    setRegisterBusy(false);
+    if (registerError) { setError(registerError.message); return; }
+    setShowCloseRegister(false);
+    setRegisterForm({ opening_cash: '', counted_cash: '', note: '' });
+    setMessage(`Register closed. ${Math.abs(numberValue(data?.variance)) < .005 ? 'Cash matched exactly.' : `Variance: ${signedMoney(data?.variance)}.`}`);
+    loadRegisterState();
+  }
 
   async function loadEntries() {
     setError('');
@@ -8150,6 +8942,8 @@ function CashflowPage() {
   const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
   const transferableMethods = paymentMethods.filter((method) => ['cash', 'bank'].includes(method.account_kind));
   const sourceAccount = cashAccounts.find((account) => account.payment_method_id === transferForm.from_payment_method_id);
+  const currentRegister = registerState.current;
+  const closingVariance = numberValue(registerForm.counted_cash) - numberValue(currentRegister?.live_expected_cash);
 
   return (
     <section className="page-section cashflow-v17">
@@ -8167,6 +8961,12 @@ function CashflowPage() {
       </div>
       {error && <div className="error-box">{error}</div>}
       {message && <div className="notice success">{message}</div>}
+      <div className={`panel-card daily-register-card ${currentRegister ? 'open' : 'closed'}`}>
+        <div className="daily-register-heading"><div><span>Daily register</span><h3>{currentRegister ? 'Register is open' : 'Register is closed'}</h3><p>{currentRegister ? `Opened by ${currentRegister.opened_by_name} · ${new Date(currentRegister.opened_at).toLocaleString('en-LK')}` : 'Open the drawer at the start of the day to reconcile physical cash at closing.'}</p></div>{currentRegister ? <button className="primary-button" onClick={() => { setRegisterForm({ opening_cash: '', counted_cash: String(numberValue(currentRegister.live_expected_cash)), note: '' }); setShowCloseRegister(true); }}>Close & Count</button> : <button className="primary-button" onClick={() => setShowOpenRegister(true)}>Open Register</button>}</div>
+        {currentRegister && <div className="daily-register-totals"><div><span>Opening cash</span><strong>{money(currentRegister.opening_cash)}</strong></div><div><span>Cash movement</span><strong>{signedMoney(currentRegister.cash_movement)}</strong></div><div><span>Expected in drawer</span><strong>{money(currentRegister.live_expected_cash)}</strong></div></div>}
+        {!currentRegister && registerState.history?.[0] && <div className="last-register-summary"><span>Last closed {new Date(registerState.history[0].closed_at).toLocaleString('en-LK')}</span><strong>Counted {money(registerState.history[0].counted_cash)}</strong><em className={Math.abs(numberValue(registerState.history[0].variance)) < .005 ? '' : 'negative-balance'}>Variance {signedMoney(registerState.history[0].variance)}</em></div>}
+        {!!registerState.history?.length && <details className="register-history"><summary>Recent register history</summary><div className="table-wrap compact-table"><table><thead><tr><th>Opened</th><th>Closed</th><th>Opening</th><th>Expected</th><th>Counted</th><th>Variance</th><th>Staff</th></tr></thead><tbody>{registerState.history.map((shift) => <tr key={shift.id}><td>{new Date(shift.opened_at).toLocaleString('en-LK')}</td><td>{shift.closed_at ? new Date(shift.closed_at).toLocaleString('en-LK') : 'Open'}</td><td>{money(shift.opening_cash)}</td><td>{shift.status === 'open' ? money(shift.live_expected_cash) : money(shift.expected_cash)}</td><td>{shift.counted_cash == null ? '-' : money(shift.counted_cash)}</td><td>{shift.variance == null ? '-' : signedMoney(shift.variance)}</td><td>{shift.closed_by_name || shift.opened_by_name}</td></tr>)}</tbody></table></div></details>}
+      </div>
       <div className="cashflow-summary-grid">
         <StatCard label="Cash In" value={money(cashIn)} />
         <StatCard label="Cash Out" value={money(cashOut)} />
@@ -8181,6 +8981,11 @@ function CashflowPage() {
           {!cashAccounts.some((account) => ['cash', 'bank'].includes(account.account_kind)) && <div className="muted-box">Run migration 043 to create Cash, Bank 1 and Bank 2 account balances.</div>}
         </div>
       </div>
+
+      {!!chequePayments.length && <div className="panel-card cheque-register-card">
+        <div className="cash-account-heading"><div><h3>Cheque Register</h3><p>Cheque dates and references retained from POS, purchases and balance payments. These payments enter their bank account immediately.</p></div><span>{chequePayments.length} recent</span></div>
+        <div className="table-wrap compact-table"><table><thead><tr><th>Cheque date</th><th>Number</th><th>Bank</th><th>Direction</th><th>Amount</th><th>Document</th><th>Status</th></tr></thead><tbody>{chequePayments.map((cheque) => <tr key={cheque.id} className="clickable-row" onClick={() => cheque.document_id && setPreviewDocumentId(cheque.document_id)}><td>{fmtDate(cheque.cheque_date)}</td><td><strong>{cheque.cheque_number}</strong></td><td>{cheque.bank_name || '-'}</td><td>{cheque.direction === 'out' ? 'Issued / out' : 'Received / in'}</td><td>{money(cheque.amount)}</td><td>{cheque.documents?.document_no || '-'}</td><td><span className="status-pill active">{cheque.status}</span></td></tr>)}</tbody></table></div>
+      </div>}
 
       <div className="panel-card cashflow-date-filter">
         <div className="date-preset-buttons">
@@ -8270,6 +9075,8 @@ function CashflowPage() {
           </div>
         </div>
       )}
+      {showOpenRegister && <div className="modal-backdrop"><form className="modal-card compact-modal register-modal" onSubmit={openDailyRegister}><div className="section-title-row"><div><h3>Open Daily Register</h3><p>Count the cash physically in the drawer before today’s transactions.</p></div><button type="button" className="secondary-button" onClick={() => setShowOpenRegister(false)}>Close</button></div><label>Opening cash<input type="number" min="0" step="0.01" value={registerForm.opening_cash} onChange={(event) => setRegisterForm({ ...registerForm, opening_cash: event.target.value })} autoFocus required /></label><label>Opening note (optional)<input value={registerForm.note} onChange={(event) => setRegisterForm({ ...registerForm, note: event.target.value })} /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowOpenRegister(false)}>Cancel</button><button className="primary-button" disabled={registerBusy}>{registerBusy ? 'Opening...' : 'Open Register'}</button></div></form></div>}
+      {showCloseRegister && currentRegister && <div className="modal-backdrop"><form className="modal-card compact-modal register-modal" onSubmit={closeDailyRegister}><div className="section-title-row"><div><h3>Close & Reconcile</h3><p>Count physical drawer cash. Bank, card and cheque payments are excluded.</p></div><button type="button" className="secondary-button" onClick={() => setShowCloseRegister(false)}>Close</button></div><div className="register-close-summary"><span>Expected cash</span><strong>{money(currentRegister.live_expected_cash)}</strong></div><label>Counted cash<input type="number" min="0" step="0.01" value={registerForm.counted_cash} onChange={(event) => setRegisterForm({ ...registerForm, counted_cash: event.target.value })} autoFocus required /></label><div className={`register-variance-preview ${Math.abs(closingVariance) < .005 ? 'matched' : 'different'}`}><span>Variance</span><strong>{signedMoney(closingVariance)}</strong></div><label>Closing note (optional)<input value={registerForm.note} onChange={(event) => setRegisterForm({ ...registerForm, note: event.target.value })} placeholder="Reason for shortage/overage" /></label><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowCloseRegister(false)}>Cancel</button><button className="primary-button" disabled={registerBusy}>{registerBusy ? 'Closing...' : 'Close Register'}</button></div></form></div>}
       {showTransfer && (
         <div className="modal-backdrop">
           <div className="modal-card cash-transfer-modal">
@@ -9300,6 +10107,7 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
         allow_negative_pos_stock: !!form.allow_negative_pos_stock,
         show_pos_stock_badges: form.show_pos_stock_badges !== false,
         confirm_pos_sale: !!form.confirm_pos_sale,
+        minimum_profit_percent: Math.min(Math.max(numberValue(form.minimum_profit_percent, 5), 0), 1000),
         default_payment_method_id: form.default_payment_method_id || null,
         auto_lock_minutes: autoLock
       }
@@ -9349,6 +10157,7 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
         <div className="panel-card settings-category-card">
           <div className="settings-category-heading"><span>ST</span><div><h3>Stock control</h3><p>Controls how POS sales behave when physical stock runs out.</p></div></div>
           <label className={`settings-toggle-row warning-setting ${form.allow_negative_pos_stock ? 'enabled' : ''}`}><input type="checkbox" checked={!!form.allow_negative_pos_stock} onChange={(e) => setForm({ ...form, allow_negative_pos_stock: e.target.checked })} /><span><strong>Allow negative stock in POS sales</strong><small>When enabled, admins and permitted staff may sell tracked items beyond available quantity. COD orders still require physical stock.</small></span></label>
+          <label className="settings-field-row"><span><strong>Minimum profit over cost</strong><small>Every positive POS item must remain at least this percentage above its average cost after item and bill discounts. Use 0 to disable.</small></span><div className="settings-number-field"><input type="number" min="0" max="1000" step="0.1" value={form.minimum_profit_percent} onChange={(e) => setForm({ ...form, minimum_profit_percent: e.target.value })} /><em>%</em></div></label>
           <div className="settings-safety-note"><strong>{form.allow_negative_pos_stock ? 'Negative stock will be allowed' : 'Overselling is blocked'}</strong><span>{form.allow_negative_pos_stock ? 'Use the Stock page to identify and correct negative quantities.' : 'Product selection and database saving both enforce available quantity.'}</span></div>
         </div>
 
@@ -9376,9 +10185,12 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
 
 function AssistantSettingsPage() {
   const emptyKnowledge = { id: '', supplier_name: '', title: '', content: '', tags: '', is_active: true };
+  const emptyGuide = { id: '', topic: '', area: 'General', keywords: '', content: '', is_active: true };
   const [settings, setSettings] = useState(DEFAULT_ASSISTANT_SETTINGS);
   const [knowledge, setKnowledge] = useState([]);
   const [knowledgeForm, setKnowledgeForm] = useState(emptyKnowledge);
+  const [posGuides, setPosGuides] = useState([]);
+  const [guideForm, setGuideForm] = useState(emptyGuide);
   const [sourceImage, setSourceImage] = useState(null);
   const [busy, setBusy] = useState(false);
   const [extracting, setExtracting] = useState(false);
@@ -9387,20 +10199,23 @@ function AssistantSettingsPage() {
   const sourceFileRef = useRef(null);
 
   useEffect(() => { loadAssistantAdmin(); }, []);
-  useRealtimeRefresh(['assistant_settings', 'assistant_supplier_knowledge'], loadAssistantAdmin);
+  useRealtimeRefresh(['assistant_settings', 'assistant_supplier_knowledge', 'assistant_pos_guides'], loadAssistantAdmin);
 
   async function loadAssistantAdmin() {
-    const [settingsResult, knowledgeResult] = await Promise.all([
+    const [settingsResult, knowledgeResult, guideResult] = await Promise.all([
       supabase.rpc('assistant_get_settings_v45'),
-      supabase.rpc('admin_list_assistant_knowledge_v45')
+      supabase.rpc('admin_list_assistant_knowledge_v45'),
+      supabase.rpc('admin_list_pos_guides_v59')
     ]);
-    const loadError = settingsResult.error || knowledgeResult.error;
+    const loadError = settingsResult.error || knowledgeResult.error || guideResult.error;
     if (loadError) {
-      setError(`${loadError.message}. Run migration 045_ai_memory_pos_tools_voice.sql in Supabase.`);
+      const migration = guideResult.error ? '059_assistant_pos_staff_handbook.sql' : '045_ai_memory_pos_tools_voice.sql';
+      setError(`${loadError.message}. Run migration ${migration} in Supabase.`);
       return;
     }
     setSettings({ ...DEFAULT_ASSISTANT_SETTINGS, ...(settingsResult.data || {}) });
     setKnowledge(knowledgeResult.data || []);
+    setPosGuides(guideResult.data || []);
   }
 
   async function saveAssistantSettings(event) {
@@ -9502,8 +10317,50 @@ function AssistantSettingsPage() {
     loadAssistantAdmin();
   }
 
+  async function savePosGuide(event) {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    const { error: saveError } = await supabase.rpc('admin_save_pos_guide_v59', {
+      p_entry: {
+        id: guideForm.id || null,
+        topic: guideForm.topic.trim(),
+        area: guideForm.area.trim() || 'General',
+        keywords: guideForm.keywords.split(',').map((keyword) => keyword.trim()).filter(Boolean),
+        content: guideForm.content.trim(),
+        is_active: !!guideForm.is_active
+      }
+    });
+    setBusy(false);
+    if (saveError) { setError(saveError.message); return; }
+    setGuideForm(emptyGuide);
+    setMessage('POS staff guide saved. The assistant can now use it for how-to questions.');
+    loadAssistantAdmin();
+  }
+
+  function editPosGuide(entry) {
+    setGuideForm({
+      id: entry.id,
+      topic: entry.topic || '',
+      area: entry.area || 'General',
+      keywords: (entry.keywords || []).join(', '),
+      content: entry.content || '',
+      is_active: entry.is_active !== false
+    });
+    setMessage(''); setError('');
+    document.querySelector('.assistant-pos-guide-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function deletePosGuide(entry) {
+    if (!window.confirm(`Delete “${entry.topic}” from the POS staff handbook?`)) return;
+    const { error: deleteError } = await supabase.rpc('admin_delete_pos_guide_v59', { p_entry_id: entry.id });
+    if (deleteError) { setError(deleteError.message); return; }
+    if (guideForm.id === entry.id) setGuideForm(emptyGuide);
+    setMessage('POS staff guide deleted.');
+    loadAssistantAdmin();
+  }
+
   return <section className="page-section assistant-settings-page">
-    <div className="page-actions settings-page-heading"><div><h3>AI Assistant Settings</h3><p>Control shared supplier memory, answer language, voice playback and bounded conversation history.</p></div></div>
+    <div className="page-actions settings-page-heading"><div><h3>AI Assistant Settings</h3><p>Manage the POS staff handbook, shared supplier memory, answer language, voice playback and bounded conversation history.</p></div></div>
     {error && <div className="error-box">{error}</div>}
     {message && <div className="notice success">{message}</div>}
 
@@ -9520,6 +10377,15 @@ function AssistantSettingsPage() {
       <label className="assistant-custom-instructions">Shop answer preferences<textarea maxLength={2000} value={settings.custom_instructions} onChange={(event) => setSettings({ ...settings, custom_instructions: event.target.value })} placeholder="Example: When asked for a battery, return the supplier model first, then only the essential checks." /><small>{settings.custom_instructions.length}/2000 · Safety and database access rules always take priority.</small></label>
     </form>
 
+    <form className="panel-card assistant-knowledge-form assistant-pos-guide-form" onSubmit={savePosGuide}>
+      <div className="section-title-row"><div><h3>{guideForm.id ? 'Edit POS staff guide' : 'Add POS staff guide'}</h3><p>Teach the assistant the exact page, button names, steps, and effects for a shop procedure. It uses these guides for staff training without receiving source-code access.</p></div>{guideForm.id && <button type="button" className="secondary-button" onClick={() => setGuideForm(emptyGuide)}>New Guide</button>}</div>
+      <div className="assistant-knowledge-header"><label>Question / topic<input value={guideForm.topic} onChange={(event) => setGuideForm({ ...guideForm, topic: event.target.value })} placeholder="Example: Exchange an item from an invoice" required /></label><label>POS area<input value={guideForm.area} onChange={(event) => setGuideForm({ ...guideForm, area: event.target.value })} placeholder="POS, Documents, COD Orders…" required /></label><label>Matching words<input value={guideForm.keywords} onChange={(event) => setGuideForm({ ...guideForm, keywords: event.target.value })} placeholder="exchange, return, original invoice" /></label></div>
+      <label>Staff instructions<textarea className="assistant-knowledge-content" maxLength={12000} value={guideForm.content} onChange={(event) => setGuideForm({ ...guideForm, content: event.target.value })} placeholder={'Use exact visible names and numbered steps.\n1. Open POS and choose Return.\n2. Search for the original invoice…'} required /><small>{guideForm.content.length}/12000 · Include important effects on stock, payment, balances, or status.</small></label>
+      <div className="assistant-knowledge-save"><label className="checkbox-label"><input type="checkbox" checked={guideForm.is_active} onChange={(event) => setGuideForm({ ...guideForm, is_active: event.target.checked })} /> Available for staff how-to answers</label><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save Staff Guide'}</button></div>
+    </form>
+
+    <div className="panel-card assistant-knowledge-list"><div className="section-title-row"><div><h3>POS staff handbook</h3><p>{posGuides.length}/100 guides. Seeded guides can be edited whenever the app workflow changes.</p></div></div><div className="table-wrap"><table><thead><tr><th>Area</th><th>Topic</th><th>Matching words</th><th>Updated</th><th>Status</th><th>Actions</th></tr></thead><tbody>{posGuides.map((entry) => <tr key={entry.id}><td><strong>{entry.area}</strong></td><td>{entry.topic}<small className="assistant-knowledge-preview">{entry.content}</small></td><td>{(entry.keywords || []).join(', ') || '-'}</td><td>{fmtDate(entry.updated_at)}</td><td><span className={entry.is_active ? 'status-pill active' : 'status-pill inactive'}>{entry.is_active ? 'Active' : 'Hidden'}</span></td><td><button type="button" className="small-button" onClick={() => editPosGuide(entry)}>Edit</button><button type="button" className="small-button danger" onClick={() => deletePosGuide(entry)}>Delete</button></td></tr>)}{!posGuides.length && <EmptyRow colSpan={6} text="No POS staff guides saved yet." />}</tbody></table></div></div>
+
     <form className="panel-card assistant-knowledge-form" onSubmit={saveKnowledge}>
       <div className="section-title-row"><div><h3>{knowledgeForm.id ? 'Edit supplier memory' : 'Add supplier list to memory'}</h3><p>Paste a list or extract it from a WhatsApp/photo screenshot. The app discards the image after extraction; do not submit customer or confidential information to unpaid Gemini.</p></div>{knowledgeForm.id && <button type="button" className="secondary-button" onClick={() => setKnowledgeForm(emptyKnowledge)}>New Entry</button>}</div>
       <div className="assistant-knowledge-header"><label>Supplier name<input value={knowledgeForm.supplier_name} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, supplier_name: event.target.value })} placeholder="Example: ABC Laptop Parts" required /></label><label>List title / date<input value={knowledgeForm.title} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, title: event.target.value })} placeholder="Battery availability · August 2026" required /></label><label>Search tags<input value={knowledgeForm.tags} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, tags: event.target.value })} placeholder="battery, Dell, HP" /></label></div>
@@ -9535,7 +10401,7 @@ function AssistantSettingsPage() {
 
 function PaymentTypesPage() {
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other' });
+  const [form, setForm] = useState({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other', requires_cheque_details: false });
   const [error, setError] = useState('');
 
   useEffect(() => { loadRows(); }, []);
@@ -9555,13 +10421,14 @@ function PaymentTypesPage() {
       name: form.name.trim(),
       is_paid_method: form.is_paid_method,
       affects_cashflow: form.is_paid_method ? form.affects_cashflow : false,
-      account_kind: form.is_paid_method && form.affects_cashflow ? form.account_kind : 'other',
+      account_kind: form.requires_cheque_details ? 'bank' : form.is_paid_method && form.affects_cashflow ? form.account_kind : 'other',
+      requires_cheque_details: !!form.requires_cheque_details,
       is_active: true
     };
     const { error: insertError } = await supabase.from('payment_methods').insert(payload);
     if (insertError) setError(insertError.message);
     else {
-      setForm({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other' });
+      setForm({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other', requires_cheque_details: false });
       loadRows();
     }
   }
@@ -9601,24 +10468,26 @@ function PaymentTypesPage() {
             Affects cash/bank cashflow
           </label>
           {form.is_paid_method && form.affects_cashflow && <><label>Cashflow account type</label><select value={form.account_kind} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">Cash and bank accounts appear separately on the Cashflow page and can be used for transfers.</small></>}
+          <label className="checkbox-label"><input type="checkbox" checked={form.requires_cheque_details} onChange={(e) => setForm({ ...form, requires_cheque_details: e.target.checked, is_paid_method: true, affects_cashflow: true, account_kind: e.target.checked ? 'bank' : form.account_kind })} /> Require cheque number and date</label>
           <button className="primary-button full-width">Save</button>
         </form>
       </div>
       <div className="panel-card table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Account Type</th><th>Affects Cashflow</th><th>Active</th><th>Action</th></tr></thead>
+          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Account Type</th><th>Cheque details</th><th>Affects Cashflow</th><th>Active</th><th>Action</th></tr></thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.id}>
                 <td>{row.name}</td>
                 <td>{row.is_paid_method === false ? 'Unpaid / Credit' : 'Paid'}</td>
                 <td>{row.account_kind === 'cash' ? 'Cash drawer' : row.account_kind === 'bank' ? 'Bank account' : 'Other'}</td>
+                <td>{row.requires_cheque_details ? 'Required' : '-'}</td>
                 <td>{row.affects_cashflow ? 'Yes' : 'No'}</td>
                 <td>{row.is_active ? 'Yes' : 'No'}</td>
                 <td><button className="small-button" onClick={() => toggleActive(row)}>{row.is_active ? 'Disable' : 'Enable'}</button></td>
               </tr>
             ))}
-            {rows.length === 0 && <EmptyRow colSpan={6} text="No payment types." />}
+            {rows.length === 0 && <EmptyRow colSpan={7} text="No payment types." />}
           </tbody>
         </table>
       </div>
@@ -10144,9 +11013,9 @@ function SplitTables({ titleA, tableA, titleB, tableB }) {
   );
 }
 
-function StatCard({ label, value }) {
+function StatCard({ label, value, className = '' }) {
   return (
-    <div className="stat-card">
+    <div className={`stat-card ${className}`.trim()}>
       <p>{label}</p>
       <strong>{value}</strong>
     </div>

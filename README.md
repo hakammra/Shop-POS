@@ -30,6 +30,7 @@ The Tech Assistant page calls Gemini through the `tech-assistant` Supabase Edge 
 2. Create a Gemini API key in Google AI Studio.
 3. Store it as an Edge Function secret: `npx supabase secrets set GEMINI_API_KEY=YOUR_KEY`.
 4. Optional model override: `npx supabase secrets set GEMINI_MODEL=gemini-3.5-flash`.
+   For lower free-tier demand, use `npx supabase secrets set GEMINI_MODEL=gemini-3.5-flash-lite`. The function automatically retries `429` and `503` failures once with `GEMINI_FALLBACK_MODEL`, which defaults to `gemini-3.5-flash-lite`; override it with `npx supabase secrets set GEMINI_FALLBACK_MODEL=MODEL_ID` if needed.
 5. Deploy: `npx supabase functions deploy tech-assistant`.
 
 Existing staff receive the assistant permission when migration 044 is applied. Administrators can enable or disable it later from Settings, Users & Security.
@@ -41,6 +42,30 @@ Product and supplier results are only queried when the question explicitly asks 
 Run `supabase/sql/048_assistant_business_data.sql` after migration 045, then redeploy the `tech-assistant` Edge Function to add read-only business questions. Administrators automatically have access. Staff require the separate **Allow AI to read customer, supplier and financial data** permission. The assistant can then look up matching customer purchases, documents, customer balances, supplier payables and operational totals. Contact details are not sent to Gemini, the assistant cannot edit records, and saved business conversations are hidden automatically if the permission is later removed.
 
 Run `supabase/sql/051_assistant_product_search.sql` after migration 050, then redeploy the `tech-assistant` Edge Function. Migration 051 improves product ranking for item codes, barcodes, model numbers, capacity and wattage searches, while keeping the lookup read-only. Staff with Tech Assistant permission also receive the floating Assistant launcher on every POS page, including the mobile layout.
+
+The current Edge Function also performs compatibility-aware catalogue planning and filters the visible product cards through the assistant's final specification check. Redeploy `tech-assistant` after updating the function so device-model questions can search likely part specifications and unrelated same-brand products are not shown as matches.
+
+Run `supabase/sql/054_assistant_strict_product_relevance.sql` after migration 053. It prevents one-word catalogue matches from becoming suggestions, requires the requested product class, and makes numeric requirements such as screen size and pin count mandatory. No Edge Function redeploy is needed for the SQL itself, but the compatibility-aware function code above must also be deployed.
+
+## Thermal profile and job labels
+
+Run `supabase/sql/052_party_codes_thermal_labels.sql` in the Supabase SQL Editor, then run `supabase/sql/055_two_letter_party_codes.sql`. Migration 055 converts both customer and supplier profiles to the same compact `AB-A1B2C3` format: the first two letters of the name, no `CUS` or `SUP` prefix, and a short unique part. Profile pages and selected repair jobs can then open the code-only thermal-label designer, choose small label dimensions such as 20 × 10 mm or 30 × 15 mm, swap orientation, preview the result, and print through the operating system printer dialog.
+
+## Register, cheques and minimum profit
+
+Run `supabase/sql/056_whatsapp_register_margin_cheques.sql` after migration 055. It adds the 5% default minimum-profit rule, cheque references/dates for POS, purchases and party payments, the Cheque bank payment type, and per-device daily register opening/closing reconciliation. The completed-sale screen can share its PDF through the device share sheet; on desktop browsers it downloads the PDF and opens WhatsApp so the file can be attached to the chosen chat.
+
+## Unconfirmed sales and job receipts
+
+Run `supabase/sql/057_unconfirmed_sales_job_documents.sql` after migration 056. POS staff can then save a sale for internal review without posting stock, cashflow, customer balances, accounting, or reports. The Documents page shows the internal marker, lets staff edit or delete an unconfirmed sale, and lets an administrator load it into POS for final confirmation. Customer printouts, PDFs, and WhatsApp copies deliberately remain ordinary **Sales Invoice** documents with no visible internal-review wording. Repair jobs can also print or download a dedicated landscape job receipt.
+
+Run `supabase/sql/058_staff_document_attribution.sql` after migration 057. Every new document keeps the active PIN-unlocked POS staff member as its creator and the most recent editor separately. COD orders also lock that creator as **Placed by**, providing a reliable basis for future staff commission reports; another staff member editing the order cannot take ownership of it.
+
+Run `supabase/sql/059_assistant_pos_staff_handbook.sql` after migration 058, then redeploy the `tech-assistant` Edge Function. It adds an admin-editable POS Staff Handbook under **Settings → AI Assistant** and seeds the current sales, return/exchange, COD, job, quotation, payment, purchase, cheque, printing, and daily-register procedures. Staff can ask how to perform a workflow without receiving source-code or write access. The assistant uses exact handbook steps and asks a focused clarification when the correct workflow is uncertain.
+
+Run `supabase/sql/060_assistant_exact_pos_workflows.sql` after migration 059, then redeploy `tech-assistant`. It gives clear POS how-to questions a deterministic answer from the approved handbook instead of allowing the AI model to replace the workflow with generic POS advice. The COD guide explicitly starts from **COD Orders → New Order**, reserves stock on save, and creates the final sale only through **Payment Received - Create Sale**.
+
+Run `supabase/sql/061_party_profile_editing.sql` after migration 060. Customer/Supplier profiles then have **Edit Profile** for contact corrections and safe role promotion. An existing supplier can be marked as a customer, or an existing customer as a supplier, while keeping one profile, synchronizing the purchase supplier record, and retaining existing roles and document history.
 
 ## Online storefront
 
