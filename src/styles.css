@@ -5327,6 +5327,20 @@ body.pos-resizing {
 .whatsapp-icon path:first-child { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .whatsapp-icon path:last-child { fill: currentColor; stroke: none; }
 .whatsapp-document-button:not(:disabled) span { color: #25d366; }
+.party-payment-share-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 17px;
+  border-color: rgba(37, 211, 102, .42);
+  background: linear-gradient(110deg, rgba(37, 211, 102, .1), var(--panel) 55%);
+}
+.party-payment-share-card > div { min-width: 0; display: grid; gap: 4px; }
+.party-payment-share-card span { color: #7fe3a4; font-size: 10px; font-weight: 850; letter-spacing: .06em; text-transform: uppercase; }
+.party-payment-share-card strong { font-size: 15px; }
+.party-payment-share-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.45; white-space: pre-line; }
+.party-payment-share-card .whatsapp-share-button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .party-profile-edit-modal { width: min(540px, calc(100vw - 24px)); }
 .party-profile-edit-modal form { display: grid; gap: 11px; margin-top: 14px; }
 .party-profile-edit-modal form > label { display: grid; gap: 5px; }
@@ -5362,6 +5376,8 @@ body.pos-resizing {
   .daily-register-heading { align-items: stretch; flex-direction: column; }
   .daily-register-heading button { width: 100%; }
   .daily-register-totals { grid-template-columns: 1fr; }
+  .party-payment-share-card { align-items: stretch; flex-direction: column; }
+  .party-payment-share-card .whatsapp-share-button { justify-content: center; width: 100%; }
 }
 
 .pos-unconfirmed-toggle {

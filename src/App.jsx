@@ -5988,6 +5988,61 @@ async function shareAccountingDocumentOnWhatsApp(document, items = [], flows = [
   return 'WhatsApp opened and the invoice PDF was downloaded. Choose a chat, then attach the downloaded PDF.';
 }
 
+function whatsappDateTime(value) {
+  const parsed = value ? new Date(value) : new Date();
+  if (Number.isNaN(parsed.getTime())) return fmtDate(value);
+  return parsed.toLocaleString('en-LK', {
+    year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+  });
+}
+
+function openWhatsAppTextMessage(text) {
+  const clean = String(text || '').trim();
+  if (!clean) throw new Error('There is no WhatsApp message to send.');
+  window.open(`https://wa.me/?text=${encodeURIComponent(clean)}`, '_blank', 'noopener,noreferrer');
+}
+
+function partyPaymentWhatsAppMessage(receipt, companySettings = DEFAULT_COMPANY_SETTINGS) {
+  const shopName = companySettings?.shop_name || 'Computer Shop';
+  const isSupplier = receipt?.documentType === 'supplier_payment';
+  const isMoneyOut = receipt?.direction === 'out';
+  const action = isSupplier
+    ? isMoneyOut ? 'a payment made to you' : 'receipt of your payment/refund'
+    : isMoneyOut ? 'a refund/payment made to you' : 'receipt of your payment';
+  const balance = numberValue(receipt?.newOutstanding);
+  const balanceLine = Math.abs(balance) <= 0.005
+    ? 'Your account balance is now fully settled.'
+    : balance > 0
+      ? `Remaining amount due to ${shopName}: ${money(balance)}.`
+      : `Remaining amount in your favour: ${money(Math.abs(balance))}.`;
+  const method = receipt?.paymentMethodName ? ` via ${receipt.paymentMethodName}` : '';
+  return [
+    `Hello ${receipt?.partyName || 'Customer'},`,
+    `${shopName} confirms ${action} of ${money(receipt?.amount)} on ${whatsappDateTime(receipt?.savedAt)}${method}.`,
+    receipt?.documentNo ? `Reference: ${receipt.documentNo}.` : '',
+    balanceLine,
+    'Thank you.'
+  ].filter(Boolean).join('\n');
+}
+
+function codDispatchWhatsAppMessage(order, items = [], companySettings = DEFAULT_COMPANY_SETTINGS) {
+  const shopName = companySettings?.shop_name || 'Computer Shop';
+  const itemLines = (items || []).map((item) => {
+    const qty = numberValue(item.qty);
+    return `- ${qty} x ${item.description || item.item_code || 'Item'}`;
+  });
+  return [
+    `Hello ${order?.recipient_name || 'Customer'},`,
+    `Your order ${order?.document_no || ''} from ${shopName} has been dispatched on ${whatsappDateTime(order?.dispatched_at)}.`,
+    itemLines.length ? 'Items:' : '',
+    ...itemLines,
+    `Amount to pay on delivery: ${money(order?.cod_collect_amount || order?.total_amount)}.`,
+    order?.delivery_service ? `Courier: ${order.delivery_service}.` : '',
+    order?.tracking_number ? `Tracking number: ${order.tracking_number}.` : '',
+    'Thank you.'
+  ].filter(Boolean).join('\n');
+}
+
 function writePrintWindow(popup, title, body, companySettings = DEFAULT_COMPANY_SETTINGS, autoPrint = true) {
   const settings = { ...DEFAULT_COMPANY_SETTINGS, ...(companySettings || {}) };
   const paperSize = settings.paper_size === 'A4' ? 'A4' : 'A5';
@@ -6653,8 +6708,21 @@ function CodOrdersPage() {
     if (statusError) setError(statusError.message);
     else {
       if (feeNow > 0) setAction((current) => ({ ...current, feePaidNow: 0, receivedAmount: numberValue(current.receivedAmount) + feeNow }));
-      setMessage(`${selected.document_no}: ${codStatusLabel(status)}.`);
+      setMessage(status === 'dispatched'
+        ? `${selected.document_no}: ${codStatusLabel(status)}. The WhatsApp dispatch notice is ready.`
+        : `${selected.document_no}: ${codStatusLabel(status)}.`);
       await loadCodOrders();
+    }
+  }
+
+  function shareCodDispatchNotice() {
+    if (!selected) return;
+    setError('');
+    try {
+      openWhatsAppTextMessage(codDispatchWhatsAppMessage(selected, items, companySettings));
+      setMessage('WhatsApp opened with the dispatch message. Choose the customer and send it.');
+    } catch (shareError) {
+      setError(shareError.message || String(shareError));
     }
   }
 
@@ -6777,6 +6845,8 @@ function CodOrdersPage() {
   const canReturn = ['dispatched', 'awaiting_settlement'].includes(selected?.status);
   const canCancel = ['awaiting_packing', 'packed'].includes(selected?.status);
   const canDelete = selected && ['awaiting_packing', 'packed', 'cancelled'].includes(selected.status) && !selected.linked_document_id && numberValue(selected.delivery_charge_paid) === 0;
+  const canShareDispatch = selected && !['returned', 'cancelled'].includes(selected.status)
+    && (Boolean(selected.dispatched_at) || ['dispatched', 'awaiting_settlement', 'converted'].includes(selected.status));
 
   if (formMode) return <section className="page-section"><CodOrderForm document={formMode === 'edit' ? selected : null} onClose={() => setFormMode('')} onSaved={async () => { setFormMode(''); await loadCodOrders(); setMessage('COD order saved and stock reserved.'); }} /></section>;
 
@@ -6789,6 +6859,7 @@ function CodOrdersPage() {
         <button className="toolbar-button" disabled={!selected || !canAct} onClick={() => setFormMode('edit')}><span>✎</span>Edit</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => printCodDocument(selected, items, 'label', companySettings)}><span>▣</span>Print Label</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => printCodDocument(selected, items, 'bill', companySettings)}><span>▤</span>Print Bill</button>
+        <button className="toolbar-button whatsapp-document-button" disabled={!canShareDispatch} title={canShareDispatch ? 'Send a dispatch notice through WhatsApp' : 'Available after the order is marked dispatched'} onClick={shareCodDispatchNotice}><span><WhatsAppIcon /></span>WhatsApp Dispatch</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => openCourierTracking(action.service || selected?.delivery_service)}><span>⌕</span>Open Tracking</button>
         <button className={`toolbar-button ${showWorkflow ? 'bright' : ''}`} disabled={!canAct} onClick={() => setShowWorkflow((current) => !current)}><span>⚙</span>{showWorkflow ? 'Hide Workflow' : 'Update / Workflow'}</button>
         {canCancel && <button className="toolbar-button" disabled={busy} onClick={() => runStatus('cancelled')}><span>×</span>Cancel</button>}
@@ -8250,6 +8321,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
   const [selectedId, setSelectedId] = useState('');
   const [transactions, setTransactions] = useState([]);
   const [paymentMethods, setPaymentMethods] = useState([]);
+  const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -8260,10 +8332,15 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
   const [paymentForm, setPaymentForm] = useState({ amount: '', method_id: '', document_type: 'customer_payment', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
   const [showThermalLabel, setShowThermalLabel] = useState(false);
+  const [lastPaymentShare, setLastPaymentShare] = useState(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
-  useEffect(() => { loadRows(); loadPaymentMethods(); }, []);
+  useEffect(() => {
+    loadRows();
+    loadPaymentMethods();
+    fetchCompanySettings().then(setCompanySettings).catch(() => {});
+  }, []);
   useEffect(() => {
     if (!customerTarget?.id || !rows.some((row) => row.id === customerTarget.id)) return;
     setFilter('customers');
@@ -8272,6 +8349,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
     onCustomerTargetHandled?.();
   }, [customerTarget?.nonce, rows]);
   useEffect(() => {
+    setLastPaymentShare(null);
     if (selectedId) loadTransactions(selectedId);
     else setTransactions([]);
   }, [selectedId]);
@@ -8280,6 +8358,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
     if (selectedId) loadTransactions(selectedId);
   });
   useRealtimeRefresh(['payment_methods'], loadPaymentMethods);
+  useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
 
   const selected = rows.find((row) => row.id === selectedId);
   const selectedOutstanding = selected ? Number(selected.due_balance || 0) - Number(selected.store_credit_balance || 0) : 0;
@@ -8464,11 +8543,20 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
       setError('Enter the cheque number and cheque date.');
       return;
     }
+    const paymentAmount = Number(paymentForm.amount || 0);
+    const paymentSnapshot = {
+      partyName: selected?.name || 'Customer',
+      documentType: paymentForm.document_type,
+      amount: paymentAmount,
+      direction: automaticPaymentDirection,
+      paymentMethodName: selectedPartyPaymentMethod?.name || '',
+      savedAt: new Date().toISOString()
+    };
     const { data, error: payError } = await supabase.rpc('save_party_payment_v56', {
       p_profile_id: selectedId,
       p_document_type: paymentForm.document_type,
       p_payment_method_id: paymentForm.method_id || null,
-      p_amount: Number(paymentForm.amount || 0),
+      p_amount: paymentAmount,
       p_direction: automaticPaymentDirection,
       p_note: paymentForm.note || null,
       p_cheque_details: {
@@ -8482,6 +8570,12 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
       setError(payError.message);
       return;
     }
+    setLastPaymentShare({
+      ...paymentSnapshot,
+      documentNo: data?.document_no || '',
+      documentType: data?.document_type || paymentSnapshot.documentType,
+      newOutstanding: numberValue(data?.new_outstanding)
+    });
     setPaymentForm((current) => ({ ...current, amount: '', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' }));
     setMessage(`${documentTypeLabel(data?.document_type)} ${data?.document_no} saved. New outstanding: ${data?.new_outstanding < 0 ? '-' : ''}${money(Math.abs(Number(data?.new_outstanding || 0)))}`);
     await loadRows();
@@ -8518,6 +8612,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
         ? automaticPaymentDirection === 'out' ? 'Pay supplier' : 'Receive supplier refund'
         : automaticPaymentDirection === 'out' ? 'Refund customer' : 'Receive customer payment';
     const profileType = `${selected.is_customer !== false ? 'Customer' : ''}${selected.is_supplier ? `${selected.is_customer !== false ? ' / ' : ''}Supplier` : ''}`;
+    const paymentShareMessage = lastPaymentShare ? partyPaymentWhatsAppMessage(lastPaymentShare, companySettings) : '';
     return (
       <section className="page-section party-detail-page">
         <div className="party-detail-hero panel-card">
@@ -8533,6 +8628,17 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
         </div>
         {error && <div className="error-box">{error}</div>}
         {message && <div className="notice success">{message}</div>}
+        {lastPaymentShare && <div className="panel-card party-payment-share-card">
+          <div><span>Payment confirmation ready</span><strong>{lastPaymentShare.documentNo}</strong><p>{paymentShareMessage}</p></div>
+          <button type="button" className="secondary-button whatsapp-share-button" onClick={() => {
+            try {
+              openWhatsAppTextMessage(paymentShareMessage);
+              setMessage('WhatsApp opened with the payment confirmation. Choose the customer or supplier and send it.');
+            } catch (shareError) {
+              setError(shareError.message || String(shareError));
+            }
+          }}><WhatsAppIcon />Send via WhatsApp</button>
+        </div>}
 
         <div className="party-summary-grid">
           <StatCard label="Profile Code" value={selected.party_code || 'Run migration 052'} />
