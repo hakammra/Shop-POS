@@ -6959,6 +6959,23 @@ function firstCell(row, aliases) {
   return '';
 }
 
+function importBoolean(value, fallback = false) {
+  if (value === null || value === undefined || String(value).trim() === '') return fallback;
+  return ['1', 'true', 'yes', 'y', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
+}
+
+function aroniumCategoryPath(value) {
+  const parts = String(value || '').split('/').map((part) => part.trim()).filter(Boolean);
+  if (parts.length > 1 && /^items?\s*list\s*\d*$/i.test(parts[0])) parts.shift();
+  return parts.join('/');
+}
+
+function chunkRows(rows, size = 150) {
+  const chunks = [];
+  for (let index = 0; index < rows.length; index += size) chunks.push(rows.slice(index, index + size));
+  return chunks;
+}
+
 function csvEscape(value) {
   const text = value === null || value === undefined ? '' : String(value);
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -7349,8 +7366,14 @@ function ProductsPage({ assistantTarget = null } = {}) {
 
       if (!rows.length) throw new Error('The selected file has no rows.');
 
+      const looksLikeStockOnlyReport = rows.some((row) => firstCell(row, ['qty.']) !== '')
+        && !rows.some((row) => firstCell(row, ['price', 'sale price', 'selling price', 'selling_price']) !== '');
+      if (looksLikeStockOnlyReport) {
+        throw new Error('This is a stock-only report. Import products.csv here first, then use Import Stock on the Stock page.');
+      }
+
       const categoryPaths = [...new Set(rows
-        .map((row) => String(firstCell(row, ['category', 'productgroup', 'group', 'product group', 'group name'])).trim())
+        .map((row) => aroniumCategoryPath(firstCell(row, ['category', 'productgroup', 'group', 'product group', 'group name'])))
         .filter(Boolean))];
 
       const categoryMap = new Map();
@@ -7359,75 +7382,88 @@ function ProductsPage({ assistantTarget = null } = {}) {
         categoryMap.set(categoryPath.toLowerCase(), categoryId);
       }
 
-      let imported = 0;
+      const productPayloads = [];
+      const stockByCode = new Map();
       let skipped = 0;
+      let negativesReset = 0;
       for (const row of rows) {
         const itemCode = String(firstCell(row, ['sku', 'code', 'item code', 'product code', 'product_code'])).trim();
-        const name = String(firstCell(row, ['name', 'product name', 'description', 'item name'])).trim();
+        const name = String(firstCell(row, ['name', 'product', 'product name', 'description', 'item name'])).trim();
         if (!itemCode || !name) {
           skipped += 1;
           continue;
         }
 
-        const categoryName = String(firstCell(row, ['category', 'productgroup', 'group', 'product group', 'group name'])).trim();
+        const categoryName = aroniumCategoryPath(firstCell(row, ['category', 'productgroup', 'group', 'product group', 'group name']));
         const categoryId = categoryName ? categoryMap.get(categoryName.toLowerCase()) || null : null;
         const cost = numberValue(firstCell(row, ['cost', 'cost price', 'average cost', 'avg cost']), 0);
-        const qtyRaw = firstCell(row, ['quantity', 'qty', 'stock', 'stock quantity', 'sellable stock']);
-        const qty = numberValue(qtyRaw, 0);
+        const qtyRaw = firstCell(row, ['quantity', 'qty', 'qty.', 'stock', 'stock quantity', 'sellable stock']);
+        const importedQty = numberValue(qtyRaw, 0);
+        const qty = Math.max(importedQty, 0);
+        if (qtyRaw !== '' && importedQty < 0) negativesReset += 1;
         const totalValue = numberValue(firstCell(row, ['total', 'stock value', 'total cost']), 0);
         const importedMarkup = numberValue(firstCell(row, ['markup', 'mark up', 'markup percent', 'markup %']), 0);
         let price = numberValue(firstCell(row, ['price', 'sale price', 'selling price', 'selling_price']), 0);
         if (price <= 0 && importedMarkup > 0 && cost > 0) price = priceFromMarkup(cost, importedMarkup);
         if (price <= 0 && totalValue > 0 && qty > 0) price = totalValue / qty;
 
-        const statusRaw = String(firstCell(row, ['status', 'active'])).trim().toLowerCase();
-        const status = ['inactive', 'disabled', 'false', '0', 'no'].includes(statusRaw) ? 'inactive' : 'active';
+        const statusRaw = String(firstCell(row, ['status', 'active', 'is enabled', 'isenabled'])).trim().toLowerCase();
+        const status = ['inactive', 'disabled', 'false', '0', 'no', 'off'].includes(statusRaw) ? 'inactive' : 'active';
         const barcode = String(firstCell(row, ['barcode', 'bar code'])).trim();
-        const lowStock = numberValue(firstCell(row, ['low stock', 'low stock level', 'min stock', 'minimum stock']), 1);
+        const lowStock = Math.max(numberValue(firstCell(row, ['low stock', 'low stock level', 'min stock', 'minimum stock', 'warning quantity', 'reorder point']), 1), 0);
         const warrantyMonths = Math.max(Math.round(numberValue(firstCell(row, ['warranty months', 'warranty', 'warranty period']), 0)), 0);
         const serialRaw = String(firstCell(row, ['serial required', 'requires serial', 'serial number required'])).trim().toLowerCase();
         const serialRequired = ['yes', 'true', '1', 'required'].includes(serialRaw);
         const trackRaw = String(firstCell(row, ['track inventory', 'inventory tracked', 'tracked stock'])).trim().toLowerCase();
-        const stocklessRaw = String(firstCell(row, ['stockless', 'non stock', 'non-stock', 'service item'])).trim().toLowerCase();
+        const stocklessRaw = firstCell(row, ['stockless', 'non stock', 'non-stock', 'service item', 'is service', 'isservice']);
         const trackInventory = trackRaw
           ? !['no', 'false', '0', 'off', 'stockless', 'service'].includes(trackRaw)
-          : !['yes', 'true', '1', 'on'].includes(stocklessRaw);
+          : !importBoolean(stocklessRaw, false);
 
-        const { data: productData, error: productError } = await supabase
-          .from('products')
-          .upsert({
-            item_code: itemCode,
-            name,
-            category_id: categoryId,
-            barcode: barcode || null,
-            avg_cost: cost,
-            selling_price: price,
-            min_stock_level: lowStock,
-            warranty_months: warrantyMonths,
-            serial_required: serialRequired,
-            track_inventory: trackInventory,
-            status,
-            is_active: status === 'active',
-            online_visible: false
-          }, { onConflict: 'item_code' })
-          .select('id')
-          .single();
-
-        if (productError) throw productError;
-
-        if (trackInventory && updateImportStock && qtyRaw !== '') {
-          const { error: stockError } = await supabase
-            .from('stock_balances')
-            .upsert({ product_id: productData.id, sellable_qty: qty }, { onConflict: 'product_id' });
-          if (stockError) throw stockError;
-        } else {
-          await supabase.from('stock_balances').upsert({ product_id: productData.id }, { onConflict: 'product_id' });
-        }
-
-        imported += 1;
+        productPayloads.push({
+          item_code: itemCode,
+          name,
+          category_id: categoryId,
+          barcode: barcode || null,
+          avg_cost: cost,
+          selling_price: price,
+          min_stock_level: lowStock,
+          warranty_months: warrantyMonths,
+          serial_required: serialRequired,
+          track_inventory: trackInventory,
+          status,
+          is_active: status === 'active',
+          online_visible: false
+        });
+        stockByCode.set(itemCode, { qty, supplied: qtyRaw !== '', trackInventory });
       }
 
-      setMessage(`Import complete. Imported/updated ${imported} products. Skipped ${skipped} rows.`);
+      const productIds = new Map();
+      for (const batch of chunkRows(productPayloads)) {
+        const { data: productData, error: productError } = await supabase
+          .from('products')
+          .upsert(batch, { onConflict: 'item_code' })
+          .select('id, item_code');
+        if (productError) throw productError;
+        (productData || []).forEach((product) => productIds.set(product.item_code, product.id));
+      }
+
+      const stockPayloads = productPayloads.map((product) => {
+        const stock = stockByCode.get(product.item_code);
+        if (updateImportStock && stock?.trackInventory && stock.supplied) {
+          return { product_id: productIds.get(product.item_code), sellable_qty: stock.qty };
+        }
+        return { product_id: productIds.get(product.item_code) };
+      }).filter((stock) => stock.product_id);
+
+      for (const batch of chunkRows(stockPayloads)) {
+        const { error: stockError } = await supabase
+          .from('stock_balances')
+          .upsert(batch, { onConflict: 'product_id' });
+        if (stockError) throw stockError;
+      }
+
+      setMessage(`Import complete. Imported/updated ${productPayloads.length} products. ${negativesReset} negative stock ${negativesReset === 1 ? 'quantity was' : 'quantities were'} changed to zero. Skipped ${skipped} incomplete rows.`);
       await loadCategories();
       await loadProducts();
     } catch (err) {
@@ -8028,7 +8064,9 @@ function StockPage({ onOpenDocuments }) {
   const [search, setSearch] = useState('');
   const [filterMode, setFilterMode] = useState('category');
   const [stockView, setStockView] = useState('all');
+  const [importingStock, setImportingStock] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
 
   useEffect(() => { loadCategories(); }, []);
   useEffect(() => {
@@ -8086,6 +8124,73 @@ function StockPage({ onOpenDocuments }) {
     setRows(filtered);
   }
 
+  async function handleStockImport(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setImportingStock(true);
+    setError('');
+    setMessage('Reading stock file...');
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const sourceRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      if (!sourceRows.length) throw new Error('The selected file has no stock rows.');
+
+      const requested = new Map();
+      let incomplete = 0;
+      let negativesReset = 0;
+      sourceRows.forEach((row) => {
+        const itemCode = String(firstCell(row, ['sku', 'code', 'item code', 'product code', 'product_code'])).trim();
+        const qtyRaw = firstCell(row, ['quantity', 'qty', 'qty.', 'stock', 'stock quantity', 'sellable stock']);
+        if (!itemCode || qtyRaw === '') {
+          incomplete += 1;
+          return;
+        }
+        const importedQty = numberValue(qtyRaw, 0);
+        if (importedQty < 0) negativesReset += 1;
+        requested.set(itemCode, Math.max(importedQty, 0));
+      });
+
+      const { data: productRows, error: productError } = await supabase
+        .from('products')
+        .select('id, item_code, track_inventory')
+        .limit(3000);
+      if (productError) throw productError;
+      const productsByCode = new Map((productRows || []).map((product) => [String(product.item_code), product]));
+
+      const stockPayloads = [];
+      let missingProducts = 0;
+      let nonStockSkipped = 0;
+      requested.forEach((qty, itemCode) => {
+        const product = productsByCode.get(itemCode);
+        if (!product) {
+          missingProducts += 1;
+          return;
+        }
+        if (product.track_inventory === false) {
+          nonStockSkipped += 1;
+          return;
+        }
+        stockPayloads.push({ product_id: product.id, sellable_qty: qty });
+      });
+
+      for (const batch of chunkRows(stockPayloads)) {
+        const { error: stockError } = await supabase.from('stock_balances').upsert(batch, { onConflict: 'product_id' });
+        if (stockError) throw stockError;
+      }
+
+      setMessage(`Stock import complete. Updated ${stockPayloads.length} products. ${negativesReset} negative ${negativesReset === 1 ? 'quantity was' : 'quantities were'} changed to zero. Skipped ${missingProducts} unknown product codes, ${nonStockSkipped} non-stock items, and ${incomplete} incomplete rows.`);
+      await loadStock();
+    } catch (importError) {
+      setError(importError.message || String(importError));
+      setMessage('');
+    } finally {
+      setImportingStock(false);
+    }
+  }
+
   const totalCostValue = rows.reduce((sum, row) => sum + numberValue(row.sellable_qty) * numberValue(row.avg_cost), 0);
   const totalSaleValue = rows.reduce((sum, row) => sum + numberValue(row.sellable_qty) * numberValue(row.selling_price), 0);
   const totalAvailableSaleValue = rows.reduce((sum, row) => sum + numberValue(row.available_qty) * numberValue(row.selling_price), 0);
@@ -8101,6 +8206,10 @@ function StockPage({ onOpenDocuments }) {
         <button className="toolbar-button" onClick={onOpenDocuments}><span>⇣</span>Receive purchase</button>
         <button className="toolbar-button" onClick={onOpenDocuments}><span>⏳</span>Transit docs</button>
         <button className="toolbar-button"><span>▤</span>Reserve docs</button>
+        <label className={`toolbar-button file-toolbar-button ${importingStock ? 'disabled' : ''}`}>
+          <span>↓</span>{importingStock ? 'Importing...' : 'Import Stock'}
+          <input type="file" accept=".csv,.xlsx,.xls" disabled={importingStock} onChange={handleStockImport} />
+        </label>
       </div>
 
       <div className="inventory-layout">
@@ -8145,6 +8254,7 @@ function StockPage({ onOpenDocuments }) {
 
           <div className="notice slim-notice stock-guide-note"><strong>Stock quantity guide</strong><InfoTip text="Qty is sellable physical stock. Available is Qty minus Reserved. In Transit is incoming stock not yet received. Warranty and Damaged are non-sellable quantities." /></div>
 
+          {message && <div className="notice success">{message}</div>}
           {error && <div className="error-box">{error}</div>}
 
           <div className="panel-card table-wrap inventory-table-wrap">
@@ -8333,6 +8443,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
   const [previewDocumentId, setPreviewDocumentId] = useState('');
   const [showThermalLabel, setShowThermalLabel] = useState(false);
   const [lastPaymentShare, setLastPaymentShare] = useState(null);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -8387,6 +8498,148 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
       .limit(1500);
     if (rowError) setError(`${rowError.message}${/party_code/i.test(rowError.message || '') ? '. Run migration 052_party_codes_thermal_labels.sql.' : ''}`);
     else setRows(data || []);
+  }
+
+  async function handlePartyImport(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setImporting(true);
+    setError('');
+    setMessage('Reading customer file...');
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const sourceRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      if (!sourceRows.length) throw new Error('The selected file has no customer rows.');
+
+      const payloads = [];
+      let walkInSkipped = 0;
+      let disabledSkipped = 0;
+      let incompleteSkipped = 0;
+      let customerProfiles = 0;
+      let supplierProfiles = 0;
+
+      sourceRows.forEach((row) => {
+        const name = String(firstCell(row, ['name', 'customer name', 'customer'])).trim();
+        const simpleName = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (!name) {
+          incompleteSkipped += 1;
+          return;
+        }
+        if (['walkincustomer', 'walkin'].includes(simpleName)) {
+          walkInSkipped += 1;
+          return;
+        }
+
+        const enabledRaw = firstCell(row, ['is enabled', 'isenabled', 'enabled', 'active']);
+        if (enabledRaw !== '' && !importBoolean(enabledRaw, true)) {
+          disabledSkipped += 1;
+          return;
+        }
+        const customerRaw = firstCell(row, ['is customer', 'iscustomer']);
+        const isCustomer = customerRaw === '' ? true : importBoolean(customerRaw, true);
+        const isSupplier = customerRaw !== '' && !isCustomer;
+
+        const phone = String(firstCell(row, ['phone', 'phone number', 'mobile', 'telephone'])).trim();
+        const addressParts = [
+          firstCell(row, ['street name', 'streetname']),
+          firstCell(row, ['building number', 'buildingnumber']),
+          firstCell(row, ['additional street name', 'additionalstreetname']),
+          firstCell(row, ['plot identification', 'plotidentification']),
+          firstCell(row, ['city subdivision name', 'citysubdivisionname']),
+          firstCell(row, ['city']),
+          firstCell(row, ['country subentity', 'countrysubentity']),
+          firstCell(row, ['postal code', 'postalcode'])
+        ].map((value) => String(value || '').trim()).filter(Boolean);
+
+        payloads.push({
+          name,
+          phone: phone || null,
+          address: [...new Set(addressParts)].join(', ') || null,
+          is_customer: isCustomer,
+          is_supplier: isSupplier
+        });
+        if (isSupplier) supplierProfiles += 1;
+        else customerProfiles += 1;
+      });
+
+      const { data: existingRows, error: existingError } = await supabase
+        .from('customers')
+        .select('id, name, phone')
+        .order('created_at', { ascending: true })
+        .limit(3000);
+      if (existingError) throw existingError;
+
+      const importKey = (row) => `${String(row.name || '').trim().toLowerCase()}|${String(row.phone || '').trim().toLowerCase()}`;
+      const existingByKey = new Map();
+      (existingRows || []).forEach((row) => {
+        const key = importKey(row);
+        if (!existingByKey.has(key)) existingByKey.set(key, []);
+        existingByKey.get(key).push(row.id);
+      });
+
+      const updates = [];
+      const inserts = [];
+      payloads.forEach((payload) => {
+        const matches = existingByKey.get(importKey(payload));
+        const existingId = matches?.shift();
+        if (existingId) updates.push({ id: existingId, ...payload });
+        else inserts.push(payload);
+      });
+
+      for (const batch of chunkRows(updates)) {
+        const { error: updateError } = await supabase.from('customers').upsert(batch, { onConflict: 'id' });
+        if (updateError) throw updateError;
+      }
+      for (const batch of chunkRows(inserts)) {
+        const { error: insertError } = await supabase.from('customers').insert(batch);
+        if (insertError) throw insertError;
+      }
+
+      const supplierPayloads = payloads
+        .filter((payload) => payload.is_supplier)
+        .map(({ name, phone, address }) => ({ name, phone, address }));
+      if (supplierPayloads.length) {
+        const { data: existingSuppliers, error: supplierLoadError } = await supabase
+          .from('suppliers')
+          .select('id, name, phone')
+          .order('created_at', { ascending: true })
+          .limit(3000);
+        if (supplierLoadError) throw supplierLoadError;
+        const existingSuppliersByKey = new Map();
+        (existingSuppliers || []).forEach((supplier) => {
+          const key = importKey(supplier);
+          if (!existingSuppliersByKey.has(key)) existingSuppliersByKey.set(key, []);
+          existingSuppliersByKey.get(key).push(supplier.id);
+        });
+        const supplierUpdates = [];
+        const supplierInserts = [];
+        supplierPayloads.forEach((payload) => {
+          const existingId = existingSuppliersByKey.get(importKey(payload))?.shift();
+          if (existingId) supplierUpdates.push({ id: existingId, ...payload });
+          else supplierInserts.push(payload);
+        });
+        for (const batch of chunkRows(supplierUpdates)) {
+          const { error: supplierUpdateError } = await supabase.from('suppliers').upsert(batch, { onConflict: 'id' });
+          if (supplierUpdateError) throw supplierUpdateError;
+        }
+        for (const batch of chunkRows(supplierInserts)) {
+          const { error: supplierInsertError } = await supabase.from('suppliers').insert(batch);
+          if (supplierInsertError) throw supplierInsertError;
+        }
+      }
+
+      const totalSkipped = walkInSkipped + disabledSkipped + incompleteSkipped;
+      setMessage(`Profile import complete. Imported/updated ${customerProfiles} customers and ${supplierProfiles} suppliers. Skipped ${totalSkipped}: ${walkInSkipped} walk-in, ${disabledSkipped} disabled, and ${incompleteSkipped} without a name.`);
+      await loadRows();
+    } catch (importError) {
+      setError(importError.message || String(importError));
+      setMessage('');
+    } finally {
+      setImporting(false);
+    }
   }
 
   async function loadPaymentMethods() {
@@ -8736,7 +8989,13 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
           <h3>Customers & Suppliers</h3>
           <p>One profile can be a customer, supplier, or both. Click a row to open its transactions and balance payment page.</p>
         </div>
-        <button className="primary-button" onClick={() => setShowAddForm(true)}>+ Add profile</button>
+        <div className="button-row">
+          <label className={`secondary-button file-toolbar-button ${importing ? 'disabled' : ''}`}>
+            {importing ? 'Importing...' : 'Import Profiles'}
+            <input type="file" accept=".csv,.xlsx,.xls" disabled={importing} onChange={handlePartyImport} />
+          </label>
+          <button className="primary-button" onClick={() => setShowAddForm(true)}>+ Add profile</button>
+        </div>
       </div>
       {error && <div className="error-box">{error}</div>}
       {message && <div className="notice success">{message}</div>}
@@ -10993,7 +11252,7 @@ function BackupsPage() {
     setError('');
     setMessage('');
     try {
-      const { data, error: resetError } = await supabase.rpc('admin_reset_business_data_v50', {
+      const { data, error: resetError } = await supabase.rpc('admin_reset_business_data_v62', {
         p_confirmation: resetText
       });
       if (resetError) throw resetError;
@@ -11002,7 +11261,11 @@ function BackupsPage() {
       setMessage('Shop business data was cleared. Administrator accounts and settings were preserved.');
       await loadBackups();
     } catch (resetError) {
-      setError(`${resetError.message || String(resetError)}. Run migration 050_admin_start_fresh.sql in Supabase if it has not been applied.`);
+      const resetMessage = resetError.message || String(resetError);
+      const migrationMissing = /admin_reset_business_data_v62|schema cache|could not find the function/i.test(resetMessage);
+      setError(migrationMissing
+        ? `${resetMessage}. Run migration 062_start_fresh_and_aronium_imports.sql in Supabase, then reload this page.`
+        : resetMessage);
     } finally {
       setBusy(false);
     }
@@ -11072,7 +11335,7 @@ function BackupsPage() {
         <div className="backup-reset-copy">
           <span className="backup-reset-eyebrow">Admin only · irreversible without restoring the backup</span>
           <h3>Start Fresh</h3>
-          <p>Use this once when you are ready to remove testing records and begin using the shop with clean business data. The database creates a manual safety backup immediately before clearing anything.</p>
+          <p>Use this once when you are ready to remove testing records and begin using the shop with clean business data. The database creates a manual safety backup immediately before clearing anything. Requires migration 062.</p>
           <div className="backup-reset-lists">
             <div><strong>Cleared</strong><span>Products, categories and stock</span><span>Customers and suppliers</span><span>Documents, jobs, COD and cashflow</span><span>Online orders, warranties and accounting activity</span><span>Saved assistant conversations</span></div>
             <div><strong>Preserved</strong><span>All admin and staff accounts</span><span>PINs, trusted devices and permissions</span><span>Company, printing and application settings</span><span>Payment types and bank setup</span><span>Store settings and assistant supplier knowledge</span></div>

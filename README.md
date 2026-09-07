@@ -85,8 +85,14 @@ Checkout creates an Online Order request for staff review but does not charge th
 
 ## Start Fresh reset
 
-Run `supabase/sql/050_admin_start_fresh.sql` after migration 049. It adds an administrator-only reset under **Settings → Backups & Restore → Start Fresh**.
+Run `supabase/sql/062_start_fresh_and_aronium_imports.sql` after migration 061. It updates the administrator-only reset under **Settings → Backups & Restore → Start Fresh** for the newer cheque-payment schema. Unlock the POS with an administrator PIN before running the reset.
 
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
+
+## Aronium data import
+
+The Products page accepts Aronium's product CSV directly, including its group hierarchy, SKU, cost, markup, selling price, enabled/service flags and quantity. With **Import stock quantity** enabled, negative opening quantities are changed to zero. The Stock page also accepts Aronium's stock-report workbook through **Import Stock** and matches rows by product code.
+
+The **Customers & Suppliers → Import Profiles** action accepts the Aronium customer export. It ignores the built-in Walk-in customer, imports rows marked as customers, treats rows explicitly marked as non-customer as supplier profiles, and safely matches repeat imports by name and phone.
