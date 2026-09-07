@@ -3016,12 +3016,48 @@ body.pos-resizing {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
-.cashflow-summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cashflow-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(180px, .72fr); }
 .party-summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .party-summary-grid .stat-card,
 .cashflow-summary-grid .stat-card { min-width: 0; padding: 15px 16px; }
 .party-summary-grid .stat-card strong,
 .cashflow-summary-grid .stat-card strong { display: block; font-size: 21px; overflow-wrap: anywhere; }
+.cashflow-summary-grid .cashflow-total-card {
+  position: relative;
+  min-height: 104px;
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  border-width: 1px;
+  border-left-width: 5px;
+  overflow: hidden;
+}
+.cashflow-summary-grid .cashflow-total-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, rgba(255,255,255,.035), transparent 55%);
+}
+.cashflow-summary-grid .cashflow-total-card p {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.cashflow-summary-grid .cashflow-total-card strong { font-size: clamp(24px, 2vw, 31px); }
+.cashflow-total-card.cash-in { border-color: rgba(67,189,119,.58); background: rgba(37,116,70,.2); }
+.cashflow-total-card.cash-in p, .cashflow-total-card.cash-in strong { color: #86e4aa; }
+.cashflow-total-card.cash-out { border-color: rgba(229,89,89,.58); background: rgba(127,42,42,.2); }
+.cashflow-total-card.cash-out p, .cashflow-total-card.cash-out strong { color: #ff9f9f; }
+.cashflow-total-card.net.positive { border-color: rgba(47,169,224,.62); background: rgba(32,102,133,.22); }
+.cashflow-total-card.net.positive p, .cashflow-total-card.net.positive strong { color: #91defd; }
+.cashflow-total-card.net.negative { border-color: rgba(239,129,57,.62); background: rgba(135,67,27,.22); }
+.cashflow-total-card.net.negative p, .cashflow-total-card.net.negative strong { color: #ffbc86; }
+.cashflow-total-card.credit { min-height: 88px; border-color: rgba(155,126,194,.44); background: rgba(91,66,123,.13); }
+.cashflow-total-card.credit p, .cashflow-total-card.credit strong { color: #cbb5e7; }
+.cashflow-total-card.credit strong { font-size: clamp(19px, 1.55vw, 24px); }
 .party-summary-grid .party-balance-stat,
 .party-summary-grid .party-balance-status { border-width: 1px; border-style: solid; }
 .party-summary-grid .party-balance-stat.receivable,
@@ -3208,7 +3244,7 @@ body.pos-resizing {
 }
 
 @media (max-width: 700px) {
-  .party-detail-hero, .party-hero-identity, .transaction-panel-heading, .cashflow-date-filter, .cashflow-heading-actions, .cash-account-heading { align-items: stretch; flex-direction: column; }
+  .party-detail-hero, .party-hero-identity, .transaction-panel-heading, .cashflow-date-filter, .cashflow-heading-actions, .cash-account-heading, .cashflow-transactions-heading { align-items: stretch; flex-direction: column; }
   .party-summary-grid, .cashflow-summary-grid, .cashflow-v17 .cashflow-filter-bar, .accounting-document-summary { grid-template-columns: 1fr; }
   .cash-transfer-grid, .cash-transfer-effect { grid-template-columns: 1fr; }
   .custom-date-range { align-items: stretch; flex-direction: column; width: 100%; }
@@ -3230,6 +3266,21 @@ body.pos-resizing {
   .customer-price-history-row > button { grid-column: 2; grid-row: 1 / span 2; }
   .pos-customer-picker { grid-template-columns: 1fr; }
   .pos-customer-shortcuts { display: grid; grid-template-columns: 1fr 1fr; }
+}
+.cashflow-transactions-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 3px 2px 0;
+}
+.cashflow-transactions-heading > div { min-width: 0; }
+.cashflow-transactions-heading span { color: #8edfff; font-size: 10px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; }
+.cashflow-transactions-heading h3 { margin: 4px 0 3px; font-size: 19px; }
+.cashflow-transactions-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.cashflow-transactions-heading > strong { flex: 0 0 auto; padding: 8px 11px; border: 1px solid var(--line); background: #292929; color: #b9c5cb; }
+@media (max-width: 700px) {
+  .cashflow-transactions-heading { align-items: stretch; flex-direction: column; }
 }
 
 /* v32 jobs workflow and simplified purchase payment */

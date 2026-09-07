@@ -46,7 +46,7 @@ begin
     return new;
   end if;
 
-  delete from public.cheque_payments;
+  delete from public.cheque_payments where true;
   insert into public.cheque_payments
   select * from jsonb_populate_recordset(
     null::public.cheque_payments,
@@ -145,34 +145,34 @@ begin
 
   -- Delete child records before their parents. In particular, cheque_payments
   -- did not exist when migration 050 was written and must be cleared first.
-  delete from public.assistant_messages;
-  delete from public.assistant_conversations;
-  delete from public.online_store_order_items;
-  delete from public.online_store_orders;
-  delete from public.cheque_payments;
-  delete from public.warranty_claim_events;
-  delete from public.warranty_claims;
-  delete from public.warranty_records;
-  delete from public.cashflow_entries;
-  delete from public.stock_movements;
-  delete from public.document_items;
-  delete from public.product_assembly_items;
-  delete from public.pos_drafts;
-  delete from public.documents;
-  delete from public.stock_balances;
-  delete from public.product_assemblies;
-  delete from public.store_product_content;
-  delete from public.products;
-  delete from public.store_category_content;
+  delete from public.assistant_messages where true;
+  delete from public.assistant_conversations where true;
+  delete from public.online_store_order_items where true;
+  delete from public.online_store_orders where true;
+  delete from public.cheque_payments where true;
+  delete from public.warranty_claim_events where true;
+  delete from public.warranty_claims where true;
+  delete from public.warranty_records where true;
+  delete from public.cashflow_entries where true;
+  delete from public.stock_movements where true;
+  delete from public.document_items where true;
+  delete from public.product_assembly_items where true;
+  delete from public.pos_drafts where true;
+  delete from public.documents where true;
+  delete from public.stock_balances where true;
+  delete from public.product_assemblies where true;
+  delete from public.store_product_content where true;
+  delete from public.products where true;
+  delete from public.store_category_content where true;
   update public.categories set parent_id = null where parent_id is not null;
-  delete from public.categories;
-  delete from public.brands;
-  delete from public.customers;
-  delete from public.suppliers;
-  delete from public.document_sequences;
-  delete from public.accounting_journal_lines;
-  delete from public.accounting_journal_entries;
-  delete from public.accounting_opening_balances;
+  delete from public.categories where true;
+  delete from public.brands where true;
+  delete from public.customers where true;
+  delete from public.suppliers where true;
+  delete from public.document_sequences where true;
+  delete from public.accounting_journal_lines where true;
+  delete from public.accounting_journal_entries where true;
+  delete from public.accounting_opening_balances where true;
 
   perform setval('public.warranty_record_number_seq', 1, false);
   perform setval('public.warranty_claim_number_seq', 1, false);

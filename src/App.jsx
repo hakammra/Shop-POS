@@ -498,7 +498,7 @@ function PosApplication() {
   const [activePage, setActivePage] = useState('pos');
   const [loadingSession, setLoadingSession] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [assistantDrawerOpen, setAssistantDrawerOpen] = useState(false);
   const [securityState, setSecurityState] = useState(null);
   const [securityLoading, setSecurityLoading] = useState(false);
@@ -660,7 +660,7 @@ function PosApplication() {
   useEffect(() => {
     if (!assistantDrawerOpen) return undefined;
     const closeOnEscape = (event) => {
-      if (event.key === 'Escape') setAssistantDrawerOpen(false);
+      if (event.key === 'Escape') closeAssistantDrawer();
     };
     document.body.classList.add('assistant-drawer-open');
     window.addEventListener('keydown', closeOnEscape);
@@ -670,10 +670,15 @@ function PosApplication() {
     };
   }, [assistantDrawerOpen]);
 
+  function closeAssistantDrawer() {
+    setAssistantDrawerOpen(false);
+    setSidebarCollapsed(false);
+  }
+
   function toggleAssistantDrawer() {
     if (activePage === 'tech_assistant') return;
     if (assistantDrawerOpen) {
-      setAssistantDrawerOpen(false);
+      closeAssistantDrawer();
       return;
     }
     setSidebarOpen(false);
@@ -725,7 +730,7 @@ function PosApplication() {
                 onClick={() => {
                   setActivePage(item.key);
                   setSidebarOpen(false);
-                  setAssistantDrawerOpen(false);
+                  closeAssistantDrawer();
                 }}
               >
                 <span className="nav-icon"><NavigationIcon name={item.icon} fallback={item.icon} /></span>
@@ -781,7 +786,7 @@ function PosApplication() {
           type="button"
           className="assistant-drawer-backdrop"
           aria-label="Close Tech Assistant"
-          onClick={() => setAssistantDrawerOpen(false)}
+          onClick={closeAssistantDrawer}
         />}
         {staffCan(activeStaff, 'use_ai_assistant') && <div
           className={activePage === 'tech_assistant' ? 'assistant-workspace assistant-full-page' : `assistant-workspace assistant-drawer-shell ${assistantDrawerOpen ? 'open' : ''}`}
@@ -789,12 +794,12 @@ function PosApplication() {
         >
           <TechAssistantPage
             drawerMode={activePage !== 'tech_assistant'}
-            onClose={() => setAssistantDrawerOpen(false)}
+            onClose={closeAssistantDrawer}
             canUseBusiness={staffCan(activeStaff, 'assistant_business_data')}
             canOpenProducts={staffCan(activeStaff, 'manage_products')}
             canOpenDocuments={staffCan(activeStaff, 'view_documents')}
-            onOpenProduct={(product) => { setAssistantProductTarget({ ...product, nonce: Date.now() }); setAssistantDrawerOpen(false); setActivePage('products'); }}
-            onOpenDocument={(document) => { setAssistantDocumentTarget({ ...document, nonce: Date.now() }); setAssistantDrawerOpen(false); setActivePage('documents'); }}
+            onOpenProduct={(product) => { setAssistantProductTarget({ ...product, nonce: Date.now() }); closeAssistantDrawer(); setActivePage('products'); }}
+            onOpenDocument={(document) => { setAssistantDocumentTarget({ ...document, nonce: Date.now() }); closeAssistantDrawer(); setActivePage('documents'); }}
           />
         </div>}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
@@ -5532,9 +5537,9 @@ async function createCashflowReportPdf(entries = [], filters = {}, companySettin
   const externalRows = rows.filter((row) => row.documents?.document_type !== 'account_transfer');
   const cashIn = externalRows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0);
   const cashOut = externalRows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0);
-  const nonCash = rows.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + numberValue(row.amount), 0);
+  const creditActivity = rows.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + numberValue(row.amount), 0);
   const rangeLabel = cashflowReportRangeLabel(filters);
-  const typeLabel = filters.type === 'cash_in' ? 'Cash in' : filters.type === 'cash_out' ? 'Cash out' : filters.type === 'non_cash' ? 'Non-cash' : 'All cash types';
+  const typeLabel = filters.type === 'cash_in' ? 'Cash in' : filters.type === 'cash_out' ? 'Cash out' : filters.type === 'non_cash' ? 'Credit / account activity' : 'All movement types';
   const documentLabel = filters.documentType === 'all' ? 'All documents' : documentTypeLabel(filters.documentType);
   const paymentLabel = filters.paymentMethodId === 'all' ? 'All payment types' : rows.find((row) => row.payment_method_id === filters.paymentMethodId)?.payment_methods?.name || 'Selected payment type';
   const filterDetails = [typeLabel, documentLabel, paymentLabel, filters.search?.trim() ? `Search: ${filters.search.trim()}` : ''].filter(Boolean).join(' | ');
@@ -5578,7 +5583,7 @@ async function createCashflowReportPdf(entries = [], filters = {}, companySettin
     ['Cash In', money(cashIn)],
     ['Cash Out', money(cashOut)],
     ['Net Cashflow', signedMoney(cashIn - cashOut)],
-    ['Non-cash', money(nonCash)]
+    ['Credit Activity', money(creditActivity)]
   ].forEach(([label, value], index) => {
     const x = margin + index * (summaryWidth + summaryGap);
     pdf.setFillColor(index === 2 ? 232 : 245, index === 2 ? 246 : 247, index === 2 ? 251 : 248);
@@ -5595,7 +5600,7 @@ async function createCashflowReportPdf(entries = [], filters = {}, companySettin
   });
 
   const tableRows = rows.map((entry) => {
-    const type = entry.entry_type === 'cash_in' ? 'In' : entry.entry_type === 'cash_out' ? 'Out' : 'Non-cash';
+    const type = entry.entry_type === 'cash_in' ? 'In' : entry.entry_type === 'cash_out' ? 'Out' : 'Credit';
     const account = entry.payment_methods?.name || entry.account_name || '-';
     const amountPrefix = entry.entry_type === 'cash_out' ? '-' : entry.entry_type === 'cash_in' ? '+' : '';
     return [
@@ -8412,6 +8417,9 @@ function cashflowDateRange(preset, customFrom = '', customTo = '') {
   if (preset === 'today') {
     start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     end = new Date(start); end.setDate(end.getDate() + 1);
+  } else if (preset === 'yesterday') {
+    end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    start = new Date(end); start.setDate(start.getDate() - 1);
   } else if (preset === 'week') {
     const mondayOffset = (now.getDay() + 6) % 7;
     start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset);
@@ -9300,11 +9308,12 @@ function CashflowPage() {
     return true;
   });
 
-  const externalEntries = filteredEntries.filter((row) => row.documents?.document_type !== 'account_transfer');
-  const cashIn = externalEntries.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const cashOut = externalEntries.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const nonCash = filteredEntries.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
+  const periodExternalEntries = entries.filter((row) => row.documents?.document_type !== 'account_transfer');
+  const cashIn = periodExternalEntries.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const cashOut = periodExternalEntries.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const creditActivity = entries.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const netCash = cashIn - cashOut;
+  const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'yesterday' ? 'Yesterday' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
   const transferableMethods = paymentMethods.filter((method) => ['cash', 'bank'].includes(method.account_kind));
   const sourceAccount = cashAccounts.find((account) => account.payment_method_id === transferForm.from_payment_method_id);
   const currentRegister = registerState.current;
@@ -9315,7 +9324,7 @@ function CashflowPage() {
       <div className="page-actions">
         <div>
           <h3>Cashflow</h3>
-          <p>Every cash movement is linked to a numbered source document. Click any row to inspect it.</p>
+          <p>Check the selected day’s cash in and out, inspect its source documents, then count and close the daily register.</p>
         </div>
         <div className="cashflow-heading-actions">
           <span>{rangeLabel}</span>
@@ -9332,40 +9341,32 @@ function CashflowPage() {
         {!currentRegister && registerState.history?.[0] && <div className="last-register-summary"><span>Last closed {new Date(registerState.history[0].closed_at).toLocaleString('en-LK')}</span><strong>Counted {money(registerState.history[0].counted_cash)}</strong><em className={Math.abs(numberValue(registerState.history[0].variance)) < .005 ? '' : 'negative-balance'}>Variance {signedMoney(registerState.history[0].variance)}</em></div>}
         {!!registerState.history?.length && <details className="register-history"><summary>Recent register history</summary><div className="table-wrap compact-table"><table><thead><tr><th>Opened</th><th>Closed</th><th>Opening</th><th>Expected</th><th>Counted</th><th>Variance</th><th>Staff</th></tr></thead><tbody>{registerState.history.map((shift) => <tr key={shift.id}><td>{new Date(shift.opened_at).toLocaleString('en-LK')}</td><td>{shift.closed_at ? new Date(shift.closed_at).toLocaleString('en-LK') : 'Open'}</td><td>{money(shift.opening_cash)}</td><td>{shift.status === 'open' ? money(shift.live_expected_cash) : money(shift.expected_cash)}</td><td>{shift.counted_cash == null ? '-' : money(shift.counted_cash)}</td><td>{shift.variance == null ? '-' : signedMoney(shift.variance)}</td><td>{shift.closed_by_name || shift.opened_by_name}</td></tr>)}</tbody></table></div></details>}
       </div>
-      <div className="cashflow-summary-grid">
-        <StatCard label="Cash In" value={money(cashIn)} />
-        <StatCard label="Cash Out" value={money(cashOut)} />
-        <StatCard label="Net" value={money(cashIn - cashOut)} />
-        <StatCard label="Non-cash" value={money(nonCash)} />
-      </div>
-
-      <div className="panel-card cash-account-section">
-        <div className="cash-account-heading"><div><h3>Cash & Bank Accounts</h3><p>Current balances from all recorded cashflow. Transfers move money between accounts without changing profit or total cash.</p></div><button className="primary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button></div>
-        <div className="cash-account-grid">
-          {cashAccounts.filter((account) => ['cash', 'bank'].includes(account.account_kind) && (account.is_active || Math.abs(numberValue(account.balance)) > .004)).map((account) => <div className={`cash-account-card ${account.account_kind}`} key={account.payment_method_id}><span>{account.account_kind === 'cash' ? 'Cash drawer' : 'Bank account'}</span><strong>{account.payment_method_name}</strong><em className={numberValue(account.balance) < 0 ? 'negative-balance' : ''}>{signedMoney(account.balance)}</em><small>Current balance - all time</small></div>)}
-          {!cashAccounts.some((account) => ['cash', 'bank'].includes(account.account_kind)) && <div className="muted-box">Run migration 043 to create Cash, Bank 1 and Bank 2 account balances.</div>}
-        </div>
-      </div>
-
-      {!!chequePayments.length && <div className="panel-card cheque-register-card">
-        <div className="cash-account-heading"><div><h3>Cheque Register</h3><p>Cheque dates and references retained from POS, purchases and balance payments. These payments enter their bank account immediately.</p></div><span>{chequePayments.length} recent</span></div>
-        <div className="table-wrap compact-table"><table><thead><tr><th>Cheque date</th><th>Number</th><th>Bank</th><th>Direction</th><th>Amount</th><th>Document</th><th>Status</th></tr></thead><tbody>{chequePayments.map((cheque) => <tr key={cheque.id} className="clickable-row" onClick={() => cheque.document_id && setPreviewDocumentId(cheque.document_id)}><td>{fmtDate(cheque.cheque_date)}</td><td><strong>{cheque.cheque_number}</strong></td><td>{cheque.bank_name || '-'}</td><td>{cheque.direction === 'out' ? 'Issued / out' : 'Received / in'}</td><td>{money(cheque.amount)}</td><td>{cheque.documents?.document_no || '-'}</td><td><span className="status-pill active">{cheque.status}</span></td></tr>)}</tbody></table></div>
-      </div>}
-
       <div className="panel-card cashflow-date-filter">
         <div className="date-preset-buttons">
-          {[['today', 'Today'], ['week', 'This week'], ['month', 'This month'], ['custom', 'Custom'], ['all', 'All time']].map(([value, label]) => <button key={value} className={filters.datePreset === value ? 'pill-button active' : 'pill-button'} onClick={() => setFilters({ ...filters, datePreset: value })}>{label}</button>)}
+          {[['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This week'], ['month', 'This month'], ['custom', 'Custom'], ['all', 'All time']].map(([value, label]) => <button key={value} className={filters.datePreset === value ? 'pill-button active' : 'pill-button'} onClick={() => setFilters({ ...filters, datePreset: value })}>{label}</button>)}
         </div>
         {filters.datePreset === 'custom' && <div className="custom-date-range"><label>From<input type="date" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></label><span>to</span><label>To<input type="date" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></label></div>}
+      </div>
+
+      <div className="cashflow-summary-grid">
+        <StatCard className="cashflow-total-card cash-in" label="Cash In" value={money(cashIn)} />
+        <StatCard className="cashflow-total-card cash-out" label="Cash Out" value={money(cashOut)} />
+        <StatCard className={`cashflow-total-card net ${netCash < 0 ? 'negative' : 'positive'}`} label="Net Cash" value={money(netCash)} />
+        <StatCard className="cashflow-total-card credit" label="Credit Activity" value={money(creditActivity)} />
+      </div>
+
+      <div className="cashflow-transactions-heading">
+        <div><span>Selected period</span><h3>{rangeLabel} documents and movements</h3><p>The totals above always show the complete selected date range. Use these filters only to narrow the records below.</p></div>
+        <strong>{filteredEntries.length} {filteredEntries.length === 1 ? 'entry' : 'entries'}</strong>
       </div>
 
       <div className="panel-card list-filter-bar cashflow-filter-bar">
         <input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Search document, account, description" />
         <select value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })}>
-          <option value="all">All cash types</option>
+          <option value="all">All movement types</option>
           <option value="cash_in">Cash in</option>
           <option value="cash_out">Cash out</option>
-          <option value="non_cash">Non-cash</option>
+          <option value="non_cash">Credit / account activity</option>
         </select>
         <select value={filters.documentType} onChange={(e) => setFilters({ ...filters, documentType: e.target.value })}>
           <option value="all">All documents</option>
@@ -9394,13 +9395,13 @@ function CashflowPage() {
             {filteredEntries.map((entry) => (
               <tr key={entry.id} className={entry.document_id ? 'clickable-row' : ''} onClick={() => entry.document_id && setPreviewDocumentId(entry.document_id)}>
                 <td>{fmtDate(entry.created_at)}</td>
-                <td><span className={`cash-direction-pill ${entry.entry_type}`}>{entry.entry_type.replace('_', ' ')}</span></td>
+                <td><span className={`cash-direction-pill ${entry.entry_type}`}>{entry.entry_type === 'non_cash' ? 'Credit / account' : entry.entry_type.replace('_', ' ')}</span></td>
                 <td>{entry.account_name}</td>
                 <td>{entry.payment_methods?.name || '-'}</td>
                 <td>{entry.document_id ? <button className="document-link-button" onClick={(event) => { event.stopPropagation(); setPreviewDocumentId(entry.document_id); }}>{entry.documents?.document_no || 'View document'}</button> : '-'}</td>
                 <td>{documentTypeLabel(entry.documents?.document_type)}</td>
                 <td className="description-cell">{entry.description || '-'}</td>
-                <td className={entry.entry_type === 'cash_out' ? 'negative-balance' : entry.entry_type === 'cash_in' ? 'positive-balance' : ''}><strong>{entry.entry_type === 'cash_out' ? '-' : '+'}{money(entry.amount)}</strong></td>
+                <td className={entry.entry_type === 'cash_out' ? 'negative-balance' : entry.entry_type === 'cash_in' ? 'positive-balance' : ''}><strong>{entry.entry_type === 'cash_out' ? '-' : entry.entry_type === 'cash_in' ? '+' : ''}{money(entry.amount)}</strong></td>
                 <td><button className="small-button" disabled={!entry.document_id} onClick={(event) => { event.stopPropagation(); if (entry.document_id) setPreviewDocumentId(entry.document_id); }}>View</button></td>
               </tr>
             ))}
@@ -9408,6 +9409,19 @@ function CashflowPage() {
           </tbody>
         </table>
       </div>
+
+      <div className="panel-card cash-account-section">
+        <div className="cash-account-heading"><div><h3>Cash & Bank Balances</h3><p>Current all-time account balances. These are separate from the selected-period totals above.</p></div><button className="primary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button></div>
+        <div className="cash-account-grid">
+          {cashAccounts.filter((account) => ['cash', 'bank'].includes(account.account_kind) && (account.is_active || Math.abs(numberValue(account.balance)) > .004)).map((account) => <div className={`cash-account-card ${account.account_kind}`} key={account.payment_method_id}><span>{account.account_kind === 'cash' ? 'Cash drawer' : 'Bank account'}</span><strong>{account.payment_method_name}</strong><em className={numberValue(account.balance) < 0 ? 'negative-balance' : ''}>{signedMoney(account.balance)}</em><small>Current balance · all time</small></div>)}
+          {!cashAccounts.some((account) => ['cash', 'bank'].includes(account.account_kind)) && <div className="muted-box">Run migration 043 to create Cash, Bank 1 and Bank 2 account balances.</div>}
+        </div>
+      </div>
+
+      {!!chequePayments.length && <div className="panel-card cheque-register-card">
+        <div className="cash-account-heading"><div><h3>Cheque Register</h3><p>Cheque dates and references retained from POS, purchases and balance payments. These payments enter their bank account immediately.</p></div><span>{chequePayments.length} recent</span></div>
+        <div className="table-wrap compact-table"><table><thead><tr><th>Cheque date</th><th>Number</th><th>Bank</th><th>Direction</th><th>Amount</th><th>Document</th><th>Status</th></tr></thead><tbody>{chequePayments.map((cheque) => <tr key={cheque.id} className="clickable-row" onClick={() => cheque.document_id && setPreviewDocumentId(cheque.document_id)}><td>{fmtDate(cheque.cheque_date)}</td><td><strong>{cheque.cheque_number}</strong></td><td>{cheque.bank_name || '-'}</td><td>{cheque.direction === 'out' ? 'Issued / out' : 'Received / in'}</td><td>{money(cheque.amount)}</td><td>{cheque.documents?.document_no || '-'}</td><td><span className="status-pill active">{cheque.status}</span></td></tr>)}</tbody></table></div>
+      </div>}
 
       {showAdd && (
         <div className="modal-backdrop">
