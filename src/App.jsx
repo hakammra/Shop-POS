@@ -6,7 +6,7 @@ import Storefront from './Storefront';
 const NAV_ITEMS = [
   { key: 'pos', label: 'POS', icon: '▦', group: 'Checkout', permission: 'pos_sales' },
   { key: 'dashboard', label: 'Dashboard', icon: 'chart', group: 'Checkout', permission: 'view_dashboard' },
-  { key: 'cod_orders', label: 'COD Orders', icon: '\uD83D\uDE9A', group: 'Orders & Service', permission: 'manage_cod_orders' },
+  { key: 'cod_orders', label: 'Delivery Orders', icon: '\uD83D\uDE9A', group: 'Orders & Service', permission: 'manage_cod_orders' },
   { key: 'online_orders', label: 'Online Orders', icon: 'globe', group: 'Orders & Service', permission: 'manage_online_orders' },
   { key: 'jobs', label: 'Jobs & Repairs', icon: 'wrench', group: 'Orders & Service', permission: 'manage_jobs' },
   { key: 'tech_assistant', label: 'Tech Assistant', icon: 'AI', group: 'Orders & Service', permission: 'use_ai_assistant' },
@@ -37,7 +37,7 @@ const STAFF_PERMISSION_GROUPS = [
   {
     label: 'Orders and service',
     items: [
-      { key: 'manage_cod_orders', label: 'Manage COD orders', default: true },
+      { key: 'manage_cod_orders', label: 'Manage delivery orders', default: true },
       { key: 'manage_online_orders', label: 'Manage online orders', default: true },
       { key: 'manage_jobs', label: 'Manage jobs and repairs', default: true },
       { key: 'manage_warranty', label: 'Manage warranty claims', default: true },
@@ -121,7 +121,7 @@ const DOCUMENT_TYPES = [
   { value: 'other_income', label: 'Other Income' },
   { value: 'account_transfer', label: 'Account Transfer' },
   { value: 'online_order', label: 'Online Order' },
-  { value: 'cod_order', label: 'COD Order' }
+  { value: 'cod_order', label: 'Delivery Order' }
 ];
 
 const DOCUMENT_QUICK_FILTERS = [
@@ -810,7 +810,7 @@ function PosApplication() {
           />
         </div>}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
-          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'COD Orders' ? 'COD' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
+          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'Delivery Orders' ? 'Delivery' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
           <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
           <button type="button" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
         </nav>
@@ -1305,7 +1305,7 @@ function TechAssistantPage({ onOpenProduct, onOpenDocument, onClose, drawerMode 
         <div className="panel-card tech-chat-card">
           <div className="tech-chat-status"><div><span className="realtime-sync-dot" /><strong>{model}</strong></div><small>{canUseBusiness ? 'POS guidance, technical help and permission-aware read-only lookup' : 'POS staff guidance, technical help and read-only product lookup'}</small></div>
           <div className="tech-conversation" ref={conversationRef}>
-            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>{loadingConversation ? 'Loading conversation...' : 'What do you need?'}</h4><p>Ask how to complete a task in this POS, or ask for product stock, supplier parts or technical help{canUseBusiness ? ', purchases, documents and balances' : ''}. You can speak Tamil using the microphone.</p><div className="tech-staff-help-examples"><button type="button" onClick={() => setQuestion('How do I make an exchange bill?')}>How do I exchange an item?</button><button type="button" onClick={() => setQuestion('How do I create and process a COD order?')}>How do COD orders work?</button><button type="button" onClick={() => setQuestion('How do I save a sale for admin review?')}>Save a sale for review</button></div></div>}
+            {!messages.length && <div className="tech-chat-empty"><span>AI</span><h4>{loadingConversation ? 'Loading conversation...' : 'What do you need?'}</h4><p>Ask how to complete a task in this POS, or ask for product stock, supplier parts or technical help{canUseBusiness ? ', purchases, documents and balances' : ''}. You can speak Tamil using the microphone.</p><div className="tech-staff-help-examples"><button type="button" onClick={() => setQuestion('How do I make an exchange bill?')}>How do I exchange an item?</button><button type="button" onClick={() => setQuestion('How do I create a COD or prepaid delivery order?')}>How do delivery orders work?</button><button type="button" onClick={() => setQuestion('How do I save a sale for admin review?')}>Save a sale for review</button></div></div>}
             {messages.map((message, messageIndex) => <article key={message.id} className={`tech-message ${message.role}`}>
               <div className="tech-message-heading"><strong>{message.role === 'user' ? 'You' : 'Tech Assistant'}</strong><div>{message.imageName && <small>Photo: {message.imageName}</small>}{message.role === 'assistant' && <button type="button" className={speakingMessageId === message.id ? 'tech-speak-button speaking' : 'tech-speak-button'} onClick={() => speakAnswer(message.text, message.language || language, message.id)}>{speakingMessageId === message.id ? 'Stop' : 'Read aloud'}</button>}</div></div>
               <AssistantMessageText text={message.text} />
@@ -2921,7 +2921,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       todayInvoices: todayInvoices.length,
       outstanding: (outstandingRes.data || []).reduce((sum, row) => sum + numberValue(row.balance_amount), 0),
       lowStock,
-      pendingCod: (codRes.data || []).filter((row) => !['settled', 'returned', 'cancelled'].includes(row.status)).length,
+      pendingCod: (codRes.data || []).filter((row) => !['converted', 'delivered', 'settled', 'returned', 'cancelled'].includes(row.status)).length,
       onlineNew: onlineRes.error ? 0 : (onlineRes.data || []).length,
       recentDocuments: recentRes.data || []
     });
@@ -2939,7 +2939,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
         <article className="dashboard-metric sales"><span>Today's sales</span><strong>{money(stats.todaySales)}</strong><small>{stats.todayInvoices} invoice{stats.todayInvoices === 1 ? '' : 's'} saved today</small><i>↗</i></article>
         <article className="dashboard-metric cash"><span>Cashflow in</span><strong>{money(stats.cashIn)}</strong><small>Out {money(stats.cashOut)} · Net {money(stats.cashIn - stats.cashOut)}</small><i>⇅</i></article>
         <article className="dashboard-metric credit"><span>Customer outstanding</span><strong>{money(stats.outstanding)}</strong><small>Open invoice balances</small><i>◷</i></article>
-        <article className="dashboard-metric orders"><span>Orders needing work</span><strong>{stats.pendingCod + stats.onlineNew}</strong><small>{stats.pendingCod} COD · {stats.onlineNew} new online</small><i>◎</i></article>
+        <article className="dashboard-metric orders"><span>Orders needing work</span><strong>{stats.pendingCod + stats.onlineNew}</strong><small>{stats.pendingCod} delivery · {stats.onlineNew} new online</small><i>◎</i></article>
       </div>
 
       <div className="dashboard-content-grid">
@@ -3323,7 +3323,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         id: createClientId(),
         kind: 'cod_order',
         documentType: type,
-        label: 'New COD Order'
+        label: 'New Delivery Order'
       };
       setDocumentTabs((current) => [...current, tab]);
       setActiveDocumentTabId(tab.id);
@@ -3342,7 +3342,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       return;
     }
     if (!['purchase', 'stock_in_transit', 'quotation', 'cod_order'].includes(selected.document_type)) {
-      setError('Full tab editing is available for Purchase, Stock in Transit, Quotation, and COD Order documents.');
+      setError('Full tab editing is available for Purchase, Stock in Transit, Quotation, and Delivery Order documents.');
       return;
     }
     if (!canManageDocumentType(selected.document_type)) {
@@ -5505,6 +5505,7 @@ function codStatusLabel(status) {
     awaiting_packing: 'Awaiting packing',
     packed: 'Packed',
     dispatched: 'Dispatched',
+    delivered: 'Delivered',
     awaiting_settlement: 'Delivered / Awaiting payment',
     converted: 'Paid / Converted to sale',
     returned: 'Returned',
@@ -6089,7 +6090,9 @@ function codDispatchWhatsAppMessage(order, items = [], companySettings = DEFAULT
     `Your order ${order?.document_no || ''} from ${shopName} has been dispatched on ${whatsappDateTime(order?.dispatched_at)}.`,
     itemLines.length ? 'Items:' : '',
     ...itemLines,
-    `Amount to pay on delivery: ${money(order?.cod_collect_amount || order?.total_amount)}.`,
+    order?.delivery_payment_mode === 'prepaid'
+      ? 'Payment status: Paid in full.'
+      : `Amount to pay on delivery: ${money(order?.cod_collect_amount || order?.total_amount)}.`,
     order?.delivery_service ? `Courier: ${order.delivery_service}.` : '',
     order?.tracking_number ? `Tracking number: ${order.tracking_number}.` : '',
     'Thank you.'
@@ -6173,7 +6176,7 @@ async function createCodLabelsPdf(orders = [], companySettings = DEFAULT_COMPANY
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const pagePadding = 5;
+  const pagePadding = 7;
   const slotHeight = (pageHeight - pagePadding * 2) / 3;
   const contentWidth = pageWidth - pagePadding * 2;
 
@@ -6181,9 +6184,8 @@ async function createCodLabelsPdf(orders = [], companySettings = DEFAULT_COMPANY
     if (index > 0 && index % 3 === 0) pdf.addPage('a5', 'portrait');
     const slot = index % 3;
     const y = pagePadding + slot * slotHeight;
-    const boxY = y + 1.2;
-    const boxHeight = slotHeight - 2.4;
-    const headerHeight = 11;
+    const boxY = y + 2;
+    const boxHeight = slotHeight - 4;
     const middleX = pagePadding + contentWidth / 2;
     const fromName = settings.shop_name || 'Computer Shop';
     const fromAddress = settings.address || '-';
@@ -6191,47 +6193,31 @@ async function createCodLabelsPdf(orders = [], companySettings = DEFAULT_COMPANY
     const toName = order.recipient_name || 'Customer';
     const toAddress = order.delivery_address || '-';
     const toPhone = order.delivery_phone || '-';
-    const tracking = order.tracking_number || 'Not assigned';
-    const courier = order.delivery_service || 'Courier pending';
 
     pdf.setDrawColor(45, 52, 57);
     pdf.setLineWidth(.35);
     pdf.rect(pagePadding, boxY, contentWidth, boxHeight);
-    pdf.setFillColor(244, 247, 248);
-    pdf.rect(pagePadding, boxY, contentWidth, headerHeight, 'F');
-    pdf.line(pagePadding, boxY + headerHeight, pageWidth - pagePadding, boxY + headerHeight);
-    pdf.line(middleX, boxY + headerHeight, middleX, boxY + boxHeight);
+    pdf.line(middleX, boxY, middleX, boxY + boxHeight);
 
-    pdf.setTextColor(23, 32, 42);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(7.8);
-    pdf.text(`COD ${String(order.document_no || '')}`, pagePadding + 2.5, boxY + 4.4);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(5.8);
-    pdf.text(`${courier} | Tracking: ${tracking}`, pagePadding + 2.5, boxY + 8.1);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(8.2);
-    pdf.text(money(order.cod_collect_amount || order.total_amount), pageWidth - pagePadding - 2.5, boxY + 5.7, { align: 'right' });
-
-    const addressTop = boxY + headerHeight + 4;
+    const addressTop = boxY + 6;
     const columnWidth = contentWidth / 2 - 6;
     const drawAddress = (label, name, address, phone, x) => {
       pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(5.4);
+      pdf.setFontSize(6.2);
       pdf.setTextColor(88, 100, 108);
       pdf.text(label, x, addressTop);
       pdf.setTextColor(23, 32, 42);
-      pdf.setFontSize(8.2);
-      pdf.text(pdf.splitTextToSize(String(name), columnWidth).slice(0, 2), x, addressTop + 4.2);
+      pdf.setFontSize(9);
+      pdf.text(pdf.splitTextToSize(String(name), columnWidth).slice(0, 2), x, addressTop + 5);
       const nameLines = pdf.splitTextToSize(String(name), columnWidth).slice(0, 2).length;
       pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(7.1);
+      pdf.setFontSize(7.8);
       const addressLines = pdf.splitTextToSize(String(address), columnWidth).slice(0, 6);
-      const addressY = addressTop + 4.2 + nameLines * 3.4;
+      const addressY = addressTop + 5 + nameLines * 3.8;
       pdf.text(addressLines, x, addressY);
       pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(7.2);
-      pdf.text(String(phone), x, Math.min(addressY + addressLines.length * 3.15 + 2.5, boxY + boxHeight - 3));
+      pdf.setFontSize(8);
+      pdf.text(String(phone), x, Math.min(addressY + addressLines.length * 3.5 + 3, boxY + boxHeight - 4));
     };
     drawAddress('FROM', fromName, fromAddress, fromPhone, pagePadding + 3);
     drawAddress('TO', toName, toAddress, toPhone, middleX + 3);
@@ -6247,10 +6233,10 @@ async function createCodLabelsPdf(orders = [], companySettings = DEFAULT_COMPANY
   if (!printableOrders.length) {
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(12);
-    pdf.text('No COD orders selected', pageWidth / 2, 20, { align: 'center' });
+    pdf.text('No delivery orders selected', pageWidth / 2, 20, { align: 'center' });
   }
   if (options.output === 'blob') return pdf.output('blob');
-  pdf.save(`COD_Labels_${todayInputDate()}.pdf`);
+  pdf.save(`Delivery_Labels_${todayInputDate()}.pdf`);
   return null;
 }
 
@@ -6395,16 +6381,16 @@ async function createCodBillPdf(order, items = [], companySettings = DEFAULT_COM
 
 async function printCodLabels(orders, companySettings = DEFAULT_COMPANY_SETTINGS, options = {}) {
   const popup = options.popup || window.open('', '_blank', 'width=920,height=980');
-  if (!popup) { window.alert('Allow pop-ups for this site to print COD labels.'); return; }
+  if (!popup) { window.alert('Allow pop-ups for this site to print delivery labels.'); return; }
   try {
     popup.document.open();
-    popup.document.write('<!doctype html><title>Preparing COD labels</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing three-per-A5 COD labels...</body>');
+    popup.document.write('<!doctype html><title>Preparing delivery labels</title><body style="margin:0;background:#20252a;color:#fff;font-family:Arial;display:grid;place-items:center;height:100vh">Preparing three address labels per A5 sheet...</body>');
     popup.document.close();
     const blob = await createCodLabelsPdf(orders, companySettings, { output: 'blob' });
     showPdfBlobPreview(popup, blob, `COD Labels - ${orders.length} order${orders.length === 1 ? '' : 's'}`, options.autoPrint !== false);
   } catch (printError) {
     popup.document.open();
-    popup.document.write(`<!doctype html><title>Print failed</title><body style="font-family:Arial;padding:30px"><h2>Could not prepare COD labels</h2><p>${escapePrintHtml(printError.message || String(printError))}</p></body>`);
+    popup.document.write(`<!doctype html><title>Print failed</title><body style="font-family:Arial;padding:30px"><h2>Could not prepare delivery labels</h2><p>${escapePrintHtml(printError.message || String(printError))}</p></body>`);
     popup.document.close();
   }
 }
@@ -6446,6 +6432,10 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   const [documentNo, setDocumentNo] = useState(initial.documentNo || document?.document_no || '');
   const [documentDate, setDocumentDate] = useState(initial.documentDate || (document?.document_date || document?.created_at || '').slice(0, 10) || todayInputDate());
   const [orderSource, setOrderSource] = useState(initial.orderSource || document?.order_source || 'WhatsApp');
+  const [paymentMode, setPaymentMode] = useState(initial.paymentMode || document?.delivery_payment_mode || 'cod');
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [prepaidPaymentMethodId, setPrepaidPaymentMethodId] = useState(initial.prepaidPaymentMethodId || document?.payment_method_id || '');
+  const [prepaidCheque, setPrepaidCheque] = useState(initial.prepaidCheque || { cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
   const [recipientName, setRecipientName] = useState(initial.recipientName || document?.recipient_name || '');
   const [deliveryPhone, setDeliveryPhone] = useState(initial.deliveryPhone || document?.delivery_phone || '');
   const [deliveryAddress, setDeliveryAddress] = useState(initial.deliveryAddress || document?.delivery_address || '');
@@ -6463,9 +6453,12 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   const [stockMessage, setStockMessage] = useState('');
 
   const total = lines.reduce((sum, line) => sum + codLineTotal(line), 0);
+  const prepaidMethod = paymentMethods.find((method) => method.id === prepaidPaymentMethodId);
+  const prepaidItemsLocked = isEditing && paymentMode === 'prepaid';
 
   useEffect(() => {
     if (isEditing && !lines.length) loadCodItems();
+    loadPrepaidPaymentMethods();
     if (documentNo) onNumberReady?.(documentNo);
   }, []);
 
@@ -6478,17 +6471,24 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
     if (!tabId) return;
     window.localStorage.setItem(documentDraftKey(tabId), JSON.stringify({
       documentType: 'cod_order', editDocumentId: document?.id || '', documentNo, documentDate,
-      orderSource, recipientName, deliveryPhone, deliveryAddress, deliveryService,
+      orderSource, paymentMode, prepaidPaymentMethodId, prepaidCheque, recipientName, deliveryPhone, deliveryAddress, deliveryService,
       trackingNumber, deliveryCharge, deliveryFeeMode, codCollectAmount, notes, lines
     }));
-  }, [tabId, document?.id, documentNo, documentDate, orderSource, recipientName, deliveryPhone, deliveryAddress, deliveryService, trackingNumber, deliveryCharge, deliveryFeeMode, codCollectAmount, notes, lines]);
+  }, [tabId, document?.id, documentNo, documentDate, orderSource, paymentMode, prepaidPaymentMethodId, prepaidCheque, recipientName, deliveryPhone, deliveryAddress, deliveryService, trackingNumber, deliveryCharge, deliveryFeeMode, codCollectAmount, notes, lines]);
 
   useEffect(() => {
-    const nextCollectAmount = deliveryFeeMode === 'paid_on_handover'
-      ? total + numberValue(deliveryCharge)
-      : total;
+    const nextCollectAmount = paymentMode === 'prepaid' ? 0 : deliveryFeeMode === 'paid_on_handover' ? total + numberValue(deliveryCharge) : total;
     setCodCollectAmount(nextCollectAmount);
-  }, [total, deliveryCharge, deliveryFeeMode]);
+  }, [total, deliveryCharge, deliveryFeeMode, paymentMode]);
+
+  async function loadPrepaidPaymentMethods() {
+    const { data, error: methodError } = await supabase.from('payment_methods')
+      .select('id, name, requires_cheque_details')
+      .eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name');
+    if (methodError) { setError(methodError.message); return; }
+    setPaymentMethods(data || []);
+    if (data?.length) setPrepaidPaymentMethodId((current) => current || data[0].id);
+  }
 
   async function loadCodProducts() {
     let query = supabase.from('product_stock_view').select('*').eq('is_active', true).order('item_code').limit(60);
@@ -6527,6 +6527,7 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   }
 
   function addCodProduct(product) {
+    if (prepaidItemsLocked) return;
     const trackInventory = product.track_inventory !== false;
     const availableQty = Math.max(numberValue(product.available_qty), 0);
     if (trackInventory && availableQty <= 0) {
@@ -6578,15 +6579,26 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
     setError('');
     const validLines = lines.filter((line) => line.product_id && numberValue(line.qty) > 0);
     if (!validLines.length) {
-      setError('Add at least one product to the COD order.');
+      setError('Add at least one product to the delivery order.');
+      setBusy(false);
+      return;
+    }
+    if (!isEditing && paymentMode === 'prepaid' && !prepaidMethod) {
+      setError('Select the payment method used for this prepaid delivery.');
+      setBusy(false);
+      return;
+    }
+    if (!isEditing && paymentMode === 'prepaid' && prepaidMethod?.requires_cheque_details && (!prepaidCheque.cheque_number.trim() || !prepaidCheque.cheque_date)) {
+      setError('Enter the cheque number and cheque date.');
       setBusy(false);
       return;
     }
     const header = {
       document_no: documentNo.trim(), document_date: documentDate, order_source: orderSource,
+      delivery_payment_mode: paymentMode,
       recipient_name: recipientName, delivery_phone: deliveryPhone,
       delivery_address: deliveryAddress, delivery_service: deliveryService, tracking_number: trackingNumber,
-      delivery_charge: numberValue(deliveryCharge), delivery_fee_mode: deliveryFeeMode,
+      delivery_charge: numberValue(deliveryCharge), delivery_fee_mode: paymentMode === 'prepaid' ? 'paid_on_handover' : deliveryFeeMode,
       cod_collect_amount: codCollectAmount === '' ? total : numberValue(codCollectAmount), notes
     };
     const itemPayload = validLines.map((line) => ({
@@ -6595,14 +6607,20 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
       discount_type: numberValue(line.discount_value) ? line.discount_type : 'none',
       discount_value: numberValue(line.discount_value), line_total: codLineTotal(line)
     }));
-    const rpcName = isEditing ? 'replace_cod_order_v24' : 'save_cod_order_v24';
+    const paymentPayload = paymentMode === 'prepaid' && !isEditing ? [{
+      source_line_id: createClientId(), payment_method_id: prepaidMethod.id, payment_method_name: prepaidMethod.name,
+      amount: total, direction: 'in', cheque_number: prepaidCheque.cheque_number || null,
+      cheque_date: prepaidCheque.cheque_date || null, cheque_bank_name: prepaidCheque.cheque_bank_name || null
+    }] : [];
+    const rpcName = isEditing ? 'replace_delivery_order_v66' : 'save_delivery_order_v66';
     const args = isEditing
       ? { p_document_id: document.id, p_header: header, p_items: itemPayload }
-      : { p_header: header, p_items: itemPayload };
+      : { p_header: header, p_items: itemPayload, p_payments: paymentPayload };
     const { data, error: saveError } = await supabase.rpc(rpcName, args);
     setBusy(false);
     if (saveError) {
-      setError(saveError.message);
+      const migrationMissing = /save_delivery_order_v66|replace_delivery_order_v66|schema cache|could not find the function/i.test(saveError.message || '');
+      setError(`${saveError.message}${migrationMissing ? '. Run migration 066_delivery_orders_prepaid.sql in Supabase.' : ''}`);
       return;
     }
     if (tabId) window.localStorage.removeItem(documentDraftKey(tabId));
@@ -6614,8 +6632,8 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
     <div className="document-form-panel cod-order-form">
       <div className="section-title-row cod-form-title-row">
         <div>
-          <h3>{isEditing ? `Edit COD Order ${documentNo}` : 'New COD Order'}</h3>
-          <p>Saving reserves stock only. It does not create a sale or cashflow until payment is received.</p>
+          <h3>{isEditing ? `Edit Delivery Order ${documentNo}` : 'New Delivery Order'}</h3>
+          <p>{paymentMode === 'prepaid' ? 'Payment and the linked sales invoice are created immediately; delivery completion will not charge the customer again.' : 'COD reserves stock now and creates the sales invoice only when courier payment is received.'}</p>
         </div>
         <button type="button" className="secondary-button" onClick={onClose}>Close</button>
       </div>
@@ -6627,23 +6645,28 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
           <label>Order date<input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} /></label>
           <label>Order source<select value={orderSource} onChange={(e) => setOrderSource(e.target.value)}><option>WhatsApp</option><option>Phone call</option><option>Facebook</option><option>Website</option><option>Other</option></select></label>
           <div className="cod-auto-staff-note"><span>Order placed by</span><strong>Active POS staff · recorded automatically</strong></div>
+          <label>Payment mode<select value={paymentMode} disabled={isEditing} onChange={(e) => setPaymentMode(e.target.value)}><option value="cod">COD · collect on delivery</option><option value="prepaid">Prepaid · already received</option></select></label>
+          {paymentMode === 'prepaid' && !isEditing && <label>Payment method<select value={prepaidPaymentMethodId} onChange={(e) => setPrepaidPaymentMethodId(e.target.value)} required><option value="">Select payment method</option>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select><small>The full order total is recorded on the sales invoice.</small></label>}
+          {paymentMode === 'prepaid' && isEditing && <div className="cod-auto-staff-note prepaid"><span>Sales invoice</span><strong>Already created · product and payment lines are locked</strong></div>}
+          {paymentMode === 'prepaid' && !isEditing && prepaidMethod?.requires_cheque_details && <><label>Cheque number<input value={prepaidCheque.cheque_number} onChange={(e) => setPrepaidCheque({ ...prepaidCheque, cheque_number: e.target.value })} required /></label><label>Cheque date<input type="date" value={prepaidCheque.cheque_date} onChange={(e) => setPrepaidCheque({ ...prepaidCheque, cheque_date: e.target.value })} required /></label><label>Cheque bank<input value={prepaidCheque.cheque_bank_name} onChange={(e) => setPrepaidCheque({ ...prepaidCheque, cheque_bank_name: e.target.value })} /></label></>}
           <label>Customer / recipient<input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} required /></label>
           <label>Contact number<input value={deliveryPhone} onChange={(e) => setDeliveryPhone(e.target.value)} required /></label>
           <label className="wide-field">Delivery address<textarea value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} required /></label>
           <label>Delivery service<select value={deliveryService} onChange={(e) => setDeliveryService(e.target.value)}><option value="">Select later</option><option value="SLPOST">SLPOST</option><option value="Pronto">Pronto</option></select></label>
           <label>Tracking number<input value={trackingNumber} placeholder="Add after dispatch" onChange={(e) => setTrackingNumber(e.target.value)} /></label>
           <label>Courier delivery charge<input type="number" step="0.01" value={deliveryCharge} onChange={(e) => setDeliveryCharge(e.target.value)} /></label>
-          <label>Delivery fee handling<select value={deliveryFeeMode} onChange={(e) => setDeliveryFeeMode(e.target.value)}><option value="deduct_on_settlement">Deduct when COD settles</option><option value="paid_on_handover">Pay when handed to courier</option></select></label>
-          <label>COD amount to collect<input type="number" step="0.01" value={codCollectAmount} readOnly /><small>{deliveryFeeMode === 'paid_on_handover' ? 'Order total + courier charge' : 'Order total; courier charge is deducted at settlement'}</small></label>
+          {paymentMode === 'cod' && <label>Delivery fee handling<select value={deliveryFeeMode} onChange={(e) => setDeliveryFeeMode(e.target.value)}><option value="deduct_on_settlement">Deduct when COD settles</option><option value="paid_on_handover">Pay when handed to courier</option></select></label>}
+          {paymentMode === 'cod' && <label>COD amount to collect<input type="number" step="0.01" value={codCollectAmount} readOnly /><small>{deliveryFeeMode === 'paid_on_handover' ? 'Order total + courier charge' : 'Order total; courier charge is deducted at settlement'}</small></label>}
           <label className="wide-field">Notes<textarea value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
         </div>
 
-        <div className="cod-product-picker panel-card">
+        {!prepaidItemsLocked && <div className="cod-product-picker panel-card">
           <input value={productSearch} onChange={(e) => setProductSearch(e.target.value)} placeholder="Search product code, name, or barcode" />
           <div className="cod-product-results">
             {products.map((product) => { const trackInventory = product.track_inventory !== false; return <button type="button" key={product.product_id} className={!trackInventory ? 'non-stock-result' : ''} disabled={trackInventory && numberValue(product.available_qty) <= 0} onClick={() => addCodProduct(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>{money(product.selling_price)} | {trackInventory ? `Available: ${numberValue(product.available_qty)}` : 'Non-stock · Always available'}</small></button>; })}
           </div>
-        </div>
+        </div>}
+        {prepaidItemsLocked && <div className="notice">This prepaid delivery already has a linked sales invoice. You can correct its address and courier details here; use the invoice/return workflow for product or payment corrections.</div>}
 
         <div className="table-wrap cod-lines-table">
           <table>
@@ -6651,18 +6674,18 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
             <tbody>
               {lines.map((line) => <tr key={line.id}>
                 <td>{line.item_code}</td><td>{line.description}</td>
-                <td><input type="number" min="0.001" max={line.track_inventory === false ? undefined : line.max_available_qty || undefined} step="0.001" value={line.qty} onChange={(e) => updateCodLine(line.id, { qty: e.target.value })} /><small>{line.track_inventory === false ? 'No stock limit' : `Max ${numberValue(line.max_available_qty, line.qty)}`}</small></td>
-                <td><input type="number" step="0.01" value={line.unit_price} onChange={(e) => updateCodLine(line.id, { unit_price: e.target.value })} /></td>
-                <td><input type="number" step="0.01" value={line.discount_value || 0} onChange={(e) => updateCodLine(line.id, { discount_value: e.target.value })} /></td>
-                <td><select value={line.discount_type || 'none'} onChange={(e) => updateCodLine(line.id, { discount_type: e.target.value })}><option value="none">None</option><option value="amount">Amount</option><option value="percent">Percent</option></select></td>
+                <td><input type="number" disabled={prepaidItemsLocked} min="0.001" max={line.track_inventory === false ? undefined : line.max_available_qty || undefined} step="0.001" value={line.qty} onChange={(e) => updateCodLine(line.id, { qty: e.target.value })} /><small>{line.track_inventory === false ? 'No stock limit' : `Max ${numberValue(line.max_available_qty, line.qty)}`}</small></td>
+                <td><input type="number" disabled={prepaidItemsLocked} step="0.01" value={line.unit_price} onChange={(e) => updateCodLine(line.id, { unit_price: e.target.value })} /></td>
+                <td><input type="number" disabled={prepaidItemsLocked} step="0.01" value={line.discount_value || 0} onChange={(e) => updateCodLine(line.id, { discount_value: e.target.value })} /></td>
+                <td><select disabled={prepaidItemsLocked} value={line.discount_type || 'none'} onChange={(e) => updateCodLine(line.id, { discount_type: e.target.value })}><option value="none">None</option><option value="amount">Amount</option><option value="percent">Percent</option></select></td>
                 <td>{money(codLineTotal(line))}</td>
-                <td><button type="button" className="link-button" onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))}>Remove</button></td>
+                <td><button type="button" className="link-button" disabled={prepaidItemsLocked} onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))}>Remove</button></td>
               </tr>)}
-              {!lines.length && <EmptyRow colSpan={8} text="Add products to this COD order." />}
+              {!lines.length && <EmptyRow colSpan={8} text="Add products to this delivery order." />}
             </tbody>
           </table>
         </div>
-        <div className="cod-form-footer"><strong>Order total: {money(total)}</strong><strong>COD to collect: {money(codCollectAmount === '' ? total : codCollectAmount)}</strong><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : isEditing ? 'Save COD Changes' : 'Save COD Order'}</button></div>
+        <div className="cod-form-footer"><strong>Order total: {money(total)}</strong><strong>{paymentMode === 'prepaid' ? `Paid now: ${money(total)}` : `COD to collect: ${money(codCollectAmount === '' ? total : codCollectAmount)}`}</strong><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : isEditing ? 'Save Delivery Changes' : paymentMode === 'prepaid' ? 'Save Prepaid Delivery & Invoice' : 'Save COD Delivery'}</button></div>
       </form>
     </div>
   );
@@ -6713,9 +6736,12 @@ function CodOrdersPage() {
   async function loadCodOrders() {
     setError('');
     const { data, error: loadError } = await supabase.from('documents')
-      .select('id, document_no, document_type, status, total_amount, paid_amount, balance_amount, document_date, created_at, linked_document_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, courier_status, courier_status_checked_at, courier_tracking_data')
+      .select('id, document_no, document_type, status, total_amount, paid_amount, balance_amount, document_date, created_at, linked_document_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, delivery_payment_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, courier_status, courier_status_checked_at, courier_tracking_data')
       .eq('document_type', 'cod_order').order('created_at', { ascending: false }).limit(500);
-    if (loadError) setError(loadError.message);
+    if (loadError) {
+      const migrationMissing = /delivery_payment_mode|schema cache|column/i.test(loadError.message || '');
+      setError(`${loadError.message}${migrationMissing ? '. Run migration 066_delivery_orders_prepaid.sql in Supabase.' : ''}`);
+    }
     else {
       setOrders(data || []);
       setSelected((current) => current ? (data || []).find((row) => row.id === current.id) || null : null);
@@ -6749,16 +6775,19 @@ function CodOrdersPage() {
 
   async function runStatus(status) {
     if (!selected) return;
-    if (status === 'cancelled' && !window.confirm(`Cancel ${selected.document_no} and release its reserved stock?`)) return;
+    if (status === 'cancelled' && !window.confirm(`Cancel delivery ${selected.document_no}?${selected.delivery_payment_mode === 'prepaid' ? ' Its linked paid sales invoice will remain unchanged.' : ' Its reserved stock will be released.'}`)) return;
     setBusy(true); setError(''); setMessage('');
     const feeNow = status === 'dispatched' ? numberValue(action.feePaidNow) : 0;
-    const { error: statusError } = await supabase.rpc('update_cod_order_status_v24', {
+    const { error: statusError } = await supabase.rpc('update_delivery_order_status_v66', {
       p_document_id: selected.id, p_status: status, p_tracking_number: action.tracking || null,
       p_delivery_service: action.service || null, p_payment_method_id: feeNow > 0 ? action.paymentMethodId : null,
       p_delivery_fee_paid_now: feeNow
     });
     setBusy(false);
-    if (statusError) setError(statusError.message);
+    if (statusError) {
+      const migrationMissing = /update_delivery_order_status_v66|schema cache|could not find the function/i.test(statusError.message || '');
+      setError(`${statusError.message}${migrationMissing ? '. Run migration 066_delivery_orders_prepaid.sql in Supabase.' : ''}`);
+    }
     else {
       if (feeNow > 0) setAction((current) => ({ ...current, feePaidNow: 0, receivedAmount: numberValue(current.receivedAmount) + feeNow }));
       setMessage(status === 'dispatched'
@@ -6792,17 +6821,20 @@ function CodOrdersPage() {
   }
 
   async function returnOrder() {
-    if (!selected || !window.confirm(`Mark ${selected.document_no} returned and release its reserved stock?`)) return;
+    if (!selected || !window.confirm(`Mark ${selected.document_no} returned?${selected.delivery_payment_mode === 'prepaid' ? ' Process any product return or refund separately from its linked sales invoice.' : ' Reserved stock will be released.'}`)) return;
     setBusy(true); setError(''); setMessage('');
     const remainingFee = Math.max(numberValue(action.returnFee) - numberValue(selected.delivery_charge_paid), 0);
-    const { error: returnError } = await supabase.rpc('return_cod_order_v24', {
+    const { error: returnError } = await supabase.rpc('return_delivery_order_v66', {
       p_document_id: selected.id, p_return_reason: action.returnReason || null,
       p_payment_method_id: remainingFee > 0 ? action.paymentMethodId : null,
       p_delivery_fee_charge: numberValue(action.returnFee)
     });
     setBusy(false);
-    if (returnError) setError(returnError.message);
-    else { setMessage(`${selected.document_no} marked returned. Stock reservation released.`); await loadCodOrders(); }
+    if (returnError) {
+      const migrationMissing = /return_delivery_order_v66|schema cache|could not find the function/i.test(returnError.message || '');
+      setError(`${returnError.message}${migrationMissing ? '. Run migration 066_delivery_orders_prepaid.sql in Supabase, then refresh.' : ''}`);
+    }
+    else { setMessage(`${selected.document_no} marked returned.${selected.delivery_payment_mode === 'prepaid' ? ' Its paid sales invoice was not changed.' : ' Stock reservation released.'}`); await loadCodOrders(); }
   }
 
   async function deleteCodOrder() {
@@ -6855,7 +6887,7 @@ function CodOrdersPage() {
       if (recordError) throw recordError;
 
       setAction((current) => ({ ...current, tracking: trackingNumber, service: 'SLPOST' }));
-      setMessage(`SLPOST status: ${data.status}.${recorded?.workflow_status === 'awaiting_settlement' ? ' Order moved to Awaiting Payment.' : ''}`);
+      setMessage(`SLPOST status: ${data.status}.${recorded?.workflow_status === 'awaiting_settlement' ? ' COD order moved to Awaiting Payment.' : recorded?.workflow_status === 'delivered' ? ' Prepaid delivery marked Delivered.' : ''}`);
       await loadCodOrders();
     } catch (err) {
       setError(err.message || String(err));
@@ -6883,50 +6915,70 @@ function CodOrdersPage() {
     if (!ids.length) setMessage('No awaiting-packing or packed orders match the current filters.');
   }
   function printSelectedLabels() {
-    if (!selectedLabelOrders.length) { setError('Select at least one COD order to print labels.'); return; }
+    if (!selectedLabelOrders.length) { setError('Select at least one delivery order to print labels.'); return; }
     setError('');
     printCodLabels(selectedLabelOrders, companySettings);
   }
+  async function printSelectedDeliveryBill() {
+    if (!selected) return;
+    if (selected.delivery_payment_mode !== 'prepaid' || !selected.linked_document_id) {
+      printCodDocument(selected, items, 'bill', companySettings);
+      return;
+    }
+    const popup = window.open('', '_blank', 'width=920,height=980');
+    if (!popup) { setError('Allow pop-ups for this site to print the linked sales invoice.'); return; }
+    popup.document.write('<!doctype html><title>Preparing invoice</title><body style="font-family:Arial;padding:30px">Preparing sales invoice…</body>');
+    const [documentRes, itemRes, flowRes] = await Promise.all([
+      supabase.from('documents').select('*').eq('id', selected.linked_document_id).single(),
+      supabase.from('document_items').select('*').eq('document_id', selected.linked_document_id).order('created_at'),
+      supabase.from('cashflow_entries').select('*, payment_methods(name)').eq('document_id', selected.linked_document_id).order('created_at')
+    ]);
+    const printError = documentRes.error || itemRes.error || flowRes.error;
+    if (printError) { popup.close(); setError(printError.message); return; }
+    await printAccountingDocument(documentRes.data, itemRes.data || [], flowRes.data || [], companySettings, { popup });
+  }
   const staffMap = new Map(staff.map((row) => [row.id, row.full_name]));
-  const canAct = selected && !['converted', 'returned', 'cancelled'].includes(selected.status);
+  const canAct = selected && !['converted', 'delivered', 'returned', 'cancelled'].includes(selected.status);
   const nextStatusAction = selected ? {
     awaiting_packing: { status: 'packed', label: 'Mark Packed' },
     packed: { status: 'dispatched', label: 'Mark Dispatched' },
-    dispatched: { status: 'awaiting_settlement', label: 'Mark Delivered / Awaiting Payment' }
+    dispatched: selected.delivery_payment_mode === 'prepaid'
+      ? { status: 'delivered', label: 'Mark Delivered' }
+      : { status: 'awaiting_settlement', label: 'Mark Delivered / Awaiting Payment' }
   }[selected.status] : null;
-  const canSettle = selected?.status === 'awaiting_settlement';
+  const canSettle = selected?.delivery_payment_mode !== 'prepaid' && selected?.status === 'awaiting_settlement';
   const canReturn = ['dispatched', 'awaiting_settlement'].includes(selected?.status);
   const canCancel = ['awaiting_packing', 'packed'].includes(selected?.status);
   const canDelete = selected && ['awaiting_packing', 'packed', 'cancelled'].includes(selected.status) && !selected.linked_document_id && numberValue(selected.delivery_charge_paid) === 0;
   const canShareDispatch = selected && !['returned', 'cancelled'].includes(selected.status)
-    && (Boolean(selected.dispatched_at) || ['dispatched', 'awaiting_settlement', 'converted'].includes(selected.status));
+    && (Boolean(selected.dispatched_at) || ['dispatched', 'delivered', 'awaiting_settlement', 'converted'].includes(selected.status));
 
-  if (formMode) return <section className="page-section"><CodOrderForm document={formMode === 'edit' ? selected : null} onClose={() => setFormMode('')} onSaved={async () => { setFormMode(''); await loadCodOrders(); setMessage('COD order saved and stock reserved.'); }} /></section>;
+  if (formMode) return <section className="page-section"><CodOrderForm document={formMode === 'edit' ? selected : null} onClose={() => setFormMode('')} onSaved={async (saved) => { setFormMode(''); await loadCodOrders(); setMessage(saved?.delivery_payment_mode === 'prepaid' ? `Prepaid delivery saved. Sales invoice ${saved?.invoice_no || ''} created.` : 'COD delivery saved and stock reserved.'); }} /></section>;
 
   return (
     <section className="page-section cod-orders-page">
-      <div className="section-title-row"><div><h3>COD Order Queue</h3><p>Remote order entry, packing, dispatch, courier settlement, returns, labels, and bills.</p></div></div>
+      <div className="section-title-row"><div><h3>Delivery Order Queue</h3><p>Manage COD and prepaid courier orders together, including packing, dispatch, tracking, labels, and sales invoices.</p></div></div>
       {message && <div className="notice">{message}</div>}{error && <div className="error-box">{error}</div>}
       <div className="action-toolbar cod-order-toolbar">
         <button className="toolbar-button bright" onClick={() => setFormMode('new')}><span>＋</span>New Order</button>
         <button className="toolbar-button" disabled={!selected || !canAct} onClick={() => setFormMode('edit')}><span>✎</span>Edit</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => printCodDocument(selected, items, 'label', companySettings)}><span>▣</span>Print Label</button>
-        <button className="toolbar-button" disabled={!selected} onClick={() => printCodDocument(selected, items, 'bill', companySettings)}><span>▤</span>Print Bill</button>
+        <button className="toolbar-button" disabled={!selected} onClick={printSelectedDeliveryBill}><span>▤</span>{selected?.delivery_payment_mode === 'prepaid' ? 'Print Invoice' : 'Print Bill'}</button>
         <button className="toolbar-button whatsapp-document-button" disabled={!canShareDispatch} title={canShareDispatch ? 'Send a dispatch notice through WhatsApp' : 'Available after the order is marked dispatched'} onClick={shareCodDispatchNotice}><span><WhatsAppIcon /></span>WhatsApp Dispatch</button>
         <button className="toolbar-button" disabled={!selected} onClick={() => openCourierTracking(action.service || selected?.delivery_service)}><span>⌕</span>Open Tracking</button>
         <button className={`toolbar-button ${showWorkflow ? 'bright' : ''}`} disabled={!canAct} onClick={() => setShowWorkflow((current) => !current)}><span>⚙</span>{showWorkflow ? 'Hide Workflow' : 'Update / Workflow'}</button>
         {canCancel && <button className="toolbar-button" disabled={busy} onClick={() => runStatus('cancelled')}><span>×</span>Cancel</button>}
         {canDelete && <button className="toolbar-button danger-toolbar-button" disabled={busy} onClick={deleteCodOrder}><span>▥</span>Delete</button>}
       </div>
-      <div className="cod-queue-stats"><StatCard label="Awaiting packing" value={orders.filter((row) => row.status === 'awaiting_packing').length} /><StatCard label="Packed" value={orders.filter((row) => row.status === 'packed').length} /><StatCard label="Dispatched" value={orders.filter((row) => row.status === 'dispatched').length} /><StatCard label="Awaiting payment" value={orders.filter((row) => row.status === 'awaiting_settlement').length} /></div>
-      <div className="panel-card cod-filter-row"><input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Search order, customer, phone, address, courier, tracking" /><select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="active">All active orders</option><option value="all">All orders</option><option value="awaiting_packing">Awaiting packing</option><option value="packed">Packed</option><option value="dispatched">Dispatched</option><option value="awaiting_settlement">Awaiting payment</option><option value="converted">Paid / Converted</option><option value="returned">Returned</option><option value="cancelled">Cancelled</option></select><button className="secondary-button" onClick={loadCodOrders}>Refresh</button></div>
-      <div className="panel-card cod-label-batch-bar"><div><strong>Batch COD labels</strong><span>Three labels are arranged from top to bottom on each A5 sheet.</span></div><div><button className="secondary-button" onClick={selectPendingLabels}>Select Pending</button><button className="secondary-button" disabled={!labelSelection.length} onClick={() => setLabelSelection([])}>Clear</button><button className="primary-button" disabled={!labelSelection.length} onClick={printSelectedLabels}>Print Selected ({labelSelection.length})</button></div></div>
+      <div className="cod-queue-stats"><StatCard label="Awaiting packing" value={orders.filter((row) => row.status === 'awaiting_packing').length} /><StatCard label="Packed" value={orders.filter((row) => row.status === 'packed').length} /><StatCard label="Dispatched" value={orders.filter((row) => row.status === 'dispatched').length} /><StatCard label="Awaiting COD payment" value={orders.filter((row) => row.status === 'awaiting_settlement').length} /></div>
+      <div className="panel-card cod-filter-row"><input value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} placeholder="Search order, customer, phone, address, courier, tracking" /><select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="active">All active orders</option><option value="all">All orders</option><option value="awaiting_packing">Awaiting packing</option><option value="packed">Packed</option><option value="dispatched">Dispatched</option><option value="delivered">Delivered prepaid</option><option value="awaiting_settlement">Awaiting COD payment</option><option value="converted">COD paid / Converted</option><option value="returned">Returned</option><option value="cancelled">Cancelled</option></select><button className="secondary-button" onClick={loadCodOrders}>Refresh</button></div>
+      <div className="panel-card cod-label-batch-bar"><div><strong>Batch address labels</strong><span>Three clean FROM/TO address labels are arranged on each A5 sheet.</span></div><div><button className="secondary-button" onClick={selectPendingLabels}>Select Pending</button><button className="secondary-button" disabled={!labelSelection.length} onClick={() => setLabelSelection([])}>Clear</button><button className="primary-button" disabled={!labelSelection.length} onClick={printSelectedLabels}>Print Selected ({labelSelection.length})</button></div></div>
       <div className="cod-queue-layout">
-        <div className="panel-card table-wrap"><table><thead><tr><th className="cod-label-select-column">Label</th><th>Order</th><th>Status</th><th>Customer</th><th>Phone</th><th>Source</th><th>Placed by</th><th>Courier</th><th>Tracking</th><th>Courier status</th><th>COD</th></tr></thead><tbody>{filtered.map((order) => <tr key={order.id} className={selected?.id === order.id ? 'selected-row' : ''} onClick={() => selectCodOrder(order)}><td className="cod-label-select-column"><input type="checkbox" aria-label={`Select label ${order.document_no}`} checked={labelSelection.includes(order.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleLabelOrder(order.id)} /></td><td>{order.document_no}</td><td>{codStatusLabel(order.status)}</td><td>{order.recipient_name}</td><td>{order.delivery_phone}</td><td>{order.order_source || '-'}</td><td>{staffMap.get(order.order_taken_by || order.created_by_staff_id) || '-'}</td><td>{order.delivery_service || '-'}</td><td>{order.tracking_number || '-'}</td><td>{order.courier_status || '-'}</td><td>{money(order.cod_collect_amount || order.total_amount)}</td></tr>)}{!filtered.length && <EmptyRow colSpan={11} text="No COD orders match this filter." />}</tbody></table></div>
+        <div className="panel-card table-wrap"><table><thead><tr><th className="cod-label-select-column">Label</th><th>Order</th><th>Payment</th><th>Status</th><th>Customer</th><th>Phone</th><th>Source</th><th>Placed by</th><th>Courier</th><th>Tracking</th><th>Value</th></tr></thead><tbody>{filtered.map((order) => <tr key={order.id} className={selected?.id === order.id ? 'selected-row' : ''} onClick={() => selectCodOrder(order)}><td className="cod-label-select-column"><input type="checkbox" aria-label={`Select label ${order.document_no}`} checked={labelSelection.includes(order.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleLabelOrder(order.id)} /></td><td>{order.document_no}</td><td><span className={`status-pill ${order.delivery_payment_mode === 'prepaid' ? 'active' : ''}`}>{order.delivery_payment_mode === 'prepaid' ? 'Prepaid' : 'COD'}</span></td><td>{codStatusLabel(order.status)}</td><td>{order.recipient_name}</td><td>{order.delivery_phone}</td><td>{order.order_source || '-'}</td><td>{staffMap.get(order.order_taken_by || order.created_by_staff_id) || '-'}</td><td>{order.delivery_service || '-'}</td><td>{order.tracking_number || '-'}</td><td>{money(order.total_amount)}</td></tr>)}{!filtered.length && <EmptyRow colSpan={11} text="No delivery orders match this filter." />}</tbody></table></div>
         <section className="panel-card cod-action-panel">
           {!selected && <div className="muted-box">Select an order to view items and actions.</div>}
           {selected && <>
-            <div className="cod-selected-header"><div><h3>{selected.document_no}</h3><strong>{selected.recipient_name}</strong><span>{selected.delivery_phone}</span><p>{selected.delivery_address}</p></div><div className="cod-selected-summary"><span>Order status</span><strong>{codStatusLabel(selected.status)}</strong><span>COD amount</span><strong>{money(selected.cod_collect_amount || selected.total_amount)}</strong></div></div>
+            <div className="cod-selected-header"><div><h3>{selected.document_no}</h3><strong>{selected.recipient_name}</strong><span>{selected.delivery_phone}</span><p>{selected.delivery_address}</p></div><div className="cod-selected-summary"><span>Order status</span><strong>{codStatusLabel(selected.status)}</strong><span>Payment</span><strong>{selected.delivery_payment_mode === 'prepaid' ? `Prepaid · ${money(selected.total_amount)}` : `COD · ${money(selected.cod_collect_amount || selected.total_amount)}`}</strong></div></div>
             <div className="cod-order-detail-grid"><div><span>Placed by</span><strong>{staffMap.get(selected.order_taken_by || selected.created_by_staff_id) || 'Not recorded'}</strong></div><div><span>Order source</span><strong>{selected.order_source || '-'}</strong></div><div><span>Order date</span><strong>{fmtDate(selected.document_date || selected.created_at)}</strong></div><div><span>Courier</span><strong>{selected.delivery_service || 'Not selected'}</strong></div><div><span>Tracking</span><strong>{selected.tracking_number || 'Not assigned'}</strong></div><div><span>Delivery charge</span><strong>{money(selected.delivery_charge)}</strong></div>{selected.notes && <div className="wide"><span>Notes</span><strong>{selected.notes}</strong></div>}</div>
             <div className="cod-selected-items"><h4>Items in this order</h4><div className="table-wrap"><table><thead><tr><th>Code</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Total</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.item_code}</td><td>{item.description}</td><td>{Number(item.qty)}</td><td>{money(item.unit_price)}</td><td>{money(numberValue(item.qty) * numberValue(item.unit_price))}</td></tr>)}{!items.length && <EmptyRow colSpan={5} text="No items found for this order." />}</tbody></table></div></div>
             {showWorkflow && canAct && <div className="cod-action-fields cod-workflow-panel">
@@ -9493,7 +9545,7 @@ function CashflowPage() {
           <option value="invoice">Sales</option>
           <option value="purchase">Purchases</option>
           <option value="stock_in_transit">Stock in Transit</option>
-          <option value="cod_order">COD Orders</option>
+          <option value="cod_order">Delivery Orders</option>
           <option value="customer_payment">Customer payments</option>
           <option value="supplier_payment">Supplier payments</option>
           <option value="expense">Expenses</option>
@@ -9851,7 +9903,7 @@ const REPORT_LIBRARY = [
     { id: 'unpaid_purchases', label: 'Unpaid Purchases' }
   ] },
   { title: 'Operations', reports: [
-    { id: 'cod_orders', label: 'COD Orders' },
+    { id: 'cod_orders', label: 'Delivery Orders' },
     { id: 'jobs_repairs', label: 'Jobs & Repairs' },
     { id: 'inventory_documents', label: 'Inventory Documents' }
   ] },
@@ -9947,7 +9999,7 @@ function ReportsPage() {
     setError('');
     const [documentRes, cashflowRes, movementRes] = await Promise.all([
       supabase.from('documents')
-        .select('id, document_no, document_type, status, customer_id, supplier_id, total_amount, paid_amount, balance_amount, document_date, created_at, notes, external_document_no, linked_document_id, job_no, job_status, recipient_name, delivery_phone, delivery_service, tracking_number, cod_collect_amount')
+        .select('id, document_no, document_type, status, customer_id, supplier_id, total_amount, paid_amount, balance_amount, document_date, created_at, notes, external_document_no, linked_document_id, job_no, job_status, recipient_name, delivery_phone, delivery_service, tracking_number, delivery_payment_mode, cod_collect_amount')
         .gte('document_date', periodBounds.start)
         .lt('document_date', periodBounds.endExclusive)
         .order('document_date', { ascending: false })
@@ -10091,7 +10143,7 @@ function ReportsPage() {
       };
     }
     if (activeReport === 'purchase_invoices' || activeReport === 'unpaid_purchases') { const rows = activeReport === 'unpaid_purchases' ? purchaseDocuments.filter((row) => numberValue(row.balance_amount) > 0) : purchaseDocuments; return { title: activeReport === 'unpaid_purchases' ? 'Unpaid Purchases' : 'Purchase Invoice List', description: activeReport === 'unpaid_purchases' ? 'Purchase documents that still have a supplier balance.' : 'All purchase documents in the selected period.', totals: [['Documents', rows.length], ['Total', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))], ['Outstanding', money(rows.reduce((sum, row) => sum + numberValue(row.balance_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Document' }, { key: 'external_document_no', label: 'Supplier Invoice' }, { key: 'supplier', label: 'Supplier', render: supplierName }, { key: 'total', label: 'Total', render: (row) => money(row.total_amount) }, { key: 'paid', label: 'Paid', render: (row) => money(row.paid_amount) }, { key: 'balance', label: 'Balance', render: (row) => money(row.balance_amount) }, { key: 'status', label: 'Status' }], rows }; }
-    if (activeReport === 'cod_orders') { const rows = documents.filter((row) => row.document_type === 'cod_order'); return { title: 'COD Orders', description: 'COD orders created, dispatched, returned, or settled in the period.', totals: [['Orders', rows.length], ['COD Value', money(rows.reduce((sum, row) => sum + numberValue(row.cod_collect_amount || row.total_amount), 0))], ['Outstanding', money(rows.filter((row) => !['settled', 'returned', 'cancelled'].includes(row.status)).reduce((sum, row) => sum + numberValue(row.cod_collect_amount || row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'COD Order' }, { key: 'recipient_name', label: 'Customer' }, { key: 'delivery_phone', label: 'Phone' }, { key: 'delivery_service', label: 'Courier' }, { key: 'tracking_number', label: 'Tracking' }, { key: 'status', label: 'Status' }, { key: 'amount', label: 'COD Amount', render: (row) => money(row.cod_collect_amount || row.total_amount) }], rows }; }
+    if (activeReport === 'cod_orders') { const rows = documents.filter((row) => row.document_type === 'cod_order'); return { title: 'Delivery Orders', description: 'COD and prepaid deliveries created, dispatched, returned, delivered, or settled in the period.', totals: [['Orders', rows.length], ['Order Value', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))], ['COD to Collect', money(rows.filter((row) => row.delivery_payment_mode !== 'prepaid' && !['converted', 'returned', 'cancelled'].includes(row.status)).reduce((sum, row) => sum + numberValue(row.cod_collect_amount || row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Delivery Order' }, { key: 'recipient_name', label: 'Customer' }, { key: 'delivery_phone', label: 'Phone' }, { key: 'delivery_service', label: 'Courier' }, { key: 'tracking_number', label: 'Tracking' }, { key: 'status', label: 'Status' }, { key: 'amount', label: 'Order Value', render: (row) => money(row.total_amount) }], rows }; }
     if (activeReport === 'jobs_repairs') { const rows = documents.filter((row) => row.document_type === 'job'); return { title: 'Jobs & Repairs', description: 'Repair jobs received and their current status.', totals: [['Jobs', rows.length], ['Open', rows.filter((row) => !['completed', 'cancelled'].includes(row.job_status || row.status)).length], ['Completed', rows.filter((row) => (row.job_status || row.status) === 'completed').length]], columns: [{ key: 'date', label: 'Received', render: (row) => fmtDate(row.document_date) }, { key: 'job_no', label: 'Job Number', render: (row) => row.job_no || row.document_no }, { key: 'customer', label: 'Customer', render: (row) => customerMap.get(row.customer_id)?.name || '-' }, { key: 'status', label: 'Job Status', render: (row) => (row.job_status || row.status || '').replace('_', ' ') }, { key: 'notes', label: 'Notes' }], rows }; }
     if (activeReport === 'inventory_documents') { const rows = documents.filter((row) => ['stock_in_transit', 'stock_adjustment', 'trade_in'].includes(row.document_type)); return { title: 'Inventory Documents', description: 'Stock in transit, stock adjustments, and trade-in documents.', totals: [['Documents', rows.length], ['Value', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Document' }, { key: 'type', label: 'Type', render: (row) => documentTypeLabel(row.document_type) }, { key: 'party', label: 'Customer / Supplier', render: (row) => customerMap.get(row.customer_id)?.name || supplierMap.get(row.supplier_id)?.name || '-' }, { key: 'status', label: 'Status' }, { key: 'total', label: 'Value', render: (row) => money(row.total_amount) }], rows }; }
     if (activeReport === 'stock_movement') return { title: 'Stock Movement', description: 'Every stock quantity change recorded during the period.', totals: [['Movements', stockMovements.length], ['Quantity Movement', stockMovements.reduce((sum, row) => sum + numberValue(row.qty), 0)]], columns: [{ key: 'date', label: 'Date', render: (row) => new Date(row.created_at).toLocaleString('en-LK') }, { key: 'document', label: 'Document', render: (row) => row.documents?.document_no || '-' }, { key: 'type', label: 'Movement', render: (row) => String(row.movement_type || '').replaceAll('_', ' ') }, { key: 'code', label: 'Code', render: (row) => row.products?.item_code || '-' }, { key: 'product', label: 'Product', render: (row) => row.products?.name || '-' }, { key: 'qty', label: 'Qty' }, { key: 'unit_cost', label: 'Unit Cost', render: (row) => money(row.unit_cost) }, { key: 'value', label: 'Value', render: (row) => money(numberValue(row.qty) * numberValue(row.unit_cost)) }], rows: stockMovements };
@@ -10650,7 +10702,7 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
 
         <div className="panel-card settings-category-card">
           <div className="settings-category-heading"><span>ST</span><div><h3>Stock control</h3><p>Controls how POS sales behave when physical stock runs out.</p></div></div>
-          <label className={`settings-toggle-row warning-setting ${form.allow_negative_pos_stock ? 'enabled' : ''}`}><input type="checkbox" checked={!!form.allow_negative_pos_stock} onChange={(e) => setForm({ ...form, allow_negative_pos_stock: e.target.checked })} /><span><strong>Allow negative stock in POS sales</strong><small>When enabled, admins and permitted staff may sell tracked items beyond available quantity. COD orders still require physical stock.</small></span></label>
+          <label className={`settings-toggle-row warning-setting ${form.allow_negative_pos_stock ? 'enabled' : ''}`}><input type="checkbox" checked={!!form.allow_negative_pos_stock} onChange={(e) => setForm({ ...form, allow_negative_pos_stock: e.target.checked })} /><span><strong>Allow negative stock in POS sales</strong><small>When enabled, admins and permitted staff may sell tracked items beyond available quantity. Delivery orders still require physical stock.</small></span></label>
           <label className="settings-field-row"><span><strong>Minimum profit over cost</strong><small>Every positive POS item must remain at least this percentage above its average cost after item and bill discounts. Use 0 to disable.</small></span><div className="settings-number-field"><input type="number" min="0" max="1000" step="0.1" value={form.minimum_profit_percent} onChange={(e) => setForm({ ...form, minimum_profit_percent: e.target.value })} /><em>%</em></div></label>
           <div className="settings-safety-note"><strong>{form.allow_negative_pos_stock ? 'Negative stock will be allowed' : 'Overselling is blocked'}</strong><span>{form.allow_negative_pos_stock ? 'Use the Stock page to identify and correct negative quantities.' : 'Product selection and database saving both enforce available quantity.'}</span></div>
         </div>
@@ -10873,7 +10925,7 @@ function AssistantSettingsPage() {
 
     <form className="panel-card assistant-knowledge-form assistant-pos-guide-form" onSubmit={savePosGuide}>
       <div className="section-title-row"><div><h3>{guideForm.id ? 'Edit POS staff guide' : 'Add POS staff guide'}</h3><p>Teach the assistant the exact page, button names, steps, and effects for a shop procedure. It uses these guides for staff training without receiving source-code access.</p></div>{guideForm.id && <button type="button" className="secondary-button" onClick={() => setGuideForm(emptyGuide)}>New Guide</button>}</div>
-      <div className="assistant-knowledge-header"><label>Question / topic<input value={guideForm.topic} onChange={(event) => setGuideForm({ ...guideForm, topic: event.target.value })} placeholder="Example: Exchange an item from an invoice" required /></label><label>POS area<input value={guideForm.area} onChange={(event) => setGuideForm({ ...guideForm, area: event.target.value })} placeholder="POS, Documents, COD Orders…" required /></label><label>Matching words<input value={guideForm.keywords} onChange={(event) => setGuideForm({ ...guideForm, keywords: event.target.value })} placeholder="exchange, return, original invoice" /></label></div>
+      <div className="assistant-knowledge-header"><label>Question / topic<input value={guideForm.topic} onChange={(event) => setGuideForm({ ...guideForm, topic: event.target.value })} placeholder="Example: Exchange an item from an invoice" required /></label><label>POS area<input value={guideForm.area} onChange={(event) => setGuideForm({ ...guideForm, area: event.target.value })} placeholder="POS, Documents, Delivery Orders…" required /></label><label>Matching words<input value={guideForm.keywords} onChange={(event) => setGuideForm({ ...guideForm, keywords: event.target.value })} placeholder="exchange, return, original invoice" /></label></div>
       <label>Staff instructions<textarea className="assistant-knowledge-content" maxLength={12000} value={guideForm.content} onChange={(event) => setGuideForm({ ...guideForm, content: event.target.value })} placeholder={'Use exact visible names and numbered steps.\n1. Open POS and choose Return.\n2. Search for the original invoice…'} required /><small>{guideForm.content.length}/12000 · Include important effects on stock, payment, balances, or status.</small></label>
       <div className="assistant-knowledge-save"><label className="checkbox-label"><input type="checkbox" checked={guideForm.is_active} onChange={(event) => setGuideForm({ ...guideForm, is_active: event.target.checked })} /> Available for staff how-to answers</label><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save Staff Guide'}</button></div>
     </form>

@@ -5520,6 +5520,8 @@ body.pos-resizing {
 .cod-auto-staff-note span,
 .cod-order-detail-grid span { color: var(--muted); font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
 .cod-auto-staff-note strong { color: #a9dff5; font-size: 13px; }
+.cod-auto-staff-note.prepaid { border-color: rgba(67, 189, 119, .5); background: rgba(45, 127, 76, .12); }
+.cod-auto-staff-note.prepaid strong { color: #94e4ae; }
 .cod-order-detail-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
