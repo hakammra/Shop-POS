@@ -152,7 +152,7 @@ const STOCK_FILTERS = [
   { value: 'negative', label: 'Negative Qty', description: 'Qty is below zero' },
   { value: 'low', label: 'Low Stock', description: 'Qty is above zero and at or below low-stock level' },
   { value: 'in_transit', label: 'In Transit', description: 'Incoming stock not yet added to inventory' },
-  { value: 'reserved', label: 'Reserved', description: 'Stock reserved for customer/online order' },
+  { value: 'reserved', label: 'Reserved', description: 'Stock reserved by a COD order or review sale' },
   { value: 'damaged', label: 'Warranty / Damaged', description: 'Non-sellable returned or damaged stock' },
   { value: 'unavailable', label: 'Unavailable', description: 'Available stock is zero or below' },
   { value: 'inactive', label: 'Inactive', description: 'Inactive products' }
@@ -444,6 +444,10 @@ function NavigationIcon({ name, fallback = '' } = {}) {
   if (name === 'globe') return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M3.5 12h17M12 3c2.2 2.5 3.2 5.5 3.2 9S14.2 18.5 12 21M12 3C9.8 5.5 8.8 8.5 8.8 12S9.8 18.5 12 21" /></svg>;
   if (name === 'cube') return <svg {...common}><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></svg>;
   if (name === 'clipboard') return <svg {...common}><path d="M8 5H5v16h14V5h-3" /><rect x="8" y="3" width="8" height="4" rx="1" /><path d="m8 12 1.5 1.5L12 11M13 13h3m-8 4 1.5 1.5L12 16M13 18h3" /></svg>;
+  if (name === 'edit') return <svg {...common}><path d="m4 20 4.2-1 10.7-10.7-3.2-3.2L5 15.8 4 20Z" /><path d="m13.8 7 3.2 3.2M4 20h6" /></svg>;
+  if (name === 'print') return <svg {...common}><path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><path d="M7 14h10v7H7Z" /><path d="M17 12h.01" /></svg>;
+  if (name === 'refresh') return <svg {...common}><path d="M20 6v5h-5M4 18v-5h5" /><path d="M18.1 9A7 7 0 0 0 6.2 6.2L4 9M5.9 15A7 7 0 0 0 17.8 17.8L20 15" /></svg>;
+  if (name === 'trash') return <svg {...common}><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></svg>;
   return <>{fallback || name}</>;
 }
 
@@ -8055,7 +8059,7 @@ function StockAdjustmentForm({ onClose, onSaved }) {
 
   useEffect(() => {
     const timeout = setTimeout(async () => {
-      let query = supabase.from('product_stock_view').select('product_id, item_code, name, avg_cost, sellable_qty, damaged_qty, checking_qty, available_qty, track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(80);
+      let query = supabase.from('product_stock_view').select('product_id, item_code, name, avg_cost, sellable_qty, reserved_qty, damaged_qty, checking_qty, available_qty, track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(80);
       const clean = search.trim().replace(/,/g, ' ');
       if (clean) query = query.or(`item_code.ilike.%${clean}%,name.ilike.%${clean}%,barcode.ilike.%${clean}%`);
       const { data, error: productError } = await query;
@@ -8065,11 +8069,38 @@ function StockAdjustmentForm({ onClose, onSaved }) {
   }, [search]);
 
   function addLine(product) {
-    if (lines.some((line) => line.product_id === product.product_id && line.bucket === 'sellable')) return;
-    setLines((current) => [...current, { id: createClientId(), product_id: product.product_id, item_code: product.item_code, description: product.name, unit_cost: numberValue(product.avg_cost), qty: 1, bucket: 'sellable' }]);
+    const usedBuckets = new Set(lines.filter((line) => line.product_id === product.product_id).map((line) => line.bucket));
+    const nextBucket = ['sellable', 'damaged', 'checking'].find((bucket) => !usedBuckets.has(bucket));
+    if (!nextBucket) { setError(`${product.item_code} already has a line for every stock bucket.`); return; }
+    setError('');
+    setLines((current) => [...current, {
+      id: createClientId(), product_id: product.product_id, item_code: product.item_code, description: product.name,
+      avg_cost: numberValue(product.avg_cost), sellable_qty: numberValue(product.sellable_qty), reserved_qty: numberValue(product.reserved_qty),
+      damaged_qty: numberValue(product.damaged_qty), checking_qty: numberValue(product.checking_qty), available_qty: numberValue(product.available_qty),
+      qty: 1, bucket: nextBucket
+    }]);
   }
 
-  function updateLine(id, changes) { setLines((current) => current.map((line) => line.id === id ? { ...line, ...changes } : line)); }
+  function updateLine(id, changes) {
+    const source = lines.find((line) => line.id === id);
+    if (source && changes.bucket && lines.some((line) => line.id !== id && line.product_id === source.product_id && line.bucket === changes.bucket)) {
+      setError(`${source.item_code} already has a ${changes.bucket} adjustment line.`);
+      return;
+    }
+    setError('');
+    setLines((current) => current.map((line) => line.id === id ? { ...line, ...changes } : line));
+  }
+
+  function adjustmentBucketQuantity(line) {
+    if (line.bucket === 'damaged') return numberValue(line.damaged_qty);
+    if (line.bucket === 'checking') return numberValue(line.checking_qty);
+    return numberValue(line.sellable_qty);
+  }
+
+  function adjustmentMaximumReduction(line) {
+    if (line.bucket === 'sellable') return numberValue(line.available_qty);
+    return adjustmentBucketQuantity(line);
+  }
 
   async function saveAdjustment(event) {
     event.preventDefault();
@@ -8077,24 +8108,27 @@ function StockAdjustmentForm({ onClose, onSaved }) {
     const valid = lines.filter((line) => numberValue(line.qty) !== 0);
     if (!valid.length) { setError('Add at least one item with a non-zero quantity change.'); return; }
     setBusy(true);
-    const { data, error: saveError } = await supabase.rpc('save_stock_adjustment_v33', {
+    const { data, error: saveError } = await supabase.rpc('save_stock_adjustment_v64', {
       p_header: { document_date: documentDate, notes: notes.trim() || null },
-      p_items: valid.map((line) => ({ product_id: line.product_id, item_code: line.item_code, description: line.description, qty: numberValue(line.qty), unit_cost: numberValue(line.unit_cost), bucket: line.bucket }))
+      p_items: valid.map((line) => ({ product_id: line.product_id, item_code: line.item_code, description: line.description, qty: numberValue(line.qty), bucket: line.bucket }))
     });
     setBusy(false);
-    if (saveError) setError(`${saveError.message}. If the function is missing, run 033_inventory_documents_cod_delete.sql in Supabase.`);
+    if (saveError) {
+      const migrationMissing = /save_stock_adjustment_v64|schema cache|could not find the function/i.test(saveError.message || '');
+      setError(`${saveError.message}${migrationMissing ? '. Run migration 064_quantity_only_stock_adjustments.sql in Supabase.' : ''}`);
+    }
     else { onSaved?.(data); }
   }
 
   return (
     <form className="inventory-adjustment-form" onSubmit={saveAdjustment}>
-      <div className="section-title-row"><div><h3>New Stock Adjustment</h3><p>Correct counted stock without creating a purchase or sale.</p></div><button type="button" className="secondary-button" onClick={onClose}>Close</button></div>
+      <div className="section-title-row"><div><h3>New Stock Adjustment</h3><p>Correct counted quantities without changing product cost, selling price, cash, or bank balances.</p></div><button type="button" className="secondary-button" onClick={onClose}>Close</button></div>
       {error && <div className="error-box">{error}</div>}
       <div className="panel-card inventory-adjustment-header"><label>Document number<input value="Assigned on save" readOnly /></label><label>Date<input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} /></label><label className="wide-field">Reason <InfoTip text="Explain why the physical count is being corrected. This note stays with the audit document." /><input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Example: physical stock count correction" required /></label></div>
       <div className="inventory-adjustment-layout">
-        <div className="panel-card adjustment-product-picker"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products by code, name, or barcode" /><div className="adjustment-product-list">{products.map((product) => <button type="button" key={product.product_id} onClick={() => addLine(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>Available {numberValue(product.available_qty)}</small></button>)}</div></div>
-        <div className="panel-card table-wrap"><table><thead><tr><th>Code</th><th>Item</th><th>Stock bucket <InfoTip text="Sellable changes normal shop stock. Damaged and Checking change their separate non-sellable quantities." /></th><th>Quantity change <InfoTip text="Use a positive number to add stock or a negative number to remove stock." /></th><th>Cost</th><th></th></tr></thead><tbody>
-          {lines.map((line) => <tr key={line.id}><td><strong>{line.item_code}</strong></td><td>{line.description}</td><td><select value={line.bucket} onChange={(e) => updateLine(line.id, { bucket: e.target.value })}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></td><td><input className="table-number-input" type="number" step="1" value={line.qty} onChange={(e) => updateLine(line.id, { qty: e.target.value })} /></td><td><input className="table-number-input" type="number" step="0.01" value={line.unit_cost} onChange={(e) => updateLine(line.id, { unit_cost: e.target.value })} /></td><td><button type="button" className="small-button danger" onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))}>Remove</button></td></tr>)}
+        <div className="panel-card adjustment-product-picker"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products by code, name, or barcode" /><div className="adjustment-product-list">{products.map((product) => <button type="button" key={product.product_id} onClick={() => addLine(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>Available {numberValue(product.available_qty)}{numberValue(product.reserved_qty) > 0 ? ` · Reserved ${numberValue(product.reserved_qty)}` : ''}</small></button>)}</div></div>
+        <div className="panel-card table-wrap"><table><thead><tr><th>Code</th><th>Item</th><th>Stock bucket <InfoTip text="Sellable changes normal shop stock. Damaged and Checking change their separate non-sellable quantities. Reserved units cannot be removed here." /></th><th>Current</th><th>Quantity change <InfoTip text="Use a positive number to add stock or a negative number to remove stock. Existing average cost is used internally and is never changed." /></th><th></th></tr></thead><tbody>
+          {lines.map((line) => <tr key={line.id}><td><strong>{line.item_code}</strong></td><td>{line.description}<small className="adjustment-cost-note">Valued at existing average cost {money(line.avg_cost)}</small></td><td><select value={line.bucket} onChange={(e) => updateLine(line.id, { bucket: e.target.value })}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></td><td><strong>{adjustmentBucketQuantity(line)}</strong>{line.bucket === 'sellable' && numberValue(line.reserved_qty) > 0 && <small className="adjustment-reserved-note">{numberValue(line.reserved_qty)} reserved</small>}</td><td><input className="table-number-input" type="number" step="1" min={-adjustmentMaximumReduction(line)} value={line.qty} onChange={(e) => updateLine(line.id, { qty: e.target.value })} /></td><td><button type="button" className="small-button danger" onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))}>Remove</button></td></tr>)}
           {!lines.length && <EmptyRow colSpan={6} text="Select products from the list to build the adjustment." />}
         </tbody></table></div>
       </div>
@@ -8299,7 +8333,7 @@ function StockPage({ onOpenDocuments }) {
             <StatCard label="Reserved quantity" value={totalReserved} />
           </div>
 
-          <div className="notice slim-notice stock-guide-note"><strong>Stock quantity guide</strong><InfoTip text="Qty is sellable physical stock. Available is Qty minus Reserved. In Transit is incoming stock not yet received. Warranty and Damaged are non-sellable quantities." /></div>
+          <div className="notice slim-notice stock-guide-note"><strong>Stock quantity guide</strong><InfoTip text="Qty is sellable physical stock. Available is Qty minus Reserved. COD orders and review sales reserve automatically; their source document releases or fulfils the reservation. In Transit is incoming stock not yet received. Warranty and Damaged are non-sellable quantities." /></div>
 
           {message && <div className="notice success">{message}</div>}
           {error && <div className="error-box">{error}</div>}
@@ -8953,10 +8987,10 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
           </div>
           <div className="party-hero-actions">
             <button className="primary-button green-button party-open-payment" disabled={!hasOutstandingBalance} title={hasOutstandingBalance ? actionLabel : 'This balance is already settled'} onClick={() => setShowPaymentForm(true)}>{actionLabel}</button>
-            <button className="secondary-button" onClick={openEditProfile}>Edit Profile</button>
-            <button className="primary-button" disabled={!selected.party_code} title={!selected.party_code ? 'Run migration 052 first' : 'Design and print a thermal profile label'} onClick={() => setShowThermalLabel(true)}>Print Profile Tag</button>
-            <button className="secondary-button" onClick={() => loadTransactions(selected.id)}>Refresh</button>
-            {isAdmin && <button className="danger-button party-delete-button" disabled={deletingProfile} title="Delete only an unused profile with no balance or history" onClick={deletePartyProfile}>{deletingProfile ? 'Deleting...' : 'Delete Profile'}</button>}
+            <button className="secondary-button party-icon-button" aria-label="Edit profile" title="Edit profile" onClick={openEditProfile}><NavigationIcon name="edit" /></button>
+            <button className="primary-button party-icon-button" aria-label="Print profile tag" disabled={!selected.party_code} title={!selected.party_code ? 'Run migration 052 first' : 'Design and print a thermal profile label'} onClick={() => setShowThermalLabel(true)}><NavigationIcon name="print" /></button>
+            <button className="secondary-button party-icon-button" aria-label="Refresh profile" title="Refresh profile" onClick={() => loadTransactions(selected.id)}><NavigationIcon name="refresh" /></button>
+            {isAdmin && <button className="danger-button party-delete-button party-icon-button" aria-label="Delete profile" disabled={deletingProfile} title={deletingProfile ? 'Deleting profile…' : 'Delete only an unused profile with no balance or history'} onClick={deletePartyProfile}><NavigationIcon name="trash" /></button>}
           </div>
         </div>
         {error && <div className="error-box">{error}</div>}
@@ -9287,15 +9321,23 @@ function CashflowPage() {
     setError('');
     setMessage('');
     const amount = Number(manualForm.amount || 0);
+    if (!manualForm.payment_method_id) {
+      setError('Select a payment method.');
+      return;
+    }
     if (amount <= 0) {
       setError('Enter amount greater than zero.');
       return;
     }
+    if (!manualForm.description.trim()) {
+      setError('Enter a description for this cashflow movement.');
+      return;
+    }
     const { data, error: insertError } = await supabase.rpc('save_manual_cashflow_document_v29', {
       p_entry_type: manualForm.entry_type,
-      p_payment_method_id: manualForm.payment_method_id || null,
+      p_payment_method_id: manualForm.payment_method_id,
       p_amount: amount,
-      p_description: manualForm.description || null
+      p_description: manualForm.description.trim()
     });
     if (insertError) {
       setError(insertError.message);
@@ -9304,7 +9346,14 @@ function CashflowPage() {
     setManualForm((form) => ({ ...form, amount: '', description: '' }));
     setShowAdd(false);
     setMessage(`${documentTypeLabel(data?.document_type)} ${data?.document_no} saved with its cashflow transaction.`);
-    loadEntries();
+    await Promise.all([loadEntries(), loadCashAccounts(), loadRegisterState()]);
+  }
+
+  function openManualMovement(entryType) {
+    setError('');
+    setMessage('');
+    setManualForm((current) => ({ ...current, entry_type: entryType, amount: '', description: '' }));
+    setShowAdd(true);
   }
 
   async function saveAccountTransfer(event) {
@@ -9396,7 +9445,10 @@ function CashflowPage() {
           <span>{rangeLabel}</span>
           <button className="secondary-button" disabled={!!pdfBusy} onClick={() => exportCashflow('print')}>{pdfBusy === 'print' ? 'Preparing...' : 'Print A5'}</button>
           <button className="secondary-button" disabled={!!pdfBusy} onClick={() => exportCashflow('download')}>{pdfBusy === 'download' ? 'Preparing...' : 'Download A5 PDF'}</button>
-          <button className="primary-button" onClick={() => setShowAdd(true)}>+ Add Cash Document</button>
+          <div className="cashflow-manual-actions">
+            <button className="primary-button cashflow-entry-button inflow" onClick={() => openManualMovement('cash_in')}>+ Inflow</button>
+            <button className="primary-button cashflow-entry-button outflow" onClick={() => openManualMovement('cash_out')}>− Outflow</button>
+          </div>
         </div>
       </div>
       {error && <div className="error-box">{error}</div>}
@@ -9490,31 +9542,26 @@ function CashflowPage() {
       </div>}
 
       {showAdd && (
-        <div className="modal-backdrop">
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowAdd(false); }}>
           <div className="modal-card compact-modal">
-            <h3>Add Cashflow Document</h3>
-            <p className="muted-text">Cash out creates an Expense document. Cash in creates an Other Income document.</p>
+            <h3>Add {manualForm.entry_type === 'cash_in' ? 'Inflow' : 'Outflow'}</h3>
+            <p className="muted-text">This creates {manualForm.entry_type === 'cash_in' ? 'an Other Income' : 'an Expense'} document and records it in cashflow.</p>
             <form onSubmit={saveManualMovement}>
-              <label>Type
-                <select value={manualForm.entry_type} onChange={(e) => setManualForm({ ...manualForm, entry_type: e.target.value })}>
-                  <option value="cash_out">Cash out / Expense</option>
-                  <option value="cash_in">Cash in / Other income</option>
-                </select>
-              </label>
-              <label>Payment account
-                <select value={manualForm.payment_method_id} onChange={(e) => setManualForm({ ...manualForm, payment_method_id: e.target.value })}>
+              <label>Payment method
+                <select value={manualForm.payment_method_id} onChange={(e) => setManualForm({ ...manualForm, payment_method_id: e.target.value })} required>
+                  {!paymentMethods.length && <option value="">No cashflow payment methods available</option>}
                   {paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}
                 </select>
               </label>
               <label>Amount
-                <input type="number" step="0.01" value={manualForm.amount} onFocus={selectAllText} onChange={(e) => setManualForm({ ...manualForm, amount: e.target.value })} />
+                <input type="number" min="0.01" step="0.01" value={manualForm.amount} onFocus={selectAllText} onChange={(e) => setManualForm({ ...manualForm, amount: e.target.value })} autoFocus required />
               </label>
               <label>Description
-                <input value={manualForm.description} onFocus={selectAllText} onChange={(e) => setManualForm({ ...manualForm, description: e.target.value })} placeholder="Rent, tea, transport, bank charge, etc." />
+                <input value={manualForm.description} onFocus={selectAllText} onChange={(e) => setManualForm({ ...manualForm, description: e.target.value })} placeholder={manualForm.entry_type === 'cash_in' ? 'Owner deposit, correction, other income, etc.' : 'Rent, tea, transport, bank charge, etc.'} required />
               </label>
               <div className="modal-actions">
                 <button type="button" className="secondary-button" onClick={() => setShowAdd(false)}>Cancel</button>
-                <button className="primary-button">Save document</button>
+                <button className={`primary-button cashflow-entry-button ${manualForm.entry_type === 'cash_in' ? 'inflow' : 'outflow'}`} disabled={!paymentMethods.length}>Save {manualForm.entry_type === 'cash_in' ? 'Inflow' : 'Outflow'}</button>
               </div>
             </form>
           </div>
@@ -10847,7 +10894,9 @@ function AssistantSettingsPage() {
 function PaymentTypesPage() {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other', requires_cheque_details: false });
+  const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
 
   useEffect(() => { loadRows(); }, []);
   useRealtimeRefresh(['payment_methods'], loadRows);
@@ -10859,22 +10908,44 @@ function PaymentTypesPage() {
     else setRows(data || []);
   }
 
-  async function addPayment(event) {
+  function resetPaymentForm() {
+    setForm({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other', requires_cheque_details: false });
+    setEditingId('');
+  }
+
+  function editPayment(row) {
+    setError('');
+    setMessage('');
+    setEditingId(row.id);
+    setForm({
+      name: row.name || '',
+      is_paid_method: row.is_paid_method !== false,
+      affects_cashflow: !!row.affects_cashflow,
+      account_kind: row.account_kind || 'other',
+      requires_cheque_details: !!row.requires_cheque_details
+    });
+  }
+
+  async function savePayment(event) {
     event.preventDefault();
     setError('');
+    setMessage('');
     const payload = {
       name: form.name.trim(),
       is_paid_method: form.is_paid_method,
       affects_cashflow: form.is_paid_method ? form.affects_cashflow : false,
       account_kind: form.requires_cheque_details ? 'bank' : form.is_paid_method && form.affects_cashflow ? form.account_kind : 'other',
-      requires_cheque_details: !!form.requires_cheque_details,
-      is_active: true
+      requires_cheque_details: !!form.requires_cheque_details
     };
-    const { error: insertError } = await supabase.from('payment_methods').insert(payload);
-    if (insertError) setError(insertError.message);
+    const query = editingId
+      ? supabase.from('payment_methods').update(payload).eq('id', editingId)
+      : supabase.from('payment_methods').insert({ ...payload, is_active: true });
+    const { error: saveError } = await query;
+    if (saveError) setError(saveError.message);
     else {
-      setForm({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other', requires_cheque_details: false });
-      loadRows();
+      setMessage(editingId ? `${payload.name} updated.` : `${payload.name} added.`);
+      resetPaymentForm();
+      await loadRows();
     }
   }
 
@@ -10887,10 +10958,13 @@ function PaymentTypesPage() {
   return (
     <section className="page-section two-column">
       <div className="panel-card form-card">
-        <h3>Add Payment Type</h3>
-        <p>Paid methods settle the invoice now. Unpaid methods create customer due balance.</p>
+        <div className="section-title-row">
+          <div><h3>{editingId ? 'Edit Payment Type' : 'Add Payment Type'}</h3><p>Paid methods settle the invoice now. Unpaid methods create customer due balance.</p></div>
+          {editingId && <button type="button" className="secondary-button" onClick={resetPaymentForm}>Cancel edit</button>}
+        </div>
         {error && <div className="error-box">{error}</div>}
-        <form onSubmit={addPayment}>
+        {message && <div className="notice success">{message}</div>}
+        <form onSubmit={savePayment}>
           <label>Name</label>
           <input value={form.name} onFocus={selectAllText} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Example: QR Payment" required />
 
@@ -10914,12 +10988,12 @@ function PaymentTypesPage() {
           </label>
           {form.is_paid_method && form.affects_cashflow && <><label>Cashflow account type</label><select value={form.account_kind} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">Cash and bank accounts appear separately on the Cashflow page and can be used for transfers.</small></>}
           <label className="checkbox-label"><input type="checkbox" checked={form.requires_cheque_details} onChange={(e) => setForm({ ...form, requires_cheque_details: e.target.checked, is_paid_method: true, affects_cashflow: true, account_kind: e.target.checked ? 'bank' : form.account_kind })} /> Require cheque number and date</label>
-          <button className="primary-button full-width">Save</button>
+          <button className="primary-button full-width">{editingId ? 'Save Changes' : 'Save'}</button>
         </form>
       </div>
       <div className="panel-card table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Account Type</th><th>Cheque details</th><th>Affects Cashflow</th><th>Active</th><th>Action</th></tr></thead>
+          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Account Type</th><th>Cheque details</th><th>Affects Cashflow</th><th>Active</th><th>Action</th><th aria-label="Edit"></th></tr></thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.id}>
@@ -10930,9 +11004,10 @@ function PaymentTypesPage() {
                 <td>{row.affects_cashflow ? 'Yes' : 'No'}</td>
                 <td>{row.is_active ? 'Yes' : 'No'}</td>
                 <td><button className="small-button" onClick={() => toggleActive(row)}>{row.is_active ? 'Disable' : 'Enable'}</button></td>
+                <td><button type="button" className="small-button payment-edit-icon" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => editPayment(row)}><NavigationIcon name="edit" /></button></td>
               </tr>
             ))}
-            {rows.length === 0 && <EmptyRow colSpan={7} text="No payment types." />}
+            {rows.length === 0 && <EmptyRow colSpan={8} text="No payment types." />}
           </tbody>
         </table>
       </div>

@@ -849,6 +849,15 @@ tr:hover td { background: #303030; }
 }
 .thermal-label-preview .code { max-width: 100%; overflow: hidden; font-weight: 800; line-height: 1; letter-spacing: .025em; text-overflow: ellipsis; white-space: nowrap; }
 .party-hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.party-icon-button {
+  display: inline-grid;
+  width: 40px;
+  min-width: 40px;
+  height: 38px;
+  padding: 0;
+  place-items: center;
+}
+.party-icon-button .navigation-svg-icon { width: 19px; height: 19px; }
 
 @media (max-width: 820px) {
   .thermal-label-modal { width: 100%; max-width: none; max-height: 96dvh; padding: 14px; }
@@ -2419,6 +2428,8 @@ tr.selected-row td {
 .adjustment-product-list button { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; padding: 10px; border: 1px solid var(--line); background: #252525; color: var(--text); text-align: left; cursor: pointer; }
 .adjustment-product-list button:hover { border-color: var(--primary); background: rgba(0,120,215,.09); }
 .adjustment-product-list button small { grid-column: 2; color: var(--muted); }
+.adjustment-cost-note, .adjustment-reserved-note { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.adjustment-reserved-note { color: #efbd72; white-space: nowrap; }
 .table-number-input { width: 105px; min-width: 90px; }
 .inventory-adjustment-save { display: flex; justify-content: flex-end; }
 .inventory-adjustment-save button { min-width: 210px; }
@@ -3148,6 +3159,20 @@ body.pos-resizing {
 }
 .document-link-button:hover { color: #a1e2fb; }
 .cashflow-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.cashflow-manual-actions { display: flex; gap: 7px; }
+.cashflow-entry-button.inflow { border-color: #43b96a; background: #278c49; }
+.cashflow-entry-button.inflow:hover { background: #31a457; }
+.cashflow-entry-button.outflow { border-color: #d45c5c; background: #a83b3b; }
+.cashflow-entry-button.outflow:hover { background: #bd4747; }
+.payment-edit-icon {
+  display: inline-grid;
+  width: 34px;
+  min-width: 34px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+}
+.payment-edit-icon .navigation-svg-icon { width: 16px; height: 16px; }
 .cashflow-heading-actions > span {
   padding: 7px 10px;
   border: 1px solid var(--line);

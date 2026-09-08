@@ -89,6 +89,8 @@ Run `supabase/sql/062_start_fresh_and_aronium_imports.sql` after migration 061. 
 
 Run `supabase/sql/063_party_delete_review_reservations.sql` after migration 062. Review sales then reserve tracked stock while awaiting administrator confirmation, release the reservation when deleted, and convert it into the normal stock deduction when confirmed. Administrators can also delete unused customer/supplier profiles, while profiles with balances, documents, supplier purchases, or warranty history remain protected.
 
+Run `supabase/sql/064_quantity_only_stock_adjustments.sql` after migration 063. Stock Adjustment then changes Sellable, Damaged, or Checking quantities without changing a product's average cost or selling price and without creating cashflow. Inventory gains and losses remain valued at the existing average cost for accounting. Reserved units remain protected and must be released through their source COD or review-sale document.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
