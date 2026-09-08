@@ -3114,6 +3114,10 @@ body.pos-resizing {
 .party-payment-fields label { display: grid; gap: 5px; }
 .party-payment-card .button-row { align-items: stretch; }
 .party-payment-card .button-row button { flex: 1 1 140px; }
+.party-detail-grid-v17.party-history-only { grid-template-columns: minmax(0, 1fr); }
+.party-payment-modal { position: static; top: auto; width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; }
+.party-open-payment { border-color: #3fbd69; background: #29964e; }
+.party-delete-button { margin-left: 2px; }
 .party-balance-action.receivable { border-color: #39a85d; background: #2f8f4b; }
 .party-balance-action.payable { border-color: #d65b5b; background: #b84242; }
 .transaction-panel-full { min-width: 0; padding: 0; overflow: hidden; }
@@ -3488,6 +3492,7 @@ body.pos-resizing {
 .return-invoice-results button strong { color: #fff; font-size: 14px; }
 .return-invoice-results button span { font-weight: 700; }
 .return-invoice-results button small { color: #aebbc1; }
+.return-invoice-results button em { overflow: hidden; color: #efbd72; font-size: 10px; font-style: normal; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .return-no-results { grid-column: 1 / -1; padding: 13px; border: 1px dashed #555; color: #aaa; text-align: center; }
 .return-source-summary { display: flex; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid #3f6678; background: #20333c; }
 .return-source-summary strong { color: #fff; font-size: 15px; }
@@ -3884,6 +3889,8 @@ body.pos-resizing {
 .active-operator-badge strong { font-size: 12px; }
 .active-operator-badge small { color: #9ca7ad; font-size: 9px; text-transform: uppercase; }
 .operator-dot { width: 8px; height: 8px; border-radius: 50%; background: #42c477; box-shadow: 0 0 0 3px rgba(66, 196, 119, .15); }
+.topbar-control-icon { display: none; }
+.topbar-control-icon .navigation-svg-icon { width: 20px; height: 20px; }
 .pos-action:disabled,
 .void-bill-button:disabled { cursor: not-allowed; opacity: .36; filter: grayscale(1); }
 
@@ -5446,12 +5453,24 @@ body.pos-resizing {
   cursor: pointer;
   user-select: none;
 }
+.pos-unconfirmed-toggle:has(.sr-only) { width: 36px; justify-content: center; padding: 5px; }
 .pos-unconfirmed-toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .pos-unconfirmed-toggle > span { color: #7f8a91; font-size: 16px; line-height: 1; }
 .pos-unconfirmed-toggle.active { border-color: #9b7b32; background: #393327; color: #e4c77d; }
 .pos-unconfirmed-toggle.active > span { color: #f0bf4d; }
 .pos-unconfirmed-toggle:has(input:disabled) { cursor: default; }
 .internal-document-mark { color: #d3b260; font-weight: 750; white-space: nowrap; }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+.pos-action.return-action, .pos-action.return-action span { color: #ff7777; }
+.pos-action.return-action:hover { border-color: rgba(232, 92, 92, .72); }
+.pos-bill-switch-transition { animation: pos-bill-switch-in 180ms ease-out both; }
+@keyframes pos-bill-switch-in {
+  from { opacity: .4; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pos-bill-switch-transition { animation: none; }
+}
 
 .cod-order-toolbar { flex-wrap: wrap; }
 .cod-order-toolbar .toolbar-button { min-width: 112px; }
@@ -5558,4 +5577,36 @@ body.pos-resizing {
   .assistant-knowledge-header { grid-template-columns: 1fr; }
   .assistant-knowledge-save { align-items: stretch; flex-direction: column; }
   .assistant-knowledge-save .primary-button { width: 100%; }
+}
+
+/* Compact mobile session controls: keep all actions available without long labels. */
+@media (max-width: 700px) {
+  .topbar-session-actions .active-operator-badge {
+    position: relative;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+  }
+  .topbar-session-actions .active-operator-badge > div { display: none; }
+  .topbar-session-actions .active-operator-badge .operator-dot {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    width: 6px;
+    height: 6px;
+  }
+  .topbar-control-icon { display: grid; place-items: center; }
+  .topbar-control-label { display: none; }
+  .topbar-session-actions .topbar-lock-button,
+  .topbar-session-actions .topbar-logout-button {
+    width: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    display: grid !important;
+    place-items: center;
+    padding: 0;
+  }
 }

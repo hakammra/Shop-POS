@@ -434,6 +434,9 @@ function WhatsAppIcon({ className = '' } = {}) {
 
 function NavigationIcon({ name, fallback = '' } = {}) {
   const common = { className: 'navigation-svg-icon', viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' };
+  if (name === 'user') return <svg {...common}><circle cx="12" cy="8" r="4" /><path d="M4.5 21a7.5 7.5 0 0 1 15 0" /></svg>;
+  if (name === 'switch') return <svg {...common}><path d="M4 7h13M14 4l3 3-3 3M20 17H7M10 14l-3 3 3 3" /></svg>;
+  if (name === 'logout') return <svg {...common}><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" /></svg>;
   if (name === 'wrench') return <svg {...common}><path d="M14.8 6.2a4.3 4.3 0 0 0-5.2 5.5L4 17.3 6.7 20l5.6-5.6a4.3 4.3 0 0 0 5.5-5.2l-2.6 2.6-3-3 2.6-2.6Z" /><path d="m5.8 17.8.4.4" /></svg>;
   if (name === 'document') return <svg {...common}><path d="M6 3h8l4 4v14H6Z" /><path d="M14 3v5h5M9 12h6M9 16h6" /></svg>;
   if (name === 'chart') return <svg {...common}><path d="M4 20V5M4 20h16" /><path d="M7 16v-4h3v4M12 16V9h3v7M17 16V6h3v10" /></svg>;
@@ -750,9 +753,9 @@ function PosApplication() {
             <p>Trusted device</p>
           </div>
           <div className="topbar-session-actions">
-            <div className="active-operator-badge"><span className="operator-dot" /><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
-            <button className="secondary-button topbar-lock-button" onClick={lockPos}>Lock / Switch</button>
-            <button className="secondary-button topbar-logout-button" onClick={logoutDevice}>Logout Device</button>
+            <div className="active-operator-badge" title={`${activeStaff.full_name} · ${activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active`}><span className="operator-dot" /><span className="topbar-control-icon"><NavigationIcon name="user" /></span><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
+            <button className="secondary-button topbar-lock-button" aria-label="Lock or switch user" title="Lock / Switch" onClick={lockPos}><span className="topbar-control-icon"><NavigationIcon name="switch" /></span><span className="topbar-control-label">Lock / Switch</span></button>
+            <button className="secondary-button topbar-logout-button" aria-label="Logout device" title="Logout Device" onClick={logoutDevice}><span className="topbar-control-icon"><NavigationIcon name="logout" /></span><span className="topbar-control-label">Logout Device</span></button>
             {staffCan(activeStaff, 'use_ai_assistant') && <button
               type="button"
               className={activePage === 'tech_assistant' || assistantDrawerOpen ? 'assistant-header-button active' : 'assistant-header-button'}
@@ -779,7 +782,7 @@ function PosApplication() {
         {activePage === 'reports' && <ReportsPage />}
         {activePage === 'cashflow' && <CashflowPage />}
         {activePage === 'accounting' && <AccountingPage activeStaff={activeStaff} />}
-        {activePage === 'customers_suppliers' && <CustomersSuppliersPage customerTarget={customerProfileTarget} onCustomerTargetHandled={() => setCustomerProfileTarget(null)} />}
+        {activePage === 'customers_suppliers' && <CustomersSuppliersPage isAdmin={activeStaff.role === 'admin'} customerTarget={customerProfileTarget} onCustomerTargetHandled={() => setCustomerProfileTarget(null)} />}
         {activePage === 'online_orders' && <OnlineOrdersPage />}
         {activePage === 'settings' && <SettingsPage activeStaff={activeStaff} appSettings={appSettings} autoLockMinutes={securityState.auto_lock_minutes || 5} onSettingsSaved={setAppSettings} onAutoLockChanged={(minutes) => setSecurityState((current) => ({ ...current, auto_lock_minutes: minutes }))} />}
         {staffCan(activeStaff, 'use_ai_assistant') && activePage !== 'tech_assistant' && assistantDrawerOpen && <button
@@ -1893,25 +1896,61 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   async function loadReturnInvoiceOptions() {
     const requestId = ++returnLookupRequestRef.current;
     setReturnBusy(true);
-    let query = supabase
+    const cleanSearch = returnSearch.trim();
+    const invoiceQuery = () => supabase
       .from('documents')
       .select('id, document_no, document_date, created_at, customer_id, total_amount, customers:customers!documents_customer_id_fkey(id, name, phone)')
       .eq('document_type', 'invoice')
       .order('document_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(40);
+      .order('created_at', { ascending: false });
+    const eligibleInvoiceQuery = (sourceQuery) => {
+      if (!activeBill.customerId) return sourceQuery.is('customer_id', null);
+      if (returnPartyFilter === 'customer') return sourceQuery.eq('customer_id', activeBill.customerId);
+      if (returnPartyFilter === 'walkin') return sourceQuery.is('customer_id', null);
+      return sourceQuery.or(`customer_id.eq.${activeBill.customerId},customer_id.is.null`);
+    };
 
-    if (activeBill.customerId) {
-      if (returnPartyFilter === 'customer') query = query.eq('customer_id', activeBill.customerId);
-      else if (returnPartyFilter === 'walkin') query = query.is('customer_id', null);
-      else query = query.or(`customer_id.eq.${activeBill.customerId},customer_id.is.null`);
+    let data = [];
+    let error = null;
+    if (!cleanSearch) {
+      const result = await eligibleInvoiceQuery(invoiceQuery()).limit(40);
+      data = result.data || [];
+      error = result.error;
     } else {
-      query = query.is('customer_id', null);
+      const pattern = `%${cleanSearch}%`;
+      const [numberResult, codeResult, nameResult] = await Promise.all([
+        eligibleInvoiceQuery(invoiceQuery()).ilike('document_no', pattern).limit(60),
+        supabase.from('document_items').select('document_id, item_code, description').gt('qty', 0).ilike('item_code', pattern).limit(250),
+        supabase.from('document_items').select('document_id, item_code, description').gt('qty', 0).ilike('description', pattern).limit(250)
+      ]);
+      error = numberResult.error || codeResult.error || nameResult.error;
+      if (!error) {
+        const matchingItems = [...(codeResult.data || []), ...(nameResult.data || [])];
+        const matchingDocumentIds = [...new Set(matchingItems.map((row) => row.document_id).filter(Boolean))].slice(0, 120);
+        let productDocuments = [];
+        if (matchingDocumentIds.length) {
+          const productResult = await eligibleInvoiceQuery(invoiceQuery()).in('id', matchingDocumentIds).limit(60);
+          error = productResult.error;
+          productDocuments = productResult.data || [];
+        }
+        if (!error) {
+          const matchedItemsByDocument = new Map();
+          matchingItems.forEach((row) => {
+            if (!matchedItemsByDocument.has(row.document_id)) matchedItemsByDocument.set(row.document_id, []);
+            const label = [row.item_code, row.description].filter(Boolean).join(' · ');
+            if (label && !matchedItemsByDocument.get(row.document_id).includes(label)) matchedItemsByDocument.get(row.document_id).push(label);
+          });
+          const byId = new Map();
+          [...(numberResult.data || []), ...productDocuments].forEach((invoice) => byId.set(invoice.id, {
+            ...invoice,
+            matchedItems: (matchedItemsByDocument.get(invoice.id) || []).slice(0, 3)
+          }));
+          data = [...byId.values()]
+            .sort((left, right) => new Date(right.document_date || right.created_at) - new Date(left.document_date || left.created_at))
+            .slice(0, 60);
+        }
+      }
     }
-
-    const cleanSearch = returnSearch.trim();
-    if (cleanSearch) query = query.ilike('document_no', `%${cleanSearch}%`);
-    const { data, error } = await query;
     if (requestId !== returnLookupRequestRef.current) return [];
     setReturnBusy(false);
     if (error) {
@@ -1927,7 +1966,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     event?.preventDefault();
     setMessage('');
     const matches = await loadReturnInvoiceOptions();
-    if (!matches.length) setMessage(`No ${selectedCustomer ? `${selectedCustomer.name} or Walk-in` : 'Walk-in'} invoices match that number.`);
+    if (!matches.length) setMessage(`No ${selectedCustomer ? `${selectedCustomer.name} or Walk-in` : 'Walk-in'} invoices match that invoice number or product.`);
   }
 
   async function chooseReturnInvoice(invoice) {
@@ -2315,18 +2354,18 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }));
 
     const rpcName = isUnconfirmed
-      ? 'save_unconfirmed_sale_v57'
+      ? 'save_unconfirmed_sale_v63'
       : isConfirmingUnconfirmed
-        ? 'confirm_unconfirmed_sale_v57'
+        ? 'confirm_unconfirmed_sale_v63'
         : 'save_pos_invoice_v56';
     const rpcArgs = isConfirmingUnconfirmed
       ? { p_source_document_id: activeBill.sourceDocumentId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
       : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
     let { data, error } = await supabase.rpc(rpcName, rpcArgs);
-    if (error && /save_pos_invoice_v56|save_unconfirmed_sale_v57|confirm_unconfirmed_sale_v57|schema cache|could not find the function/i.test(error.message || '')) {
+    if (error && /save_pos_invoice_v56|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|schema cache|could not find the function/i.test(error.message || '')) {
       setSaving(false);
       setMessage(isUnconfirmed || isConfirmingUnconfirmed
-        ? 'Run migration 057_unconfirmed_sales_job_documents.sql in Supabase before using unconfirmed sales.'
+        ? 'Run migration 063_party_delete_review_reservations.sql in Supabase before using review sales.'
         : 'Run migration 056_whatsapp_register_margin_cheques.sql in Supabase before saving new sales.');
       return;
     }
@@ -2410,7 +2449,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <button className="pos-action" disabled={!can('manage_parties')} title={!can('manage_parties') ? 'Permission required to add customers' : ''} onClick={() => setShowCustomerPanel(!showCustomerPanel)}>♙<span>Customer</span></button>
             <button className="pos-action" disabled={!can('apply_discounts')} title={!can('apply_discounts') ? 'Permission required' : ''} onClick={() => updateActiveBill({ cartDiscountType: activeBill.cartDiscountType === 'amount' ? 'percent' : 'amount' })}>%<span>Discount</span></button>
             <button className="pos-action" onClick={addBill}>＋<span>New Sale</span></button>
-            <button className="pos-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
+            <button className="pos-action return-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
             <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
             <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save for Review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : 'Save Sale'}</span></button>
           </div>
@@ -2438,7 +2477,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <button className="tab add-tab" onClick={addBill}>+ New Bill</button>
         </div>
         <div className="pos-bill-row-actions">
-          <label className={`pos-unconfirmed-toggle ${activeBill.unconfirmedMode ? 'active' : ''}`} title="Internal only. The customer invoice remains a normal sales invoice.">
+          <label className={`pos-unconfirmed-toggle ${activeBill.unconfirmedMode ? 'active' : ''}`} title="Save for internal review and reserve these items without posting payment.">
             <input
               type="checkbox"
               checked={activeBill.unconfirmedMode === true}
@@ -2446,13 +2485,13 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               onChange={(event) => updateActiveBill({ unconfirmedMode: event.target.checked })}
             />
             <span aria-hidden="true">◇</span>
-            {activeBill.editUnconfirmedId ? 'Internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming saved sale' : 'Save for review'}
+            <span className="sr-only">{activeBill.editUnconfirmedId ? 'Internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming saved sale' : 'Save for review'}</span>
           </label>
           <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
         </div>
       </div>
 
-      <div className="pos-customer-strip pos-customer-strip-v16">
+      <div key={`customer-${activeBill.id}`} className="pos-customer-strip pos-customer-strip-v16 pos-bill-switch-transition">
         <label>Invoice No.<input value={activeBill.documentNo || ''} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => updateActiveBill({ documentNo: e.target.value })} /></label>
         <div className="pos-customer-picker">
           <label>Customer
@@ -2503,7 +2542,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         className="pos-grid pos-grid-v16 resizable-pos-grid"
         style={{ '--pos-left': `${posLeftPercent}%`, '--pos-right': `${100 - posLeftPercent}%` }}
       >
-        <div className={`panel-card bill-panel left-bill-panel ${mobilePosPanel === 'bill' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
+        <div key={`bill-${activeBill.id}`} className={`panel-card bill-panel left-bill-panel pos-bill-switch-transition ${mobilePosPanel === 'bill' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
           <div className="pos-line-toolbar">
             <button className="secondary-button" onClick={() => removeItem()}>Delete</button>
           </div>
@@ -2636,7 +2675,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <div className="pos-save-success-copy">
             <span>{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? 'Sale saved for internal review' : 'Invoice saved successfully'}</span>
             <h3>{savedInvoiceReceipt.document.document_no}</h3>
-            <p>{money(savedInvoiceReceipt.document.total_amount)} has been saved to Documents{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? ' without posting stock or payment' : ''}. Choose what you want to do next.</p>
+            <p>{money(savedInvoiceReceipt.document.total_amount)} has been saved to Documents{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? ' with its items reserved and payment still unposted' : ''}. Choose what you want to do next.</p>
           </div>
           <div className="pos-save-success-actions">
             <button className="primary-button" onClick={() => printAccountingDocument(savedInvoiceReceipt.document, savedInvoiceReceipt.items, savedInvoiceReceipt.flows, companySettings)}>Print A5 Invoice</button>
@@ -2668,10 +2707,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <button type="button" className={returnPartyFilter === 'customer' ? 'active' : ''} onClick={() => { setReturnPartyFilter('customer'); setReturnInvoice(null); setReturnItems([]); }}>{selectedCustomer.name} only</button>
           <button type="button" className={returnPartyFilter === 'walkin' ? 'active' : ''} onClick={() => { setReturnPartyFilter('walkin'); setReturnInvoice(null); setReturnItems([]); }}>Walk-in only</button>
         </div> : <div className="return-eligibility-note">Walk-in Customer is selected, so only Walk-in invoices are shown. Select a named customer in POS to also see that customer's invoices.</div>}
-        <form className="return-invoice-search" onSubmit={findReturnInvoice}><label>Original invoice number<input value={returnSearch} onChange={(event) => { setReturnSearch(event.target.value); setReturnInvoice(null); setReturnItems([]); }} placeholder="Type any part, such as 15, 150 or 1509" autoFocus /></label><button className="primary-button" disabled={returnBusy}>{returnBusy ? 'Searching...' : 'Search Invoices'}</button></form>
+        <form className="return-invoice-search" onSubmit={findReturnInvoice}><label>Invoice number, product code, or product name<input value={returnSearch} onChange={(event) => { setReturnSearch(event.target.value); setReturnInvoice(null); setReturnItems([]); }} placeholder="For example: 1509, SSD-01, or laptop screen" autoFocus /></label><button className="primary-button" disabled={returnBusy}>{returnBusy ? 'Searching...' : 'Search Invoices'}</button></form>
         <div className="return-invoice-results" aria-live="polite">
           {returnInvoiceMatches.map((invoice) => <button type="button" key={invoice.id} className={returnInvoice?.id === invoice.id ? 'selected' : ''} onClick={() => chooseReturnInvoice(invoice)} disabled={returnBusy && returnInvoice?.id !== invoice.id}>
-            <strong>{invoice.document_no}</strong><span>{invoice.customers?.name || 'Walk-in Customer'}</span><small>{fmtDate(invoice.document_date)} · {money(invoice.total_amount)}</small>
+            <strong>{invoice.document_no}</strong><span>{invoice.customers?.name || 'Walk-in Customer'}</span><small>{fmtDate(invoice.document_date)} · {money(invoice.total_amount)}</small>{invoice.matchedItems?.length > 0 && <em>Matched: {invoice.matchedItems.join(' / ')}</em>}
           </button>)}
           {!returnBusy && !returnInvoiceMatches.length && <div className="return-no-results">No eligible invoices found.</div>}
         </div>
@@ -3419,12 +3458,15 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       return;
     }
     if (selected.document_type === 'unconfirmed_sale') {
-      if (!window.confirm(`Delete internal sale ${selected.document_no}? This has no stock or cashflow effect.`)) return;
+      if (!window.confirm(`Delete internal sale ${selected.document_no}? Its reserved stock will be released.`)) return;
       setBusyAction(true);
       setError('');
       setMessage('');
-      const { error: deleteError } = await supabase.rpc('delete_unconfirmed_sale_v57', { p_document_id: selected.id });
-      if (deleteError) setError(deleteError.message); else setMessage(`${selected.document_no} deleted.`);
+      const { error: deleteError } = await supabase.rpc('delete_unconfirmed_sale_v63', { p_document_id: selected.id });
+      if (deleteError) {
+        const migrationMissing = /delete_unconfirmed_sale_v63|schema cache|could not find the function/i.test(deleteError.message || '');
+        setError(`${deleteError.message}${migrationMissing ? '. Run migration 063_party_delete_review_reservations.sql in Supabase.' : ''}`);
+      } else setMessage(`${selected.document_no} deleted and its reserved stock released.`);
       setBusyAction(false);
       await loadDocuments();
       return;
@@ -8434,7 +8476,7 @@ function cashflowDateRange(preset, customFrom = '', customTo = '') {
   return { start, end };
 }
 
-function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled } = {}) {
+function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCustomerTargetHandled } = {}) {
   const [rows, setRows] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [transactions, setTransactions] = useState([]);
@@ -8445,8 +8487,10 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState({ name: '', phone: '', address: '', is_customer: true, is_supplier: false });
   const [showEditForm, setShowEditForm] = useState(false);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', is_customer: true, is_supplier: false });
   const [savingProfile, setSavingProfile] = useState(false);
+  const [deletingProfile, setDeletingProfile] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: '', method_id: '', document_type: 'customer_payment', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
   const [showThermalLabel, setShowThermalLabel] = useState(false);
@@ -8469,6 +8513,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
   }, [customerTarget?.nonce, rows]);
   useEffect(() => {
     setLastPaymentShare(null);
+    setShowPaymentForm(false);
     if (selectedId) loadTransactions(selectedId);
     else setTransactions([]);
   }, [selectedId]);
@@ -8788,6 +8833,26 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
     setMessage(`${updated.name || editForm.name.trim()} saved as ${nextCustomerRole && nextSupplierRole ? 'Customer / Supplier' : nextSupplierRole ? 'Supplier' : 'Customer'}.`);
   }
 
+  async function deletePartyProfile() {
+    if (!selected || !isAdmin || deletingProfile) return;
+    if (!window.confirm(`Delete ${selected.name}? Only unused profiles with a settled balance can be deleted. This cannot be undone.`)) return;
+    setDeletingProfile(true);
+    setError('');
+    setMessage('');
+    const { data, error: deleteError } = await supabase.rpc('delete_party_profile_v63', { p_profile_id: selected.id });
+    setDeletingProfile(false);
+    if (deleteError) {
+      const migrationMissing = /delete_party_profile_v63|schema cache|could not find the function/i.test(deleteError.message || '');
+      setError(`${deleteError.message}${migrationMissing ? '. Run migration 063_party_delete_review_reservations.sql in Supabase.' : ''}`);
+      return;
+    }
+    const deletedName = data?.name || selected.name;
+    setRows((current) => current.filter((row) => row.id !== selected.id));
+    setSelectedId('');
+    setTransactions([]);
+    setMessage(`${deletedName} deleted.`);
+  }
+
   async function saveBalancePayment(event) {
     event.preventDefault();
     setError('');
@@ -8838,6 +8903,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
       newOutstanding: numberValue(data?.new_outstanding)
     });
     setPaymentForm((current) => ({ ...current, amount: '', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' }));
+    setShowPaymentForm(false);
     setMessage(`${documentTypeLabel(data?.document_type)} ${data?.document_no} saved. New outstanding: ${data?.new_outstanding < 0 ? '-' : ''}${money(Math.abs(Number(data?.new_outstanding || 0)))}`);
     await loadRows();
     await loadTransactions(selectedId);
@@ -8885,7 +8951,13 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
               <p>{selected.phone || 'No phone'} {selected.address ? `• ${selected.address}` : ''}</p>
             </div>
           </div>
-          <div className="party-hero-actions"><button className="secondary-button" onClick={openEditProfile}>Edit Profile</button><button className="primary-button" disabled={!selected.party_code} title={!selected.party_code ? 'Run migration 052 first' : 'Design and print a thermal profile label'} onClick={() => setShowThermalLabel(true)}>Print Profile Tag</button><button className="secondary-button" onClick={() => loadTransactions(selected.id)}>Refresh</button></div>
+          <div className="party-hero-actions">
+            <button className="primary-button green-button party-open-payment" disabled={!hasOutstandingBalance} title={hasOutstandingBalance ? actionLabel : 'This balance is already settled'} onClick={() => setShowPaymentForm(true)}>{actionLabel}</button>
+            <button className="secondary-button" onClick={openEditProfile}>Edit Profile</button>
+            <button className="primary-button" disabled={!selected.party_code} title={!selected.party_code ? 'Run migration 052 first' : 'Design and print a thermal profile label'} onClick={() => setShowThermalLabel(true)}>Print Profile Tag</button>
+            <button className="secondary-button" onClick={() => loadTransactions(selected.id)}>Refresh</button>
+            {isAdmin && <button className="danger-button party-delete-button" disabled={deletingProfile} title="Delete only an unused profile with no balance or history" onClick={deletePartyProfile}>{deletingProfile ? 'Deleting...' : 'Delete Profile'}</button>}
+          </div>
         </div>
         {error && <div className="error-box">{error}</div>}
         {message && <div className="notice success">{message}</div>}
@@ -8908,43 +8980,7 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
           <StatCard label="Documents" value={transactions.length} />
         </div>
 
-        <div className="party-detail-grid-v17">
-          <form className="panel-card balance-payment-form party-payment-card" onSubmit={saveBalancePayment}>
-            <div className="party-payment-heading"><span>New payment document</span><h3>{actionLabel}</h3></div>
-            <p className="muted-text">Saving creates a numbered document and its linked cashflow transaction together.</p>
-            <div className="party-payment-fields">
-              <label>Document type
-                <select value={paymentForm.document_type} onChange={(e) => {
-                  const nextType = e.target.value;
-                  setPaymentForm({ ...paymentForm, document_type: nextType });
-                }}>
-                  {selected.is_customer !== false && <option value="customer_payment">Customer Payment</option>}
-                  {selected.is_supplier && <option value="supplier_payment">Supplier Payment</option>}
-                </select>
-              </label>
-              <label>Payment method
-                <select value={paymentForm.method_id} onChange={(e) => setPaymentForm({ ...paymentForm, method_id: e.target.value })}>
-                  {paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}
-                </select>
-              </label>
-              <label>Amount
-                <input type="number" step="0.01" value={paymentForm.amount} onFocus={selectAllText} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} />
-              </label>
-              {selectedPartyPaymentMethod?.requires_cheque_details && <>
-                <label>Cheque number<input value={paymentForm.cheque_number} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_number: e.target.value })} required /></label>
-                <label>Cheque date<input type="date" value={paymentForm.cheque_date} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_date: e.target.value })} required /></label>
-                <label>Cheque bank<input value={paymentForm.cheque_bank_name} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_bank_name: e.target.value })} placeholder="Optional" /></label>
-              </>}
-              <label>Note
-                <input value={paymentForm.note} onFocus={selectAllText} onChange={(e) => setPaymentForm({ ...paymentForm, note: e.target.value })} />
-              </label>
-            </div>
-            <div className="button-row">
-              <button type="button" className="secondary-button" disabled={!hasOutstandingBalance} onClick={() => setPaymentForm((current) => ({ ...current, amount: String(Math.abs(selectedOutstanding)) }))}>Use full balance</button>
-              <button className={`primary-button party-balance-action ${automaticPaymentDirection === 'out' ? 'payable' : 'receivable'}`} disabled={!hasOutstandingBalance}>{actionLabel}</button>
-            </div>
-          </form>
-
+        <div className="party-detail-grid-v17 party-history-only">
           <div className="panel-card transaction-panel-full">
             <div className="transaction-panel-heading"><div><h3>Document history</h3><p>Click a row or document number to view, print, or save it as PDF.</p></div><span>{transactions.length} documents</span></div>
             <div className="table-wrap compact-table">
@@ -8971,6 +9007,36 @@ function CustomersSuppliersPage({ customerTarget = null, onCustomerTargetHandled
         </div>
         {previewDocumentId && <DocumentPreviewModal documentId={previewDocumentId} onClose={() => setPreviewDocumentId('')} />}
         {showThermalLabel && selected.party_code && <ThermalLabelModal code={selected.party_code} kindLabel={`${profileType} profile tag`} onClose={() => setShowThermalLabel(false)} />}
+        {showPaymentForm && hasOutstandingBalance && <div className="modal-backdrop party-payment-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowPaymentForm(false); }}>
+          <form className="modal-card balance-payment-form party-payment-card party-payment-modal" onSubmit={saveBalancePayment}>
+            <div className="section-title-row party-payment-heading"><div><span>New payment document</span><h3>{actionLabel}</h3></div><button type="button" className="secondary-button" onClick={() => setShowPaymentForm(false)}>Close</button></div>
+            <p className="muted-text">Saving creates a numbered document and its linked cashflow transaction together.</p>
+            <div className="party-payment-fields">
+              <label>Document type
+                <select value={paymentForm.document_type} onChange={(e) => setPaymentForm({ ...paymentForm, document_type: e.target.value })}>
+                  {selected.is_customer !== false && <option value="customer_payment">Customer Payment</option>}
+                  {selected.is_supplier && <option value="supplier_payment">Supplier Payment</option>}
+                </select>
+              </label>
+              <label>Payment method
+                <select value={paymentForm.method_id} onChange={(e) => setPaymentForm({ ...paymentForm, method_id: e.target.value })}>
+                  {paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}
+                </select>
+              </label>
+              <label>Amount<input type="number" min="0.01" step="0.01" value={paymentForm.amount} onFocus={selectAllText} onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })} autoFocus /></label>
+              {selectedPartyPaymentMethod?.requires_cheque_details && <>
+                <label>Cheque number<input value={paymentForm.cheque_number} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_number: e.target.value })} required /></label>
+                <label>Cheque date<input type="date" value={paymentForm.cheque_date} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_date: e.target.value })} required /></label>
+                <label>Cheque bank<input value={paymentForm.cheque_bank_name} onChange={(e) => setPaymentForm({ ...paymentForm, cheque_bank_name: e.target.value })} placeholder="Optional" /></label>
+              </>}
+              <label>Note<input value={paymentForm.note} onFocus={selectAllText} onChange={(e) => setPaymentForm({ ...paymentForm, note: e.target.value })} /></label>
+            </div>
+            <div className="button-row">
+              <button type="button" className="secondary-button" onClick={() => setPaymentForm((current) => ({ ...current, amount: String(Math.abs(selectedOutstanding)) }))}>Use full balance</button>
+              <button className={`primary-button party-balance-action ${automaticPaymentDirection === 'out' ? 'payable' : 'receivable'}`}>{actionLabel}</button>
+            </div>
+          </form>
+        </div>}
         {showEditForm && <div className="modal-backdrop party-profile-edit-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingProfile) setShowEditForm(false); }}><div className="modal-card party-profile-edit-modal">
           <div className="section-title-row"><div><h3>Edit Customer / Supplier</h3><p>Update this one profile instead of creating a duplicate.</p></div><button type="button" className="secondary-button" disabled={savingProfile} onClick={() => setShowEditForm(false)}>Close</button></div>
           <form onSubmit={saveProfileChanges}>

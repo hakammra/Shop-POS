@@ -57,7 +57,7 @@ Run `supabase/sql/056_whatsapp_register_margin_cheques.sql` after migration 055.
 
 ## Unconfirmed sales and job receipts
 
-Run `supabase/sql/057_unconfirmed_sales_job_documents.sql` after migration 056. POS staff can then save a sale for internal review without posting stock, cashflow, customer balances, accounting, or reports. The Documents page shows the internal marker, lets staff edit or delete an unconfirmed sale, and lets an administrator load it into POS for final confirmation. Customer printouts, PDFs, and WhatsApp copies deliberately remain ordinary **Sales Invoice** documents with no visible internal-review wording. Repair jobs can also print or download a dedicated landscape job receipt.
+Run `supabase/sql/057_unconfirmed_sales_job_documents.sql` after migration 056. POS staff can then save a sale for internal review without posting payment, customer balances, accounting, or reports. Migration 063 adds inventory reservation while the sale is waiting for review. The Documents page shows the internal marker, lets staff edit or delete an unconfirmed sale, and lets an administrator load it into POS for final confirmation. Customer printouts, PDFs, and WhatsApp copies deliberately remain ordinary **Sales Invoice** documents with no visible internal-review wording. Repair jobs can also print or download a dedicated landscape job receipt.
 
 Run `supabase/sql/058_staff_document_attribution.sql` after migration 057. Every new document keeps the active PIN-unlocked POS staff member as its creator and the most recent editor separately. COD orders also lock that creator as **Placed by**, providing a reliable basis for future staff commission reports; another staff member editing the order cannot take ownership of it.
 
@@ -86,6 +86,8 @@ Checkout creates an Online Order request for staff review but does not charge th
 ## Start Fresh reset
 
 Run `supabase/sql/062_start_fresh_and_aronium_imports.sql` after migration 061. It updates the administrator-only reset under **Settings → Backups & Restore → Start Fresh** for the newer cheque-payment schema. Unlock the POS with an administrator PIN before running the reset.
+
+Run `supabase/sql/063_party_delete_review_reservations.sql` after migration 062. Review sales then reserve tracked stock while awaiting administrator confirmation, release the reservation when deleted, and convert it into the normal stock deduction when confirmed. Administrators can also delete unused customer/supplier profiles, while profiles with balances, documents, supplier purchases, or warranty history remain protected.
 
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
