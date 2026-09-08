@@ -91,6 +91,8 @@ Run `supabase/sql/063_party_delete_review_reservations.sql` after migration 062.
 
 Run `supabase/sql/064_quantity_only_stock_adjustments.sql` after migration 063. Stock Adjustment then changes Sellable, Damaged, or Checking quantities without changing a product's average cost or selling price and without creating cashflow. Inventory gains and losses remain valued at the existing average cost for accounting. Reserved units remain protected and must be released through their source COD or review-sale document.
 
+Run `supabase/sql/065_purchase_cashflow_payment_rules.sql` after migration 064. Purchase and Stock in Transit payments then respect the selected payment type's **Affects Cashflow** setting. The migration also removes earlier purchase cashflow rows made through payment types that are currently configured not to affect cashflow; document totals and payment status remain unchanged.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.

@@ -4375,7 +4375,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       }));
 
       if (isEditing) {
-        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v56', {
+        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v65', {
           p_document_id: document.id,
           p_header: header,
           p_items: itemPayload,
@@ -4387,7 +4387,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         return;
       }
 
-      const { data, error: saveError } = await supabase.rpc('save_purchase_like_document_v56', {
+      const { data, error: saveError } = await supabase.rpc('save_purchase_like_document_v65', {
         p_header: header,
         p_items: itemPayload,
         p_payments: validPaymentLines
@@ -4398,7 +4398,9 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       if (tabId) window.localStorage.removeItem(documentDraftKey(tabId));
       onSaved();
     } catch (err) {
-      setError(err.message || String(err));
+      const errorText = err.message || String(err);
+      const migrationMissing = /save_purchase_like_document_v65|replace_purchase_like_document_v65|schema cache|could not find the function/i.test(errorText);
+      setError(`${errorText}${migrationMissing ? '. Run migration 065_purchase_cashflow_payment_rules.sql in Supabase.' : ''}`);
     } finally {
       setBusy(false);
     }
@@ -4556,7 +4558,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
                 {paidMethodChoices.map((method) => (
                   <button type="button" key={method.id} disabled={method.is_paid_method === false && !supplierId && !partyCustomerId} className={method.is_paid_method === false ? 'payment-method-tile credit' : 'payment-method-tile'} onClick={() => addPaymentLine(method)}>
                     {method.name}
-                    <small>{method.is_paid_method === false ? 'Keep as unpaid balance' : 'Add this payment amount'}</small>
+                    <small>{method.is_paid_method === false ? 'Keep as unpaid balance' : method.affects_cashflow === false ? 'Paid without cashflow/register' : 'Add this payment amount'}</small>
                   </button>
                 ))}
               </div>
@@ -4569,7 +4571,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
                       <tr key={line.id}>
                         <td>{line.paymentMethodName}{line.chequeNumber && <small className="payment-line-detail">Cheque {line.chequeNumber} · {line.chequeDate}</small>}</td>
                         <td><input type="number" step="0.01" value={line.amount} onFocus={selectAllText} onChange={(e) => setPaymentLines((rows) => rows.map((row) => row.id === line.id ? { ...row, amount: Number(e.target.value) } : row))} /></td>
-                        <td>{line.isPaidMethod === false ? 'Outstanding only' : 'Cashflow out'}</td>
+                        <td>{line.isPaidMethod === false ? 'Outstanding only' : line.affectsCashflow === false ? 'Paid · no cashflow' : 'Cashflow out'}</td>
                         <td><button type="button" className="link-button" onClick={() => setPaymentLines((rows) => rows.filter((row) => row.id !== line.id))}>Remove</button></td>
                       </tr>
                     ))}
