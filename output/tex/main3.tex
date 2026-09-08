@@ -1,0 +1,289 @@
+\documentclass[a4paper,10pt]{article}
+
+% Abdul Hakam - Engineering Undergraduate CV
+% Single-column, two-page layout with expanded project descriptions.
+
+\usepackage[left=1.25cm,right=1.25cm,top=1.0cm,bottom=1.05cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fontawesome5}
+\usepackage{needspace}
+
+\definecolor{accent}{HTML}{173B57}
+\definecolor{textgray}{HTML}{282828}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\tabcolsep}{0pt}
+\setlength{\emergencystretch}{1.5em}
+\urlstyle{same}
+\color{textgray}
+
+% Space above heading, between heading and underline, and below underline.
+\titleformat{\section}
+  {\large\bfseries\color{accent}}
+  {}{0pt}{}
+  [\vspace{0.75mm}\color{accent}\titlerule\vspace{0.65mm}]
+\titlespacing*{\section}{0pt}{4.0mm}{1.2mm}
+
+\setlist[itemize]{
+  leftmargin=4.8mm,
+  itemsep=0.45mm,
+  topsep=0.5mm,
+  parsep=0pt,
+  partopsep=0pt
+}
+
+\newcommand{\educationEntry}[4]{%
+  \begin{tabularx}{\textwidth}{@{}Xr@{}}
+    \textbf{#1} & \textbf{\small #2} \\
+    \textit{#3} & \textit{\small #4}
+  \end{tabularx}
+}
+
+\newcommand{\projectEntry}[3]{%
+  \Needspace{9\baselineskip}%
+  \begin{tabularx}{\textwidth}{@{}Xr@{}}
+    \textbf{#1} & \textbf{\small #3} \\
+    {\small\textit{#2}} &
+  \end{tabularx}
+  \vspace{0.35mm}
+}
+
+\newcommand{\projectCategory}[1]{%
+  \vspace{1.0mm}
+  {\normalsize\bfseries\color{accent} #1}\par
+  \vspace{0.75mm}
+}
+
+\newcommand{\competitionEntry}[3]{%
+  \begin{tabularx}{\textwidth}{@{}Xr@{}}
+    \textbf{#1} & \textbf{\small #3} \\
+    {\small #2} &
+  \end{tabularx}
+}
+
+\begin{document}
+\fontsize{9.5}{11.25}\selectfont
+
+% ============================ HEADER =========================
+\begin{center}
+  {\LARGE\bfseries Abdul Hakam}\\[0.75mm]
+  {\large\bfseries Electronic and Telecommunication Engineering Undergraduate}\\[1.5mm]
+
+  \small
+  % First line: phone number and email
+  \faPhone\ \href{tel:+94772307738}{+94 77 230 7738}
+  \quad $\vert$ \quad
+  \faEnvelope\ \href{mailto:abdulhakam646@gmail.com}{abdulhakam646@gmail.com}\\[0.8mm]
+
+  % Second line: LinkedIn and GitHub
+  \faLinkedin\ 
+  \href{https://www.linkedin.com/in/abdul-hakam-217991203}
+  {linkedin.com/in/abdul-hakam-217991203}
+  \quad $\vert$ \quad
+  \faGithub\ 
+  \href{https://github.com/hakammra}
+  {github.com/hakammra}
+\end{center}
+
+\vspace{-1.2mm}
+
+% =========================== PROFILE =========================
+\section{Profile}
+Electronic and Telecommunication Engineering undergraduate with interests in embedded systems, electronic product development, robotics, artificial intelligence, machine learning, and computer vision. Experienced in building practical systems that combine analog and digital electronics, microcontrollers, sensors, PCB design, software, and system-level integration, with a focus on reliable and efficient real-world products.
+% ========================== EDUCATION =========================
+\section{Education}
+\educationEntry
+  {B.Sc. Engineering (Hons.) in Electronic and Telecommunication Engineering}
+  {2024--Present}
+  {University of Moratuwa, Sri Lanka}
+  {CGPA: 3.47/4.00 after four semesters}
+
+\vspace{1.35mm}
+\educationEntry
+  {GCE A/L Examination: Physical Science}
+  {2022 (2023)}
+  {St. Anthony's College, Kandy}
+  {3A with a Z-score of 2.1072}
+
+\vspace{1.35mm}
+\educationEntry
+  {GCE O/L Examination}
+  {2019}
+  {St. Anthony's College, Kandy}
+  {Results: 9A}
+
+\vspace{1.1mm}
+
+% ========================= EXPERIENCE ========================
+\section{Experience}
+
+\educationEntry
+  {Owner and Operations Manager}
+  {2023--Present}
+  {\href{https://maps.app.goo.gl/z9wBnqUMZs5da7UM9}{Gatronix Store \faMapMarker}}
+  {Sri Lanka}
+
+\begin{itemize}
+  \item Own and manage Gatronix Store, a retail and wholesale computer-products business.
+  \item Oversee purchasing, inventory, supplier and customer relationships, accounts, and day-to-day operations; also designed, developed, and now operate dedicated retail and wholesale business systems.
+\end{itemize}
+
+% =========================== SKILLS ===========================
+\section{Technical Skills and Tools}
+\begin{itemize}[itemsep=0.8mm,topsep=0.45mm]
+  \item \textbf{Programming Languages:} C, C++, Python, Java, and JavaScript.
+  \item \textbf{Embedded Systems and Interfaces:} STM32, ESP32, Arduino, Raspberry Pi
+  \item \textbf{Electronics and PCB Development:} Analog and digital circuit design, schematic capture, PCB layout, prototyping, soldering, and hardware debugging.
+  \item \textbf{Simulation and CAD Tools:} Altium Designer,  Proteus, LTspice, and SolidWorks.
+  \item \textbf{Software Development:} React, Spring Boot, Supabase, Flutter, HTML, and CSS.
+  \item \textbf{Development and Testing:} STM32CubeIDE, Arduino IDE, Git, Postman
+  \item \textbf{Networking:} Wireshark and Cisco Packet Tracer
+  \item \textbf{Spoken Languages:} English, Tamil, and Sinhala.
+\end{itemize}
+
+% =========================== PROJECTS =========================
+\section{Projects}
+
+\projectCategory{Embedded and Electronics Projects}
+
+\projectEntry
+  {\href{https://github.com/hakammra/Restaurent-Robot}{Servie - Autonomous Restaurant Food-Delivery Robot \faGithub}}
+  {ESP32-S3, STM32, C/C++, custom electronics}
+  {2026}
+\begin{itemize}
+  \item Designed and integrated an autonomous restaurant delivery robot using magnetic-line navigation, encoder feedback, ultrasonic obstacle detection, tray load sensing, and motor-control electronics.
+  \item Developed and tested the ESP32-S3 and STM32 control integration, including inter-microcontroller communication, navigation logic, battery management, and system-level hardware debugging.
+\end{itemize}
+\vspace{1.35mm}
+
+\projectEntry
+  {\href{https://github.com/hakammra/falltrack-watch}{FallTrack Smart Fall-Detection Watch \faGithub}}
+  {ESP8266, MPU6050, MAX30102, Flutter, custom PCB}
+  {2025}
+\begin{itemize}
+  \item Co-developed a wearable safety device that detects falls using motion and orientation data, monitors heart rate, and provides real-time feedback through an OLED display and local alerts.
+  \item Integrated embedded firmware, Wi-Fi communication, a Flutter companion application, custom PCB development, battery-powered operation, and a compact wearable enclosure.
+\end{itemize}
+\vspace{1.35mm}
+
+\projectEntry
+  {\href{https://github.com/hakammra/automatic-gain-controller}{Analog Automatic Gain Controller \faGithub}}
+  {NE5532, JFET voltage-controlled resistor, Proteus, analog signal processing}
+  {2026}
+\begin{itemize}
+  \item Designed and simulated an analog audio automatic-gain-control circuit using op-amp buffering and amplification, peak detection, feedback control, and a JFET voltage-controlled resistor.
+  \item Built and tested the hardware prototype with function-generator and real-audio inputs, improving output-level stability while reducing loading, clipping, and distortion.
+\end{itemize}
+\vspace{1.35mm}
+
+\projectEntry
+  {\href{https://github.com/hakammra/wavesync-rf-alarm}  {WaveSync - RF-Linked Alarm Clock \faGithub}}
+  {Digital logic, R--2R DAC, comparators, 433 MHz OOK, Altium Designer}
+  {2026}
+\begin{itemize}
+  \item Co-developed a microcontroller-free alarm system that compares digitally encoded clock data with a user-set alarm and broadcasts the resulting trigger to synchronized remote receivers.
+  \item Designed the 433 MHz OOK transmitter and receiver circuits and contributed to schematic development, PCB layout, hardware integration, and prototype testing.
+\end{itemize}
+\vspace{1.5mm}
+
+\projectCategory{Software Projects}
+
+\projectEntry
+  {\href{https://github.com/hakammra/asl-fingerspelling-webcam}{Real-Time ASL Fingerspelling Recognizer \faGithub}}
+  {Python, MediaPipe, OpenCV, scikit-learn}
+  {2026}
+\begin{itemize}
+  \item Developed a real-time webcam system that collects normalized 3D hand landmarks and recognizes static ASL fingerspelling using a calibrated SVM, confidence filtering, temporal voting, rejection-pose training, and CPU inference optimizations.
+\end{itemize}
+\vspace{1.35mm}
+
+\projectEntry
+  {Gatronix Retail and Wholesale Business Systems:
+  \href{https://github.com/hakammra/Shop-POS}{Retail POS \faGithub}
+  \enspace $\vert$ \enspace
+  \href{https://github.com/hakammra/gs-wholesale}{Wholesale POS \faGithub}}
+  {React, Vite, Supabase, JavaScript}
+  {2026--Present}
+\begin{itemize}
+  \item Developed separate systems for Gatronix Store's retail and wholesale operations, with workflows tailored to sales, purchasing, inventory, payments, and customer and supplier account management.
+  \item Built retail workflows for POS billing, stock, quotations, returns, COD and online orders, cash flow, and documents; added wholesale workflows for bulk sales, supplier orders, goods receiving, stock in transit, landed cost, credit, cheques, and reporting.
+\end{itemize}
+\vspace{1.35mm}
+
+\projectEntry
+  {\href{https://github.com/AmiruMunasinghe/Lost-Found-System}{University Lost-and-Found Management System \faGithub}}
+  {React, Spring Boot, JWT}
+  {2026}
+\begin{itemize}
+  \item Contributed to a full-stack campus platform for reporting, tracking, and recovering lost and found items through a centralized user and administrative system.
+  \item Worked on frontend routing, authentication and user-related screens, backend integration, software testing, and supporting system documentation within the project team.
+\end{itemize}
+
+% ==================== COMPETITIONS / ACHIEVEMENTS ============
+\section{Competitions and Achievements}
+\competitionEntry
+  {Robotics Design and Competition Module}
+  {Designed and built the best-performing robot for an arena-based navigation and task-completion challenge.}
+  {2025}
+\vspace{1.15mm}
+
+\competitionEntry
+  {Sri Lankan Robotics Challenge (SLRC)}
+  {Participated in the university category of the national robotics competition.}
+  {2025}
+\vspace{1.15mm}
+
+\competitionEntry
+  {SPARK 25/26}
+  {Reached the semifinal stage with a flood early-warning system.}
+  {2025--26}
+\vspace{1.15mm}
+
+\competitionEntry
+  {SLIoT Challenge}
+  {Reached the semifinal stage with a flood early-warning system.}
+  {2026}
+\vspace{1.15mm}
+
+\competitionEntry
+  {\href{https://www.kaggle.com/competitions/oct-wave-3-0-kaggle-challenge-02/}{OCTWAVE 3.0 -- Kaggle Challenge 02}}
+  {Participated in the Tom \& Jerry image-classification challenge, advanced to Round 2, and placed 16th.}
+  {2026}
+\vspace{1.15mm}
+
+\competitionEntry
+  {ROSCO}
+  {Participated in the robotics competition.}
+  {2026}
+
+% ====================== CERTIFICATIONS =======================
+\section{Certifications}
+\begin{itemize}[itemsep=0.35mm,topsep=0.4mm]
+  \item \href{https://coursera.org/share/69ed6d560fb6cae274a7b942a063e437}{\textbf{Data Science in Python}} -- Coursera, 2021.
+  \item \href{https://www.udemy.com/certificate/UC-d1fc56d8-7a1a-4d06-b1b0-0b52c314f286/}{\textbf{Full-Stack Web Development Bootcamp}} -- Udemy, 2021.
+\end{itemize}
+
+% ========================== REFEREES =========================
+\section{Referees}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X@{\hspace{7mm}}>{\raggedright\arraybackslash}X@{}}
+  \textbf{Dr. Upeka Premaratne} &
+  \textbf{\href{https://ent.uom.lk/team/dr-samiru-gayan/}{Dr. Samiru Gayan}} \\
+  {\small Senior Lecturer -- Grade 1, Department of Electronic and Telecommunication Engineering} &
+  {\small Senior Lecturer, Department of Electronic and Telecommunication Engineering} \\
+  {\small University of Moratuwa} &
+  {\small University of Moratuwa} \\
+  {\small\textit{B.Sc.Eng. (Moratuwa), M.E.Sc. (Western Ontario), PhD (Melbourne), LL.B. (OUSL), Attorney-at-Law}} &
+  {\small\textit{B.Sc. Eng. Hons. (Moratuwa), M.Phil. (Moratuwa), Ph.D. (Melbourne), MIEEE}} \\
+  {\small\faEnvelope\ \href{mailto:upeka@uom.lk}{upeka@uom.lk}} &
+  {\small\faEnvelope\ \href{mailto:samirug@uom.lk}{samirug@uom.lk}}
+\end{tabularx}
+
+\end{document}
