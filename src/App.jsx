@@ -1643,7 +1643,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       .limit(1200);
 
     if (clean) {
-      query = query.or(`item_code.ilike.%${clean}%,name.ilike.%${clean}%,barcode.ilike.%${clean}%`);
+      const seed = productSearchSeed(clean);
+      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
     } else if (posCategoryId === 'uncategorized') {
       query = query.is('category_id', null);
     } else {
@@ -1652,7 +1653,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
     const { data, error } = await query;
     if (error) setMessage(error.message);
-    else setProducts(data || []);
+    else setProducts(rankProductSearchResults(data || [], clean));
   }
 
   async function loadPosAssemblies() {
@@ -2473,11 +2474,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const remainingCurrent = Math.max(currentTarget.amount - paymentLineTotal(), 0);
   const modalNet = paymentNetForBalance(paymentDraft);
   const modalProjectedOutstanding = currentOutstanding + total - modalNet.paidIn + modalNet.refundOut;
-  const cleanAssemblySearch = search.trim().toLowerCase();
-  const visiblePosAssemblies = assemblies.filter((assembly) => {
-    if (posCategoryId !== 'assemblies' && !cleanAssemblySearch) return false;
-    return !cleanAssemblySearch || `${assembly.assembly_code} ${assembly.name} ${assembly.barcode || ''}`.toLowerCase().includes(cleanAssemblySearch);
-  });
+  const cleanAssemblySearch = search.trim();
+  const visiblePosAssemblies = posCategoryId !== 'assemblies' && !cleanAssemblySearch
+    ? []
+    : rankProductSearchResults(assemblies, cleanAssemblySearch);
 
   return (
     <section className="page-section pos-page pos-page-v16">
@@ -4383,7 +4383,8 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
     const clean = productSearch.trim();
     if (clean) {
-      query = query.or(`item_code.ilike.%${clean}%,name.ilike.%${clean}%,barcode.ilike.%${clean}%`);
+      const seed = productSearchSeed(clean);
+      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
     } else if (selectedCategoryId === 'uncategorized') {
       query = query.is('category_id', null);
     } else {
@@ -4393,7 +4394,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
     const { data, error: productsError } = await query;
     if (productsError) setError(productsError.message);
-    else setCategoryProducts(data || []);
+    else setCategoryProducts(rankProductSearchResults(data || [], clean));
   }
 
   function startAddProductToLines(product) {
@@ -5244,7 +5245,8 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
 
     const clean = productSearch.trim();
     if (clean) {
-      query = query.or(`item_code.ilike.%${clean}%,name.ilike.%${clean}%,barcode.ilike.%${clean}%`);
+      const seed = productSearchSeed(clean);
+      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
     } else if (selectedCategoryId === 'uncategorized') {
       query = query.is('category_id', null);
     } else {
@@ -5254,7 +5256,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
 
     const { data, error: productsError } = await query;
     if (productsError) setError(productsError.message);
-    else setCategoryProducts(data || []);
+    else setCategoryProducts(rankProductSearchResults(data || [], clean));
   }
 
   async function loadExistingQuotationItems() {
@@ -6659,12 +6661,15 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
   }
 
   async function loadCodProducts() {
-    let query = supabase.from('product_stock_view').select('*').eq('is_active', true).order('item_code').limit(60);
     const clean = productSearch.trim().replace(/,/g, ' ');
-    if (clean) query = query.or(`item_code.ilike.%${clean}%,name.ilike.%${clean}%,barcode.ilike.%${clean}%`);
+    let query = supabase.from('product_stock_view').select('*').eq('is_active', true).order('item_code').limit(clean ? 500 : 60);
+    if (clean) {
+      const seed = productSearchSeed(clean);
+      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+    }
     const { data, error: productError } = await query;
     if (productError) setError(productError.message);
-    else setProducts(data || []);
+    else setProducts(rankProductSearchResults(data || [], clean));
   }
 
   async function loadCodItems() {
@@ -7267,11 +7272,91 @@ function downloadTextFile(filename, content, mime = 'text/csv;charset=utf-8') {
 function applySearchToProductQuery(query, searchBy, keyword) {
   const clean = keyword.trim();
   if (!clean) return query;
-  const value = clean.replace(/,/g, ' ');
+  const value = productSearchSeed(clean);
   if (searchBy === 'name') return query.ilike('name', `%${value}%`);
   if (searchBy === 'code') return query.ilike('item_code', `%${value}%`);
   if (searchBy === 'barcode') return query.ilike('barcode', `%${value}%`);
-  return query.or(`item_code.ilike.%${value}%,name.ilike.%${value}%,barcode.ilike.%${value}%`);
+  return query.or(`item_code.ilike.%${value}%,name.ilike.%${value}%,barcode.ilike.%${value}%,brand_name.ilike.%${value}%,category_name.ilike.%${value}%`);
+}
+
+const PRODUCT_SEARCH_STOP_WORDS = new Set(['a', 'an', 'and', 'for', 'of', 'the', 'to', 'with']);
+
+function normalizeProductSearch(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function productSearchTokens(value) {
+  const words = normalizeProductSearch(value).split(/\s+/).filter(Boolean);
+  const meaningful = words.filter((word) => !PRODUCT_SEARCH_STOP_WORDS.has(word));
+  return [...new Set(meaningful.length ? meaningful : words)];
+}
+
+function productSearchSeed(value) {
+  return productSearchTokens(value).sort((left, right) => right.length - left.length)[0] || normalizeProductSearch(value);
+}
+
+function tokenMatchesSearchText(text, token) {
+  if (text.includes(token)) return true;
+  return token.length > 4 && token.endsWith('s') && text.includes(token.slice(0, -1));
+}
+
+function productSearchScore(product, query, searchBy = 'any') {
+  const phrase = normalizeProductSearch(query);
+  if (!phrase) return 0;
+  const tokens = productSearchTokens(query);
+  const code = normalizeProductSearch(product.item_code || product.assembly_code);
+  const barcode = normalizeProductSearch(product.barcode);
+  const name = normalizeProductSearch(product.name || product.pos_name || product.custom_name);
+  const brand = normalizeProductSearch(product.brand_name);
+  const category = normalizeProductSearch(product.category_path || product.category_name);
+  const compactQuery = phrase.replace(/\s/g, '');
+  const compactCode = code.replace(/\s/g, '');
+  const compactBarcode = barcode.replace(/\s/g, '');
+  const fields = searchBy === 'code' ? [code] : searchBy === 'barcode' ? [barcode] : searchBy === 'name' ? [name] : [code, barcode, name, brand, category];
+  const combined = fields.filter(Boolean).join(' ');
+
+  if (!tokens.every((token) => tokenMatchesSearchText(combined, token))) return -1;
+  if (compactBarcode && compactBarcode === compactQuery) return 120000;
+  if (compactCode && compactCode === compactQuery) return 115000;
+
+  let score = 30000;
+  if (compactCode && compactCode.startsWith(compactQuery)) score += 50000;
+  if (compactBarcode && compactBarcode.startsWith(compactQuery)) score += 48000;
+  if (name === phrase) score += 45000;
+  else if (name.startsWith(phrase)) score += 36000;
+  else if (name.includes(phrase)) score += 28000;
+  else if (combined.includes(phrase)) score += 18000;
+
+  const nameWords = new Set(name.split(' ').filter(Boolean));
+  const brandWords = new Set(brand.split(' ').filter(Boolean));
+  const categoryWords = new Set(category.split(' ').filter(Boolean));
+  tokens.forEach((token) => {
+    if (code === token || barcode === token) score += 9000;
+    else if (code.startsWith(token) || barcode.startsWith(token)) score += 6500;
+    else if (code.includes(token) || barcode.includes(token)) score += 4500;
+    if (nameWords.has(token)) score += 4200;
+    else if (name.split(' ').some((word) => word.startsWith(token))) score += 2600;
+    else if (name.includes(token)) score += 1400;
+    if (brandWords.has(token)) score += 1800;
+    if (categoryWords.has(token)) score += 1100;
+  });
+
+  return score - Math.min(name.length, 200);
+}
+
+function rankProductSearchResults(rows, query, searchBy = 'any') {
+  if (!query.trim()) return rows;
+  return rows
+    .map((row) => ({ row, score: productSearchScore(row, query, searchBy) }))
+    .filter((candidate) => candidate.score >= 0)
+    .sort((left, right) => right.score - left.score || String(left.row.item_code || left.row.assembly_code || '').localeCompare(String(right.row.item_code || right.row.assembly_code || '')))
+    .map((candidate) => candidate.row);
 }
 
 function categoryDisplayName(category) {
@@ -7507,7 +7592,7 @@ function ProductsPage({ assistantTarget = null } = {}) {
     const { data, error: productError } = await query;
     if (productError) setError(productError.message);
     else {
-      const nextRows = data || [];
+      const nextRows = usingLiveSearch ? rankProductSearchResults(data || [], cleanSearch, searchBy) : data || [];
       setProducts(nextRows);
       setSelectedProduct((current) => current && nextRows.some((row) => row.product_id === current.product_id) ? current : null);
     }
@@ -8281,11 +8366,14 @@ function StockAdjustmentForm({ onClose, onSaved }) {
 
   useEffect(() => {
     const timeout = setTimeout(async () => {
-      let query = supabase.from('product_stock_view').select('product_id, item_code, name, avg_cost, sellable_qty, reserved_qty, damaged_qty, checking_qty, available_qty, track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(80);
+      let query = supabase.from('product_stock_view').select('product_id, item_code, name, barcode, brand_name, category_name, avg_cost, sellable_qty, reserved_qty, damaged_qty, checking_qty, available_qty, track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(search.trim() ? 500 : 80);
       const clean = search.trim().replace(/,/g, ' ');
-      if (clean) query = query.or(`item_code.ilike.%${clean}%,name.ilike.%${clean}%,barcode.ilike.%${clean}%`);
+      if (clean) {
+        const seed = productSearchSeed(clean);
+        query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+      }
       const { data, error: productError } = await query;
-      if (productError) setError(productError.message); else setProducts(data || []);
+      if (productError) setError(productError.message); else setProducts(rankProductSearchResults(data || [], clean));
     }, 180);
     return () => clearTimeout(timeout);
   }, [search]);
