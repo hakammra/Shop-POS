@@ -99,6 +99,8 @@ Run `supabase/sql/067_sales_invoice_corrections.sql` after migration 066. Admini
 
 Run `supabase/sql/068_sales_invoice_deletion.sql` after migration 067. Administrators, and staff explicitly granted **Delete finalized sales documents**, can delete an eligible sales invoice with automatic reversal of stock, customer balance, payment, cheque, cashflow and accounting effects. Invoices with linked returns, warranties or dependent documents remain protected. Closed daily-register totals are also kept synchronized after later cashflow corrections.
 
+Run `supabase/sql/069_enforce_payment_cashflow_setting.sql` after migration 068. This enforces **Affects Cashflow** at the cashflow table for every workflow, including purchases, sales and document corrections. Payment types with the setting disabled can still mark a document as paid, but cannot add Cash In or Cash Out to the shop register. The migration also removes earlier incorrect cash movements made with currently opted-out payment types without changing document, stock, cost or party-balance records.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
