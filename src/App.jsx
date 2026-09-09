@@ -9403,6 +9403,10 @@ function CashflowPage() {
   const [filters, setFilters] = useState({ search: '', type: 'all', documentType: 'all', paymentMethodId: 'all', datePreset: 'today', dateFrom: '', dateTo: '' });
   const [showAdd, setShowAdd] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
+  const [selectedPaymentAccount, setSelectedPaymentAccount] = useState(null);
+  const [paymentAccountHistory, setPaymentAccountHistory] = useState([]);
+  const [paymentAccountHistoryLoading, setPaymentAccountHistoryLoading] = useState(false);
+  const [paymentAccountHistoryError, setPaymentAccountHistoryError] = useState('');
   const [manualForm, setManualForm] = useState({ entry_type: 'cash_out', payment_method_id: '', amount: '', description: '' });
   const [transferForm, setTransferForm] = useState({ from_payment_method_id: '', to_payment_method_id: '', amount: '', transfer_date: todayInputDate(), description: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
@@ -9536,6 +9540,25 @@ function CashflowPage() {
       return;
     }
     setCashAccounts(data || []);
+  }
+
+  async function openPaymentAccount(account) {
+    setSelectedPaymentAccount(account);
+    setPaymentAccountHistory([]);
+    setPaymentAccountHistoryError('');
+    setPaymentAccountHistoryLoading(true);
+    const { data, error: historyError } = await supabase
+      .from('cashflow_entries')
+      .select('id, document_id, entry_type, amount, description, created_at, documents(document_no, document_type, status, document_date)')
+      .eq('payment_method_id', account.payment_method_id)
+      .order('created_at', { ascending: false })
+      .limit(250);
+    setPaymentAccountHistoryLoading(false);
+    if (historyError) {
+      setPaymentAccountHistoryError(historyError.message);
+      return;
+    }
+    setPaymentAccountHistory(data || []);
   }
 
   async function saveManualMovement(event) {
@@ -9773,7 +9796,7 @@ function CashflowPage() {
               : account.affects_cashflow === false
                 ? 'Excluded from cashflow'
                 : 'Current balance · all time';
-            return <div className={`cash-account-card ${category} ${account.affects_cashflow === false ? 'excluded' : ''} ${account.is_active ? '' : 'inactive'}`} key={account.payment_method_id}><span>{categoryLabel}</span><strong>{account.payment_method_name}</strong><em className={numberValue(displayedAmount) < 0 ? 'negative-balance' : ''}>{signedMoney(displayedAmount)}</em><small>{detail}{account.is_active ? '' : ' · Inactive'}</small></div>;
+            return <button type="button" className={`cash-account-card ${category} ${account.affects_cashflow === false ? 'excluded' : ''} ${account.is_active ? '' : 'inactive'}`} key={account.payment_method_id} onClick={() => openPaymentAccount(account)} title={`View ${account.payment_method_name} transactions`}><span>{categoryLabel}</span><strong>{account.payment_method_name}</strong><em className={numberValue(displayedAmount) < 0 ? 'negative-balance' : ''}>{signedMoney(displayedAmount)}</em><small>{detail}{account.is_active ? '' : ' · Inactive'} · View transactions</small></button>;
           })}
           {!orderedCashAccounts.length && <div className="muted-box">No payment types are configured.</div>}
         </div>
@@ -9783,6 +9806,24 @@ function CashflowPage() {
         <div className="cash-account-heading"><div><h3>Cheque Register</h3><p>Cheque dates and references retained from POS, purchases and balance payments. These payments enter their bank account immediately.</p></div><span>{chequePayments.length} recent</span></div>
         <div className="table-wrap compact-table"><table><thead><tr><th>Cheque date</th><th>Number</th><th>Bank</th><th>Direction</th><th>Amount</th><th>Document</th><th>Status</th></tr></thead><tbody>{chequePayments.map((cheque) => <tr key={cheque.id} className="clickable-row" onClick={() => cheque.document_id && setPreviewDocumentId(cheque.document_id)}><td>{fmtDate(cheque.cheque_date)}</td><td><strong>{cheque.cheque_number}</strong></td><td>{cheque.bank_name || '-'}</td><td>{cheque.direction === 'out' ? 'Issued / out' : 'Received / in'}</td><td>{money(cheque.amount)}</td><td>{cheque.documents?.document_no || '-'}</td><td><span className="status-pill active">{cheque.status}</span></td></tr>)}</tbody></table></div>
       </div>}
+
+      {selectedPaymentAccount && (() => {
+        const category = paymentAccountCategory(selectedPaymentAccount);
+        const displayedAmount = category === 'credit' ? selectedPaymentAccount.non_cash_activity : selectedPaymentAccount.balance;
+        const categoryLabel = category === 'cash' ? 'Cash drawer' : category === 'bank' ? 'Bank account' : category === 'credit' ? 'Credit / unpaid' : 'Other payment';
+        return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedPaymentAccount(null); }}>
+          <div className="modal-card payment-account-history-modal">
+            <div className="section-title-row"><div><span className={`payment-account-category ${category}`}>{categoryLabel}</span><h3>{selectedPaymentAccount.payment_method_name}</h3><p>{selectedPaymentAccount.affects_cashflow === false ? 'These movements update this account balance but are excluded from Cash In, Cash Out, Net and the daily register.' : 'All-time payment-account movements. The newest transactions are shown first.'}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedPaymentAccount(null)}>Close</button></div>
+            <div className={`payment-account-history-summary ${category}`}><span>{category === 'credit' ? 'Recorded credit activity' : 'Current balance'}</span><strong className={numberValue(displayedAmount) < 0 ? 'negative-balance' : ''}>{signedMoney(displayedAmount)}</strong><small>{numberValue(selectedPaymentAccount.usage_count)} recorded use{numberValue(selectedPaymentAccount.usage_count) === 1 ? '' : 's'}{selectedPaymentAccount.is_active ? '' : ' · Inactive payment type'}</small></div>
+            {paymentAccountHistoryError && <div className="error-box">{paymentAccountHistoryError}</div>}
+            {paymentAccountHistoryLoading ? <div className="muted-box">Loading transactions...</div> : <div className="table-wrap payment-account-history-table"><table><thead><tr><th>Date</th><th>Direction</th><th>Document</th><th>Type</th><th>Description</th><th>Amount</th><th></th></tr></thead><tbody>{paymentAccountHistory.map((entry) => {
+              const directionLabel = entry.entry_type === 'non_cash' ? 'Credit / account' : `${selectedPaymentAccount.affects_cashflow === false ? 'Account' : 'Cash'} ${entry.entry_type === 'cash_out' ? 'out' : 'in'}`;
+              return <tr key={entry.id}><td>{new Date(entry.created_at).toLocaleString('en-LK')}</td><td><span className={`cash-direction-pill ${entry.entry_type}`}>{directionLabel}</span></td><td>{entry.documents?.document_no || '-'}</td><td>{documentTypeLabel(entry.documents?.document_type)}</td><td className="description-cell">{entry.description || '-'}</td><td className={entry.entry_type === 'cash_out' ? 'negative-balance' : entry.entry_type === 'cash_in' ? 'positive-balance' : ''}><strong>{entry.entry_type === 'cash_out' ? '-' : entry.entry_type === 'cash_in' ? '+' : ''}{money(entry.amount)}</strong></td><td><button type="button" className="small-button" disabled={!entry.document_id} onClick={() => { if (entry.document_id) { setSelectedPaymentAccount(null); setPreviewDocumentId(entry.document_id); } }}>View</button></td></tr>;
+            })}{!paymentAccountHistory.length && <EmptyRow colSpan={7} text="No transactions have been recorded for this payment type yet." />}</tbody></table></div>}
+            {paymentAccountHistory.length >= 250 && <small className="muted-text">Showing the latest 250 transactions.</small>}
+          </div>
+        </div>;
+      })()}
 
       {showAdd && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowAdd(false); }}>

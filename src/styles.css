@@ -3101,10 +3101,16 @@ body.pos-resizing {
   display: grid;
   gap: 5px;
   padding: 14px;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
   border: 1px solid var(--line);
   border-left: 4px solid #8d98a0;
   background: rgba(255,255,255,.025);
 }
+.cash-account-card:hover { border-top-color: #66737b; border-right-color: #66737b; border-bottom-color: #66737b; background: rgba(255,255,255,.045); }
+.cash-account-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .cash-account-card.cash { border-left-color: #42b978; }
 .cash-account-card.bank { border-left-color: #2aa9df; }
 .cash-account-card.credit { border-left-color: #c6a85b; }
@@ -3115,6 +3121,21 @@ body.pos-resizing {
 .cash-account-card > span { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .cash-account-card > strong { font-size: 15px; }
 .cash-account-card > em { font-style: normal; font-size: 21px; font-weight: 900; overflow-wrap: anywhere; }
+.payment-account-history-modal { width: min(980px, calc(100vw - 28px)); max-height: min(820px, calc(100dvh - 28px)); overflow: auto; }
+.payment-account-history-modal .section-title-row h3 { margin: 4px 0; }
+.payment-account-history-modal .section-title-row p { max-width: 720px; margin: 0; color: var(--muted); }
+.payment-account-category { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.payment-account-category.cash { color: #78dca4; }
+.payment-account-category.bank { color: #79cceb; }
+.payment-account-category.credit { color: #ddc77e; }
+.payment-account-history-summary { display: grid; gap: 4px; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid #8d98a0; background: rgba(255,255,255,.025); }
+.payment-account-history-summary.cash { border-left-color: #42b978; }
+.payment-account-history-summary.bank { border-left-color: #2aa9df; }
+.payment-account-history-summary.credit { border-left-color: #c6a85b; }
+.payment-account-history-summary > span, .payment-account-history-summary > small { color: var(--muted); }
+.payment-account-history-summary > strong { font-size: 24px; }
+.payment-account-history-table { max-height: min(480px, 55dvh); border: 1px solid var(--line-soft); }
+.payment-account-history-table table { min-width: 780px; }
 .cash-transfer-modal { width: min(760px, calc(100vw - 32px)); }
 .cash-transfer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .cash-transfer-grid label { display: grid; gap: 5px; }
@@ -5059,6 +5080,8 @@ body.pos-resizing {
 @media (max-width: 560px) {
   .cash-account-grid { grid-template-columns: 1fr; }
   .cash-account-card { padding: 12px; }
+  .payment-account-history-modal { width: calc(100vw - 12px); max-height: calc(100dvh - 12px); padding: 14px; }
+  .payment-account-history-summary > strong { font-size: 21px; }
 }
 .assistant-full-page { min-width: 0; }
 .assistant-drawer-open { overflow: hidden; }
