@@ -51,6 +51,7 @@ const STAFF_PERMISSION_GROUPS = [
       { key: 'view_documents', label: 'View and print documents', default: true },
       { key: 'manage_inventory_documents', label: 'Create/edit purchases, transit, trade-ins and adjustments', default: false },
       { key: 'delete_documents', label: 'Delete supported documents', default: false },
+      { key: 'delete_sales_documents', label: 'Delete finalized sales documents', default: false },
       { key: 'manage_parties', label: 'Manage customers, suppliers and their payments', default: true },
       { key: 'manage_products', label: 'Add, edit and deactivate products', default: false },
       { key: 'view_stock', label: 'View stock quantities and values', default: true }
@@ -399,6 +400,12 @@ function documentTypeLabel(value) {
 // use the normal invoice title and never expose the internal review status.
 function customerDocumentTypeLabel(value) {
   return value === 'unconfirmed_sale' ? 'Sales Invoice' : documentTypeLabel(value);
+}
+
+function documentPartyDisplayName(document) {
+  const explicitName = document?.party?.name || document?.customers?.name || document?.recipient_name || document?.party_name;
+  if (explicitName) return explicitName;
+  return ['invoice', 'unconfirmed_sale', 'quotation'].includes(document?.document_type) ? 'Walk-in customer' : '-';
 }
 
 function documentOutstandingBalance(document) {
@@ -3599,11 +3606,28 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   }
 
   async function deleteSelectedDocument() {
-    if (!can('delete_documents')) { setError('Document deletion permission required.'); return; }
     if (!selected) {
       setError('Select a document first.');
       return;
     }
+    if (selected.document_type === 'invoice') {
+      if (!can('delete_sales_documents')) { setError('Delete finalized sales documents permission required.'); return; }
+      if (!window.confirm(`Permanently delete sales invoice ${selected.document_no}? Its stock, customer balance, payments, cheques, cashflow and accounting effects will be reversed.`)) return;
+      setBusyAction(true);
+      setError('');
+      setMessage('');
+      const { data, error: deleteError } = await supabase.rpc('delete_pos_invoice_v68', { p_document_id: selected.id });
+      if (deleteError) {
+        const migrationMissing = /delete_pos_invoice_v68|schema cache|could not find the function/i.test(deleteError.message || '');
+        setError(`${deleteError.message}${migrationMissing ? '. Run migration 068_sales_invoice_deletion.sql in Supabase, then refresh.' : ''}`);
+      } else {
+        setMessage(`${data?.document_no || selected.document_no} deleted and all posted effects reversed.`);
+      }
+      setBusyAction(false);
+      await loadDocuments();
+      return;
+    }
+    if (!can('delete_documents')) { setError('Document deletion permission required.'); return; }
     if (selected.document_type === 'unconfirmed_sale') {
       if (!window.confirm(`Delete internal sale ${selected.document_no}? Its reserved stock will be released.`)) return;
       setBusyAction(true);
@@ -3639,6 +3663,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   const canConvertQuote = selected?.document_type === 'quotation' && selected?.status !== 'converted';
   const canConvertUnconfirmed = isAdmin && selected?.document_type === 'unconfirmed_sale' && selected?.status === 'unconfirmed';
   const canApplyStock = selected && ['purchase', 'stock_in_transit'].includes(selected.document_type) && selected.status === 'draft';
+  const canDeleteSelected = selected?.document_type === 'invoice' ? can('delete_sales_documents') : can('delete_documents');
   const activeDocumentTab = documentTabs.find((tab) => tab.id === activeDocumentTabId) || documentTabs[0];
 
   function closeDocumentTab(tabId) {
@@ -3666,7 +3691,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
         <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
         <button className="toolbar-button" disabled={!selected || busyAction || !canManageDocumentType(selected?.document_type)} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
-        <button className="toolbar-button" disabled={!selected || busyAction || !can('delete_documents')} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
+        <button className="toolbar-button" disabled={!selected || busyAction || !canDeleteSelected} title={selected?.document_type === 'invoice' && !canDeleteSelected ? 'Delete finalized sales documents permission required' : ''} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
         <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
         <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
         <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
@@ -3770,7 +3795,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
             </thead>
             <tbody>
               {documents.map((document) => {
-                const name = document.party_name || '-';
+                const name = documentPartyDisplayName(document);
                 return (
                   <tr key={document.id} className={selected?.id === document.id ? 'selected-row' : ''} onClick={() => selectDocument(document)}>
                     <td>{document.id.slice(0, 8)}</td>
@@ -6010,7 +6035,7 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   pdf.setLineWidth(.7);
   pdf.line(margin, margin + 21, pageWidth - margin, margin + 21);
 
-  const partyName = document.party?.name || document.recipient_name || '-';
+  const partyName = documentPartyDisplayName(document);
   const partyInfo = [document.party?.phone, document.party?.address].filter(Boolean).join(' | ');
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(9);
@@ -8655,7 +8680,7 @@ function DocumentPreviewModal({ documentId, onClose }) {
         {!loading && document && <>
           <div className="accounting-document-summary">
             <div><span>Date</span><strong>{fmtDate(document.document_date || document.created_at)}</strong></div>
-            <div><span>Customer / Supplier</span><strong>{document.party?.name || document.recipient_name || '-'}</strong><small>{document.party?.phone || ''}</small></div>
+            <div><span>Customer / Supplier</span><strong>{documentPartyDisplayName(document)}</strong><small>{document.party?.phone || ''}</small></div>
             <div><span>Payment</span><strong>{document.payment_method_name || '-'}</strong></div>
             <div><span>Status</span><strong>{document.status || '-'}</strong></div>
             <div className="amount-card"><span>Document amount</span><strong>{money(displayAmount)}</strong></div>

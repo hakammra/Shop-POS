@@ -97,6 +97,8 @@ Run `supabase/sql/066_delivery_orders_prepaid.sql` after migration 065. The form
 
 Run `supabase/sql/067_sales_invoice_corrections.sql` after migration 066. Administrators, and staff explicitly granted **Edit finalized sales documents**, can correct a posted sales invoice from Documents. Saving reverses and reapplies its stock, customer balance, payment, cheque, cashflow and accounting effects while retaining its original invoice number and creator.
 
+Run `supabase/sql/068_sales_invoice_deletion.sql` after migration 067. Administrators, and staff explicitly granted **Delete finalized sales documents**, can delete an eligible sales invoice with automatic reversal of stock, customer balance, payment, cheque, cashflow and accounting effects. Invoices with linked returns, warranties or dependent documents remain protected. Closed daily-register totals are also kept synchronized after later cashflow corrections.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
