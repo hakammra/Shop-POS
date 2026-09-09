@@ -9530,9 +9530,9 @@ function CashflowPage() {
   }
 
   async function loadCashAccounts() {
-    const { data, error: balanceError } = await supabase.rpc('get_cash_account_balances_v43');
+    const { data, error: balanceError } = await supabase.rpc('get_payment_account_balances_v70');
     if (balanceError) {
-      setError(`${balanceError.message}. Run migration 043_cash_accounts_transfers_cod_printing.sql in Supabase.`);
+      setError(`${balanceError.message}. Run migration 070_all_payment_account_balances.sql in Supabase.`);
       return;
     }
     setCashAccounts(data || []);
@@ -9652,6 +9652,16 @@ function CashflowPage() {
   const netCash = cashIn - cashOut;
   const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'yesterday' ? 'Yesterday' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
   const transferableMethods = paymentMethods.filter((method) => ['cash', 'bank'].includes(method.account_kind));
+  const paymentAccountCategory = (account) => account.is_paid_method === false ? 'credit' : ['cash', 'bank'].includes(account.account_kind) ? account.account_kind : 'other';
+  const paymentAccountCategoryOrder = { cash: 1, bank: 2, credit: 3, other: 4 };
+  const orderedCashAccounts = [...cashAccounts].sort((left, right) => {
+    const categoryDifference = paymentAccountCategoryOrder[paymentAccountCategory(left)] - paymentAccountCategoryOrder[paymentAccountCategory(right)];
+    if (categoryDifference) return categoryDifference;
+    const activeDifference = Number(right.is_active) - Number(left.is_active);
+    if (activeDifference) return activeDifference;
+    const usageDifference = numberValue(right.usage_count) - numberValue(left.usage_count);
+    return usageDifference || String(left.payment_method_name || '').localeCompare(String(right.payment_method_name || ''));
+  });
   const sourceAccount = cashAccounts.find((account) => account.payment_method_id === transferForm.from_payment_method_id);
   const currentRegister = registerState.current;
   const closingVariance = numberValue(registerForm.counted_cash) - numberValue(currentRegister?.live_expected_cash);
@@ -9751,10 +9761,20 @@ function CashflowPage() {
       </div>
 
       <div className="panel-card cash-account-section">
-        <div className="cash-account-heading"><div><h3>Cash & Bank Balances</h3><p>Current all-time account balances. These are separate from the selected-period totals above.</p></div><button className="primary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button></div>
+        <div className="cash-account-heading"><div><h3>Payment Account Balances</h3><p>All payment types, grouped as cash, bank, credit and other. These are separate from the selected-period totals above.</p></div><button className="primary-button" disabled={transferableMethods.length < 2} onClick={() => setShowTransfer(true)}>Transfer Money</button></div>
         <div className="cash-account-grid">
-          {cashAccounts.filter((account) => ['cash', 'bank'].includes(account.account_kind) && (account.is_active || Math.abs(numberValue(account.balance)) > .004)).map((account) => <div className={`cash-account-card ${account.account_kind}`} key={account.payment_method_id}><span>{account.account_kind === 'cash' ? 'Cash drawer' : 'Bank account'}</span><strong>{account.payment_method_name}</strong><em className={numberValue(account.balance) < 0 ? 'negative-balance' : ''}>{signedMoney(account.balance)}</em><small>Current balance · all time</small></div>)}
-          {!cashAccounts.some((account) => ['cash', 'bank'].includes(account.account_kind)) && <div className="muted-box">Run migration 043 to create Cash, Bank 1 and Bank 2 account balances.</div>}
+          {orderedCashAccounts.map((account) => {
+            const category = paymentAccountCategory(account);
+            const displayedAmount = category === 'credit' ? account.non_cash_activity : account.balance;
+            const categoryLabel = category === 'cash' ? 'Cash drawer' : category === 'bank' ? 'Bank account' : category === 'credit' ? 'Credit / unpaid' : 'Other payment';
+            const detail = category === 'credit'
+              ? 'Recorded credit activity · all time'
+              : account.affects_cashflow === false
+                ? 'Excluded from cashflow'
+                : 'Current balance · all time';
+            return <div className={`cash-account-card ${category} ${account.affects_cashflow === false ? 'excluded' : ''} ${account.is_active ? '' : 'inactive'}`} key={account.payment_method_id}><span>{categoryLabel}</span><strong>{account.payment_method_name}</strong><em className={numberValue(displayedAmount) < 0 ? 'negative-balance' : ''}>{signedMoney(displayedAmount)}</em><small>{detail}{account.is_active ? '' : ' · Inactive'}</small></div>;
+          })}
+          {!orderedCashAccounts.length && <div className="muted-box">No payment types are configured.</div>}
         </div>
       </div>
 
@@ -11156,7 +11176,7 @@ function PaymentTypesPage() {
       name: form.name.trim(),
       is_paid_method: form.is_paid_method,
       affects_cashflow: form.is_paid_method ? form.affects_cashflow : false,
-      account_kind: form.requires_cheque_details ? 'bank' : form.is_paid_method && form.affects_cashflow ? form.account_kind : 'other',
+      account_kind: form.requires_cheque_details ? 'bank' : form.is_paid_method ? form.account_kind : 'other',
       requires_cheque_details: !!form.requires_cheque_details
     };
     const query = editingId
@@ -11208,7 +11228,7 @@ function PaymentTypesPage() {
             />
             Affects cash/bank cashflow
           </label>
-          {form.is_paid_method && form.affects_cashflow && <><label>Cashflow account type</label><select value={form.account_kind} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">Cash and bank accounts appear separately on the Cashflow page and can be used for transfers.</small></>}
+          {form.is_paid_method && <><label>Payment account type</label><select value={form.account_kind} disabled={form.requires_cheque_details} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">You can change this while editing. Active cash and bank types with Affects Cashflow enabled can be used for transfers.</small></>}
           <label className="checkbox-label"><input type="checkbox" checked={form.requires_cheque_details} onChange={(e) => setForm({ ...form, requires_cheque_details: e.target.checked, is_paid_method: true, affects_cashflow: true, account_kind: e.target.checked ? 'bank' : form.account_kind })} /> Require cheque number and date</label>
           <button className="primary-button full-width">{editingId ? 'Save Changes' : 'Save'}</button>
         </form>

@@ -3107,6 +3107,10 @@ body.pos-resizing {
 }
 .cash-account-card.cash { border-left-color: #42b978; }
 .cash-account-card.bank { border-left-color: #2aa9df; }
+.cash-account-card.credit { border-left-color: #c6a85b; }
+.cash-account-card.other { border-left-color: #8d98a0; }
+.cash-account-card.excluded { background: rgba(255,255,255,.012); }
+.cash-account-card.inactive { opacity: .62; }
 .cash-account-card > span, .cash-account-card > small { color: var(--muted); }
 .cash-account-card > span { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .cash-account-card > strong { font-size: 15px; }
