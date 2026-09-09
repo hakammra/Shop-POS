@@ -5055,6 +5055,11 @@ body.pos-resizing {
     radial-gradient(circle at 84% 0%, rgba(40, 169, 230, .10), transparent 34%),
     var(--bg);
 }
+
+@media (max-width: 560px) {
+  .cash-account-grid { grid-template-columns: 1fr; }
+  .cash-account-card { padding: 12px; }
+}
 .assistant-full-page { min-width: 0; }
 .assistant-drawer-open { overflow: hidden; }
 .assistant-drawer-backdrop {

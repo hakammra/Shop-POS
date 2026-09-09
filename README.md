@@ -103,6 +103,8 @@ Run `supabase/sql/069_enforce_payment_cashflow_setting.sql` after migration 068.
 
 Run `supabase/sql/070_all_payment_account_balances.sql` after migration 069. The Cashflow page then shows every payment type, ordered by cash, bank, credit and other and by usage within each group. Credit cards show recorded non-cash activity, while opted-out and inactive methods are clearly marked. Transfers remain limited to active cash/bank methods that affect cashflow. Existing paid payment types can also be reclassified between Cash drawer, Bank account and Other from Settings.
 
+Run `supabase/sql/071_track_non_cashflow_payment_accounts.sql` after migration 070. Paid methods with **Affects Cashflow** disabled then retain payment-account movements and running balances without entering Cash In, Cash Out, Net, transaction-history exports or the daily register. The migration restores recoverable opted-out payments previously removed by SQL 65/69. Purchase save/edit keeps these account movements from then on.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.

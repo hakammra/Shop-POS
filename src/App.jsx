@@ -2931,7 +2931,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       supabase.from('customers').select('id', { count: 'exact', head: true }),
       supabase.from('suppliers').select('id', { count: 'exact', head: true }),
       supabase.from('documents').select('id', { count: 'exact', head: true }).neq('document_type', 'cod_order'),
-      supabase.from('cashflow_entries').select('entry_type, amount').gte('created_at', todayStart.toISOString()),
+      supabase.from('cashflow_entries').select('entry_type, amount, payment_methods(affects_cashflow)').gte('created_at', todayStart.toISOString()),
       supabase.from('documents').select('id, document_type, total_amount, status').gte('created_at', todayStart.toISOString()),
       supabase.from('documents').select('balance_amount').eq('document_type', 'invoice').gt('balance_amount', 0),
       supabase.from('product_stock_view').select('product_id, item_code, name, available_qty, min_stock_level, track_inventory').eq('is_active', true).eq('track_inventory', true).limit(1000),
@@ -2953,8 +2953,8 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       customers: customersRes.count || 0,
       suppliers: suppliersRes.count || 0,
       documents: docsRes.count || 0,
-      cashIn: (cashRes.data || []).filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0),
-      cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      cashIn: (cashRes.data || []).filter((row) => row.entry_type === 'cash_in' && row.payment_methods?.affects_cashflow !== false).reduce((sum, row) => sum + Number(row.amount || 0), 0),
+      cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out' && row.payment_methods?.affects_cashflow !== false).reduce((sum, row) => sum + Number(row.amount || 0), 0),
       todaySales: todayInvoices.reduce((sum, row) => sum + numberValue(row.total_amount), 0),
       todayInvoices: todayInvoices.length,
       outstanding: (outstandingRes.data || []).reduce((sum, row) => sum + numberValue(row.balance_amount), 0),
@@ -9490,7 +9490,7 @@ function CashflowPage() {
     while (true) {
       let query = supabase
         .from('cashflow_entries')
-        .select('id, document_id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name), documents(id, document_no, document_type, status, total_amount, paid_amount, notes)')
+        .select('id, document_id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name, affects_cashflow, is_paid_method, account_kind), documents(id, document_no, document_type, status, total_amount, paid_amount, notes)')
         .order('created_at', { ascending: false })
         .range(offset, offset + pageSize - 1);
       if (range.start) query = query.gte('created_at', range.start.toISOString());
@@ -9636,6 +9636,7 @@ function CashflowPage() {
   }
 
   const filteredEntries = entries.filter((entry) => {
+    if (entry.entry_type !== 'non_cash' && entry.payment_methods?.affects_cashflow === false) return false;
     const docType = entry.documents?.document_type || '';
     const text = `${entry.description || ''} ${entry.account_name || ''} ${entry.payment_methods?.name || ''} ${entry.documents?.document_no || ''} ${docType}`.toLowerCase();
     if (filters.search.trim() && !text.includes(filters.search.trim().toLowerCase())) return false;
@@ -9645,7 +9646,7 @@ function CashflowPage() {
     return true;
   });
 
-  const periodExternalEntries = entries.filter((row) => row.documents?.document_type !== 'account_transfer');
+  const periodExternalEntries = entries.filter((row) => row.documents?.document_type !== 'account_transfer' && row.payment_methods?.affects_cashflow !== false);
   const cashIn = periodExternalEntries.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const cashOut = periodExternalEntries.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const creditActivity = entries.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -10193,7 +10194,7 @@ function ReportsPage() {
         .order('document_date', { ascending: false })
         .limit(2000),
       supabase.from('cashflow_entries')
-        .select('id, document_id, entry_type, account_name, payment_method_id, amount, description, created_at, payment_methods(name)')
+        .select('id, document_id, entry_type, account_name, payment_method_id, amount, description, created_at, payment_methods(name, affects_cashflow)')
         .gte('created_at', periodBounds.start)
         .lt('created_at', periodBounds.endExclusive)
         .order('created_at', { ascending: false })
@@ -10265,7 +10266,7 @@ function ReportsPage() {
     current.total += signedAmount;
   }).sort((a, b) => a.customer.localeCompare(b.customer));
   const salesCustomerRows = reportGroup(salesDocuments, (row) => row.customer_id || 'walk-in', (row, key) => ({ id: key, customer: customerMap.get(row.customer_id)?.name || 'Walk-in', invoices: 0, total: 0, paid: 0, balance: 0 }), (current, row) => { current.invoices += 1; current.total += numberValue(row.total_amount); current.paid += numberValue(row.paid_amount); current.balance += numberValue(row.balance_amount); }).sort((a, b) => b.total - a.total);
-  const filteredCashflows = cashflows.filter((flow) => { const doc = documentMap.get(flow.document_id); if (customerId && doc?.customer_id !== customerId) return false; if (paymentMethodId && flow.payment_method_id !== paymentMethodId) return false; return true; });
+  const filteredCashflows = cashflows.filter((flow) => { const doc = documentMap.get(flow.document_id); if (flow.entry_type !== 'non_cash' && flow.payment_methods?.affects_cashflow === false) return false; if (customerId && doc?.customer_id !== customerId) return false; if (paymentMethodId && flow.payment_method_id !== paymentMethodId) return false; return true; });
 
   function supplierName(row) { return supplierMap.get(row.supplier_id)?.name || customerMap.get(row.customer_id)?.name || '-'; }
 
