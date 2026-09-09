@@ -26,6 +26,7 @@ const STAFF_PERMISSION_GROUPS = [
     label: 'Checkout',
     items: [
       { key: 'pos_sales', label: 'Use POS and save sales', default: true },
+      { key: 'edit_sales_documents', label: 'Edit finalized sales documents', default: false },
       { key: 'change_sale_price', label: 'Override item selling prices', default: false },
       { key: 'apply_discounts', label: 'Apply bill and item discounts', default: false },
       { key: 'process_returns', label: 'Process returns and exchanges', default: false },
@@ -246,6 +247,10 @@ const emptyBill = (name = 'Bill 1') => ({
   sourceDocumentNo: '',
   sourceDocumentType: '',
   editUnconfirmedId: '',
+  editInvoiceId: '',
+  editInvoiceOriginalCustomerId: '',
+  editInvoiceOutstandingDelta: 0,
+  editInvoiceDocumentDate: '',
   unconfirmedMode: false
 });
 
@@ -1418,7 +1423,15 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       if (b.id === appSettings.default_payment_method_id) return 1;
       return a.name.localeCompare(b.name);
     });
-  const currentOutstanding = selectedCustomer ? numberValue(selectedCustomer.due_balance) - numberValue(selectedCustomer.store_credit_balance) : 0;
+  const storedCustomerOutstanding = selectedCustomer ? numberValue(selectedCustomer.due_balance) - numberValue(selectedCustomer.store_credit_balance) : 0;
+  const currentOutstanding = selectedCustomer
+    ? storedCustomerOutstanding - (
+      activeBill.editInvoiceId
+      && activeBill.editInvoiceOriginalCustomerId === selectedCustomer.id
+        ? numberValue(activeBill.editInvoiceOutstandingDelta)
+        : 0
+    )
+    : 0;
   const paymentLines = Array.isArray(activeBill.paymentLines) ? activeBill.paymentLines : [];
 
   const subtotal = useMemo(() => activeBill.items.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0), [activeBill.items]);
@@ -1490,6 +1503,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       const sourceType = quote.sourceDocumentType || (quote.quoteId ? 'quotation' : '');
       const isUnconfirmedEdit = quote.mode === 'unconfirmed_edit';
       const isUnconfirmedConvert = quote.mode === 'unconfirmed_convert';
+      const isInvoiceEdit = quote.mode === 'invoice_edit';
       const quoteBill = {
         ...emptyBill(quote.sourceDocumentNo || quote.quoteNo ? `From ${quote.sourceDocumentNo || quote.quoteNo}` : 'Document to invoice'),
         customerId: quote.customerId || '',
@@ -1506,6 +1520,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           discountValue: Number(item.discount_value || item.discountValue || 0),
           isReturn: Number(item.qty || 0) < 0,
           returnCondition: item.return_condition || 'sellable',
+          sourceDocumentItemId: item.source_document_item_id || '',
+          returnReason: item.return_reason || '',
+          availableQty: item.available_qty,
+          trackInventory: item.track_inventory !== false,
           lineTotal: Number(item.line_total || 0)
         })),
         selectedItemId: '',
@@ -1529,7 +1547,11 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         sourceDocumentNo: quote.sourceDocumentNo || '',
         sourceDocumentType: sourceType,
         editUnconfirmedId: isUnconfirmedEdit ? quote.sourceDocumentId || '' : '',
-        documentNo: isUnconfirmedEdit ? quote.sourceDocumentNo || '' : '',
+        editInvoiceId: isInvoiceEdit ? quote.sourceDocumentId || '' : '',
+        editInvoiceOriginalCustomerId: isInvoiceEdit ? quote.customerId || '' : '',
+        editInvoiceOutstandingDelta: isInvoiceEdit ? Number(quote.originalOutstandingDelta || 0) : 0,
+        editInvoiceDocumentDate: isInvoiceEdit ? quote.documentDate || '' : '',
+        documentNo: isUnconfirmedEdit || isInvoiceEdit ? quote.sourceDocumentNo || '' : '',
         unconfirmedMode: isUnconfirmedEdit
       };
       quoteBill.selectedItemId = quoteBill.items[0]?.id || '';
@@ -1537,6 +1559,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setActiveBillId(quoteBill.id);
       setMessage(isUnconfirmedEdit
         ? `Loaded ${quote.sourceDocumentNo || ''} for internal review and editing.`
+        : isInvoiceEdit
+          ? `Loaded ${quote.sourceDocumentNo || ''} for correction. Saving will safely replace its posted effects.`
         : isUnconfirmedConvert
           ? `Loaded ${quote.sourceDocumentNo || ''}. Review it, then save to confirm the sale.`
           : `Loaded quotation ${quote.quoteNo || ''} into POS. Select payment and save as invoice.`);
@@ -2274,6 +2298,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     const linesForSave = paymentLinesOverride || paymentLines;
     const isUnconfirmed = activeBill.unconfirmedMode === true;
     const isConfirmingUnconfirmed = !isUnconfirmed && activeBill.sourceDocumentType === 'unconfirmed_sale' && activeBill.sourceDocumentId;
+    const isEditingInvoice = !isUnconfirmed && Boolean(activeBill.editInvoiceId);
     const useCreditForSave = options.useExistingCustomerCredit ?? useExistingCustomerCredit;
     const saveTarget = currentBillTarget(useCreditForSave);
     setMessage('');
@@ -2319,7 +2344,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setShowCustomerPanel(true);
       return;
     }
-    if (appSettings.confirm_pos_sale && !window.confirm(`${isUnconfirmed ? 'Save this sale for internal confirmation' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : 'Save this invoice'} for ${money(total)}?`)) return;
+    if ((appSettings.confirm_pos_sale || isEditingInvoice) && !window.confirm(`${isUnconfirmed ? 'Save this sale for internal confirmation' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : isEditingInvoice ? `Replace ${activeBill.documentNo} and reapply all stock, payment and balance effects` : 'Save this invoice'} for ${money(total)}?`)) return;
 
     setSaving(true);
     const payload = {
@@ -2361,14 +2386,20 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       ? 'save_unconfirmed_sale_v63'
       : isConfirmingUnconfirmed
         ? 'confirm_unconfirmed_sale_v63'
+        : isEditingInvoice
+          ? 'replace_pos_invoice_v67'
         : 'save_pos_invoice_v56';
-    const rpcArgs = isConfirmingUnconfirmed
+    const rpcArgs = isEditingInvoice
+      ? { p_document_id: activeBill.editInvoiceId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
+      : isConfirmingUnconfirmed
       ? { p_source_document_id: activeBill.sourceDocumentId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
       : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
     let { data, error } = await supabase.rpc(rpcName, rpcArgs);
-    if (error && /save_pos_invoice_v56|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|schema cache|could not find the function/i.test(error.message || '')) {
+    if (error && /save_pos_invoice_v56|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|schema cache|could not find the function/i.test(error.message || '')) {
       setSaving(false);
-      setMessage(isUnconfirmed || isConfirmingUnconfirmed
+      setMessage(isEditingInvoice
+        ? 'Run migration 067_sales_invoice_corrections.sql in Supabase before editing finalized sales.'
+        : isUnconfirmed || isConfirmingUnconfirmed
         ? 'Run migration 063_party_delete_review_reservations.sql in Supabase before using review sales.'
         : 'Run migration 056_whatsapp_register_margin_cheques.sql in Supabase before saving new sales.');
       return;
@@ -2378,7 +2409,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage(error.message);
       return;
     }
-    if (!isUnconfirmed && activeBill.sourceQuoteId && data?.id) {
+    if (!isUnconfirmed && !isEditingInvoice && activeBill.sourceQuoteId && data?.id) {
       await supabase
         .from('documents')
         .update({ status: 'converted', linked_document_id: data.id, notes: `${activeBill.notes || ''}\nConverted to invoice ${data.document_no || activeBill.documentNo}`.trim() })
@@ -2413,7 +2444,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }
     setSavedInvoiceReceipt({ document: savedDocument, items: savedItems, flows: savedFlows });
     setSaving(false);
-    setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : ''}.`);
+    setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : isEditingInvoice ? 'Invoice corrected and all effects reapplied' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : ''}.`);
     await loadCustomers();
     await loadPosAssemblies();
     await loadProducts();
@@ -2455,7 +2486,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <button className="pos-action" onClick={addBill}>＋<span>New Sale</span></button>
             <button className="pos-action return-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
             <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
-            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save for Review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : 'Save Sale'}</span></button>
+            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save for Review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : activeBill.editInvoiceId ? 'Save Changes' : 'Save Sale'}</span></button>
           </div>
         </div>
         <div className="pos-command-group payment-command-group">
@@ -2485,7 +2516,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <input
               type="checkbox"
               checked={activeBill.unconfirmedMode === true}
-              disabled={Boolean(activeBill.editUnconfirmedId || activeBill.sourceDocumentType === 'unconfirmed_sale')}
+              disabled={Boolean(activeBill.editUnconfirmedId || activeBill.editInvoiceId || activeBill.sourceDocumentType === 'unconfirmed_sale')}
               onChange={(event) => updateActiveBill({ unconfirmedMode: event.target.checked })}
             />
             <span aria-hidden="true">◇</span>
@@ -2496,7 +2527,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       </div>
 
       <div key={`customer-${activeBill.id}`} className="pos-customer-strip pos-customer-strip-v16 pos-bill-switch-transition">
-        <label>Invoice No.<input value={activeBill.documentNo || ''} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => updateActiveBill({ documentNo: e.target.value })} /></label>
+        <label>Invoice No.<input value={activeBill.documentNo || ''} disabled={Boolean(activeBill.editInvoiceId)} title={activeBill.editInvoiceId ? 'The original invoice number is retained during a correction' : ''} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => updateActiveBill({ documentNo: e.target.value })} /></label>
         <div className="pos-customer-picker">
           <label>Customer
             <select value={activeBill.customerId || ''} onChange={(e) => setCustomer(e.target.value)}>
@@ -2856,7 +2887,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
               <div className="payment-popup-footer payment-screen-footer">
                 <button className="secondary-button" onClick={() => setPaymentDraft([])}>Clear payment lines</button>
-                <button className="primary-button green-button" onClick={() => { updateActiveBill({ paymentLines: paymentDraft }); setShowPaymentPanel(false); saveInvoice(paymentDraft); }}>{activeBill.unconfirmedMode ? 'Save for internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm and save sale' : 'Save invoice'}</button>
+                <button className="primary-button green-button" onClick={() => { updateActiveBill({ paymentLines: paymentDraft }); setShowPaymentPanel(false); saveInvoice(paymentDraft); }}>{activeBill.unconfirmedMode ? 'Save for internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm and save sale' : activeBill.editInvoiceId ? 'Save corrected invoice' : 'Save invoice'}</button>
               </div>
             </div>
           </div>
@@ -2964,6 +2995,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
 function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = null, customerTarget = null, onCustomerTargetHandled, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
   const can = (permission) => isAdmin || permissions?.[permission] === true;
   const canManageDocumentType = (type) => {
+    if (type === 'invoice') return can('pos_sales') && can('edit_sales_documents');
     if (['purchase', 'stock_in_transit', 'stock_adjustment', 'trade_in'].includes(type)) return can('manage_inventory_documents');
     if (type === 'quotation') return can('create_quotes');
     if (type === 'unconfirmed_sale') return can('pos_sales');
@@ -3341,6 +3373,10 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       loadUnconfirmedSaleIntoPOS('unconfirmed_edit');
       return;
     }
+    if (selected.document_type === 'invoice') {
+      loadFinalizedSaleIntoPOS();
+      return;
+    }
     if (!['purchase', 'stock_in_transit', 'quotation', 'cod_order'].includes(selected.document_type)) {
       setError('Full tab editing is available for Purchase, Stock in Transit, Quotation, and Delivery Order documents.');
       return;
@@ -3440,6 +3476,113 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     onOpenPOS?.();
   }
 
+  async function loadFinalizedSaleIntoPOS() {
+    if (!selected || selected.document_type !== 'invoice') return;
+    if (!can('pos_sales') || !can('edit_sales_documents')) {
+      setError('Edit finalized sales documents permission required.');
+      return;
+    }
+    setBusyAction(true);
+    setError('');
+    setMessage('');
+    try {
+      const [itemRes, flowRes, chequeRes] = await Promise.all([
+        supabase.from('document_items').select('*').eq('document_id', selected.id).order('created_at'),
+        supabase.from('cashflow_entries').select('id, entry_type, account_name, amount, payment_method_id, created_at').eq('document_id', selected.id).order('created_at'),
+        supabase.from('cheque_payments').select('id, payment_method_id, source_line_id, direction, amount, cheque_number, cheque_date, bank_name').eq('document_id', selected.id).order('created_at')
+      ]);
+      if (itemRes.error) throw itemRes.error;
+      if (flowRes.error) throw flowRes.error;
+      if (chequeRes.error) throw chequeRes.error;
+      if (!itemRes.data?.length) throw new Error('This invoice has no items to edit.');
+
+      const oldItemIds = itemRes.data.map((item) => item.id).filter(Boolean);
+      const [warrantyRes, linkedReturnRes] = await Promise.all([
+        supabase.from('warranty_records').select('id').eq('sale_document_id', selected.id).limit(1),
+        oldItemIds.length ? supabase.from('document_items').select('id').in('source_document_item_id', oldItemIds).limit(1) : Promise.resolve({ data: [], error: null })
+      ]);
+      if (warrantyRes.error) throw warrantyRes.error;
+      if (linkedReturnRes.error) throw linkedReturnRes.error;
+      if (warrantyRes.data?.length) throw new Error('This invoice has registered warranty records. Use the warranty or return workflow instead of editing it.');
+      if (linkedReturnRes.data?.length) throw new Error('This invoice already has a linked return. Use a new return or correction document instead of editing it.');
+
+      const productIds = [...new Set(itemRes.data.map((item) => item.product_id).filter(Boolean))];
+      const paymentMethodIds = [...new Set((flowRes.data || []).map((flow) => flow.payment_method_id).filter(Boolean))];
+      const [stockRes, methodRes] = await Promise.all([
+        productIds.length ? supabase.from('product_stock_view').select('product_id, available_qty, track_inventory').in('product_id', productIds) : Promise.resolve({ data: [], error: null }),
+        paymentMethodIds.length ? supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow, requires_cheque_details').in('id', paymentMethodIds) : Promise.resolve({ data: [], error: null })
+      ]);
+      if (stockRes.error) throw stockRes.error;
+      if (methodRes.error) throw methodRes.error;
+
+      const stockMap = new Map((stockRes.data || []).map((row) => [row.product_id, row]));
+      const reversalAvailability = new Map();
+      itemRes.data.forEach((item) => {
+        const stock = stockMap.get(item.product_id);
+        if (stock?.track_inventory === false) return;
+        const qty = numberValue(item.qty);
+        const availabilityChange = qty > 0 ? qty : item.return_condition === 'warranty_damaged' ? 0 : qty;
+        reversalAvailability.set(item.product_id, numberValue(reversalAvailability.get(item.product_id)) + availabilityChange);
+      });
+      const editableItems = itemRes.data.map((item) => {
+        const stock = stockMap.get(item.product_id);
+        return {
+          ...item,
+          available_qty: stock?.track_inventory === false ? null : numberValue(stock?.available_qty) + numberValue(reversalAvailability.get(item.product_id)),
+          track_inventory: stock?.track_inventory !== false
+        };
+      });
+
+      const methodMap = new Map((methodRes.data || []).map((method) => [method.id, method]));
+      const availableCheques = [...(chequeRes.data || [])];
+      const paymentLinesForEdit = (flowRes.data || [])
+        .filter((flow) => ['cash_in', 'cash_out', 'non_cash'].includes(flow.entry_type))
+        .map((flow) => {
+          const method = methodMap.get(flow.payment_method_id);
+          const chequeIndex = availableCheques.findIndex((cheque) => cheque.payment_method_id === flow.payment_method_id && Math.abs(numberValue(cheque.amount) - numberValue(flow.amount)) < 0.01);
+          const cheque = chequeIndex >= 0 ? availableCheques.splice(chequeIndex, 1)[0] : null;
+          return {
+            payment_method_id: flow.payment_method_id,
+            payment_method_name: method?.name || flow.account_name || 'Payment',
+            is_paid_method: flow.entry_type !== 'non_cash' && method?.is_paid_method !== false,
+            affects_cashflow: method?.affects_cashflow !== false,
+            amount: numberValue(flow.amount),
+            direction: flow.entry_type === 'cash_out' ? 'out' : 'in',
+            source_line_id: cheque?.source_line_id || flow.id,
+            cheque_number: cheque?.cheque_number || '',
+            cheque_date: cheque?.cheque_date || '',
+            cheque_bank_name: cheque?.bank_name || ''
+          };
+        });
+      const oldCashIn = (flowRes.data || []).filter((flow) => flow.entry_type === 'cash_in').reduce((sum, flow) => sum + numberValue(flow.amount), 0);
+      const oldCashOut = (flowRes.data || []).filter((flow) => flow.entry_type === 'cash_out').reduce((sum, flow) => sum + numberValue(flow.amount), 0);
+      const originalOutstandingDelta = roundMoney(numberValue(selected.total_amount) - oldCashIn + oldCashOut);
+      const cleanNotes = String(selected.notes || '').split('\n').filter((line) => !/^(Cart discount:|Existing outstanding balance applied to this document:|Extra payment against outstanding balance:)/i.test(line.trim())).join('\n').trim();
+
+      window.localStorage.setItem(QUOTE_TO_POS_KEY, JSON.stringify({
+        mode: 'invoice_edit',
+        sourceDocumentId: selected.id,
+        sourceDocumentNo: selected.document_no,
+        sourceDocumentType: 'invoice',
+        customerId: selected.customer_id || '',
+        customerName: selected.party_name || '',
+        documentDate: selected.document_date || selected.created_at || '',
+        originalOutstandingDelta,
+        notes: cleanNotes,
+        paymentLines: paymentLinesForEdit,
+        cartDiscountType: 'amount',
+        cartDiscountValue: 0,
+        items: editableItems
+      }));
+      setMessage(`${selected.document_no} loaded into POS for correction.`);
+      onOpenPOS?.();
+    } catch (loadError) {
+      setError(loadError.message || String(loadError));
+    } finally {
+      setBusyAction(false);
+    }
+  }
+
   async function applySelectedDocumentStock() {
     if (!can('manage_inventory_documents')) { setError('Inventory-document permission required.'); return; }
     if (!selected || !['purchase', 'stock_in_transit'].includes(selected.document_type)) return;
@@ -3509,10 +3652,10 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     <section className="documents-screen">
       <div className="action-toolbar">
         <div className="toolbar-menu-wrap">
-          <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && !['cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
+          <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && !['invoice', 'cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
           {showAddMenu && (
             <div className="add-menu">
-              {DOCUMENT_TYPES.filter((type) => type.value && !['cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value)).map((type) => (
+              {DOCUMENT_TYPES.filter((type) => type.value && !['invoice', 'cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value)).map((type) => (
                 <button key={type.value} onClick={() => openAddDocument(type.value)}>{type.label}</button>
               ))}
             </div>
@@ -3522,7 +3665,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
         <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
         <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
-        <button className="toolbar-button" disabled={!selected || !canManageDocumentType(selected?.document_type)} onClick={openEditDocument}><span>✎</span>Edit</button>
+        <button className="toolbar-button" disabled={!selected || busyAction || !canManageDocumentType(selected?.document_type)} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
         <button className="toolbar-button" disabled={!selected || busyAction || !can('delete_documents')} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
         <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
         <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>

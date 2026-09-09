@@ -95,6 +95,8 @@ Run `supabase/sql/065_purchase_cashflow_payment_rules.sql` after migration 064. 
 
 Run `supabase/sql/066_delivery_orders_prepaid.sql` after migration 065. The former COD queue then becomes Delivery Orders with COD and Prepaid modes. COD continues to reserve stock until courier settlement, while Prepaid records payment and creates the linked sales invoice immediately. Both modes share packing, dispatch, tracking, returns, WhatsApp notices, and three address-only labels per A5 sheet.
 
+Run `supabase/sql/067_sales_invoice_corrections.sql` after migration 066. Administrators, and staff explicitly granted **Edit finalized sales documents**, can correct a posted sales invoice from Documents. Saving reverses and reapplies its stock, customer balance, payment, cheque, cashflow and accounting effects while retaining its original invoice number and creator.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
