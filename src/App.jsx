@@ -1374,7 +1374,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const can = (permission) => isAdmin || permissions?.[permission] === true;
   const allowNegativeStock = appSettings.allow_negative_pos_stock === true;
   const savedBills = safeReadJson(POS_DRAFTS_KEY, null);
-  const initialBills = Array.isArray(savedBills?.bills) && savedBills.bills.length ? savedBills.bills : [emptyBill()];
+  const initialBills = Array.isArray(savedBills?.bills) && savedBills.bills.length
+    ? savedBills.bills.map((bill) => ({ ...bill, unconfirmedMode: false }))
+    : [emptyBill()];
   const [bills, setBills] = useState(initialBills);
   const [activeBillId, setActiveBillId] = useState(savedBills?.activeBillId || initialBills[0]?.id);
   const [search, setSearch] = useState('');
@@ -1412,6 +1414,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [returnBusy, setReturnBusy] = useState(false);
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address: '' });
   const posGridRef = useRef(null);
+  const paymentLinesRef = useRef(null);
   const returnLookupRequestRef = useRef(0);
   const priceHistoryRequestRef = useRef(0);
   const [posLeftPercent, setPosLeftPercent] = useState(() => Number(window.localStorage.getItem('computer_shop_pos_split_left_percent') || 52));
@@ -1590,6 +1593,14 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   useEffect(() => {
     window.localStorage.setItem(POS_DRAFTS_KEY, JSON.stringify({ bills, activeBillId, posCategoryId }));
   }, [bills, activeBillId, posCategoryId]);
+
+  useEffect(() => {
+    if (!showPaymentPanel || paymentDraft.length === 0 || !window.matchMedia('(max-width: 900px)').matches) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      paymentLinesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showPaymentPanel, paymentDraft.length]);
 
   useEffect(() => {
     if (!isResizingPos) return undefined;
@@ -2071,14 +2082,16 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     updateActiveBill({ items: activeBill.items.filter((item) => item.id !== itemId), selectedItemId: '' });
   }
 
-  function closeBill() {
+  function closeBill(resetUnconfirmedModes = false) {
     if (bills.length === 1) {
       const fresh = emptyBill('Bill 1');
       setBills([fresh]);
       setActiveBillId(fresh.id);
       return;
     }
-    const remaining = bills.filter((bill) => bill.id !== activeBill.id);
+    const remaining = bills
+      .filter((bill) => bill.id !== activeBill.id)
+      .map((bill) => resetUnconfirmedModes ? { ...bill, unconfirmedMode: false } : bill);
     setBills(remaining);
     setActiveBillId(remaining[0].id);
   }
@@ -2087,7 +2100,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     if (!can('void_sales')) { setMessage('The active user does not have permission to void bills.'); return; }
     const hasDraftContent = activeBill.items.length > 0 || paymentLines.length > 0 || numberValue(activeBill.cartDiscountValue) !== 0;
     if (hasDraftContent && !window.confirm('Void this unsaved bill? Its items, discounts, and payment lines will be removed.')) return;
-    closeBill();
+    closeBill(true);
     setMessage('Current unsaved bill was voided.');
   }
 
@@ -2456,7 +2469,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     await loadCustomers();
     await loadPosAssemblies();
     await loadProducts();
-    closeBill();
+    closeBill(true);
   }
 
   const customerBalanceText = selectedCustomer
@@ -2875,7 +2888,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 <small>Leave empty to add the remaining current-bill amount. Split payments cannot exceed this bill.</small>
               </div>
 
-              <div className="table-wrap compact-table payment-lines-table">
+              <div ref={paymentLinesRef} className="table-wrap compact-table payment-lines-table">
                 <table>
                   <thead><tr><th>Method</th><th>Direction</th><th>Amount</th><th></th></tr></thead>
                   <tbody>
@@ -4544,7 +4557,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       }));
 
       if (isEditing) {
-        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v65', {
+        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v72', {
           p_document_id: document.id,
           p_header: header,
           p_items: itemPayload,
@@ -4568,8 +4581,13 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       onSaved();
     } catch (err) {
       const errorText = err.message || String(err);
-      const migrationMissing = /save_purchase_like_document_v65|replace_purchase_like_document_v65|schema cache|could not find the function/i.test(errorText);
-      setError(`${errorText}${migrationMissing ? '. Run migration 065_purchase_cashflow_payment_rules.sql in Supabase.' : ''}`);
+      const migrationMissing = /schema cache|could not find the function/i.test(errorText);
+      const migrationHint = isEditing && (/replace_purchase_like_document_v72/i.test(errorText) || migrationMissing)
+        ? ' Run migration 072_purchase_edit_final_stock_validation.sql in Supabase.'
+        : /save_purchase_like_document_v65/i.test(errorText) || migrationMissing
+          ? ' Run migration 065_purchase_cashflow_payment_rules.sql in Supabase.'
+          : '';
+      setError(`${errorText}${migrationHint}`);
     } finally {
       setBusy(false);
     }
@@ -9762,6 +9780,29 @@ function CashflowPage() {
   const cashOut = periodExternalEntries.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const creditActivity = entries.filter((row) => row.entry_type === 'non_cash').reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const netCash = cashIn - cashOut;
+  const cashflowContributions = periodExternalEntries.reduce((totals, row) => {
+    if (!['cash_in', 'cash_out'].includes(row.entry_type)) return totals;
+    const accountKind = row.payment_methods?.account_kind === 'cash'
+      ? 'cash'
+      : row.payment_methods?.account_kind === 'bank'
+        ? 'bank'
+        : 'other';
+    totals[row.entry_type][accountKind] += numberValue(row.amount);
+    return totals;
+  }, {
+    cash_in: { cash: 0, bank: 0, other: 0 },
+    cash_out: { cash: 0, bank: 0, other: 0 }
+  });
+  const contributionText = (values, signed = false) => {
+    const parts = [['Cash', values.cash], ['Bank', values.bank]];
+    if (Math.abs(numberValue(values.other)) > 0.004) parts.push(['Other', values.other]);
+    return parts.map(([label, amount]) => `${label} ${signed ? signedMoney(amount) : money(amount)}`).join(' · ');
+  };
+  const netContributions = {
+    cash: cashflowContributions.cash_in.cash - cashflowContributions.cash_out.cash,
+    bank: cashflowContributions.cash_in.bank - cashflowContributions.cash_out.bank,
+    other: cashflowContributions.cash_in.other - cashflowContributions.cash_out.other
+  };
   const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'yesterday' ? 'Yesterday' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
   const transferableMethods = paymentMethods.filter((method) => ['cash', 'bank'].includes(method.account_kind));
   const paymentAccountCategory = (account) => account.is_paid_method === false ? 'credit' : ['cash', 'bank'].includes(account.account_kind) ? account.account_kind : 'other';
@@ -9811,10 +9852,10 @@ function CashflowPage() {
       </div>
 
       <div className="cashflow-summary-grid">
-        <StatCard className="cashflow-total-card cash-in" label="Cash In" value={money(cashIn)} />
-        <StatCard className="cashflow-total-card cash-out" label="Cash Out" value={money(cashOut)} />
-        <StatCard className={`cashflow-total-card net ${netCash < 0 ? 'negative' : 'positive'}`} label="Net Cash" value={money(netCash)} />
-        <StatCard className="cashflow-total-card credit" label="Credit Activity" value={money(creditActivity)} />
+        <StatCard className="cashflow-total-card cash-in" label="Cash In" value={money(cashIn)} detail={contributionText(cashflowContributions.cash_in)} />
+        <StatCard className="cashflow-total-card cash-out" label="Cash Out" value={money(cashOut)} detail={contributionText(cashflowContributions.cash_out)} />
+        <StatCard className={`cashflow-total-card net ${netCash < 0 ? 'negative' : 'positive'}`} label="Net Cash" value={signedMoney(netCash)} detail={contributionText(netContributions, true)} />
+        <StatCard className="cashflow-total-card credit" label="Credit Activity" value={money(creditActivity)} detail="Account activity · excluded from cash and bank totals" />
       </div>
 
       <div className="cashflow-transactions-heading">
@@ -11909,11 +11950,12 @@ function SplitTables({ titleA, tableA, titleB, tableB }) {
   );
 }
 
-function StatCard({ label, value, className = '' }) {
+function StatCard({ label, value, detail = '', className = '' }) {
   return (
     <div className={`stat-card ${className}`.trim()}>
       <p>{label}</p>
       <strong>{value}</strong>
+      {detail && <small className="stat-card-detail">{detail}</small>}
     </div>
   );
 }

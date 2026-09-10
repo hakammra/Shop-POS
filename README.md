@@ -105,6 +105,8 @@ Run `supabase/sql/070_all_payment_account_balances.sql` after migration 069. The
 
 Run `supabase/sql/071_track_non_cashflow_payment_accounts.sql` after migration 070. Paid methods with **Affects Cashflow** disabled then retain payment-account movements and running balances without entering Cash In, Cash Out, Net, transaction-history exports or the daily register. The migration restores recoverable opted-out payments previously removed by SQL 65/69. Purchase save/edit keeps these account movements from then on.
 
+Run `supabase/sql/072_purchase_edit_final_stock_validation.sql` after migration 071. Purchase edits then validate the final stock quantity after the old and revised quantities are compared. A valid edit is no longer rejected merely because reversing the old purchase would be temporarily negative; cost, supplier balance, payments, account movements and stock history still use the existing transactional reverse-and-reapply process. Final stock must remain non-negative and cannot consume reserved units.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
