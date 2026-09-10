@@ -107,6 +107,8 @@ Run `supabase/sql/071_track_non_cashflow_payment_accounts.sql` after migration 0
 
 Run `supabase/sql/072_purchase_edit_final_stock_validation.sql` after migration 071. Purchase edits then validate the final stock quantity after the old and revised quantities are compared. A valid edit is no longer rejected merely because reversing the old purchase would be temporarily negative; cost, supplier balance, payments, account movements and stock history still use the existing transactional reverse-and-reapply process. Final stock must remain non-negative and cannot consume reserved units.
 
+Run `supabase/sql/073_random_five_character_job_codes.sql` after migration 072. New repair jobs then receive a unique, non-sequential five-character code such as `7K3MP`. Codes always mix letters and digits and omit easily confused characters; existing job numbers are retained unchanged.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.

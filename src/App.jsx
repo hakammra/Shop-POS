@@ -4863,7 +4863,6 @@ function JobDocumentForm({ document = null, tabId = '', onClose, onSaved, onNumb
       if (isEditing) {
         const now = new Date().toISOString();
         const result = await supabase.from('documents').update({
-          job_no: jobNo.trim() || document.job_no,
           customer_id: customerId,
           document_date: documentDate,
           device_type: deviceType.trim() || null,
@@ -4881,9 +4880,8 @@ function JobDocumentForm({ document = null, tabId = '', onClose, onSaved, onNumb
         data = result.data;
         saveError = result.error;
       } else {
-        const result = await supabase.rpc('save_job_document_v22', {
+        const result = await supabase.rpc('save_job_document_v73', {
           p_customer_id: customerId,
-          p_job_no: jobNo,
           p_document_date: documentDate,
           p_device_type: deviceType,
           p_device_specs: deviceSpecs,
@@ -4901,7 +4899,9 @@ function JobDocumentForm({ document = null, tabId = '', onClose, onSaved, onNumb
       if (tabId) window.localStorage.removeItem(documentDraftKey(tabId));
       onSaved();
     } catch (err) {
-      setError(err.message || String(err));
+      const errorText = err.message || String(err);
+      const migrationMissing = /save_job_document_v73|schema cache|could not find the function/i.test(errorText);
+      setError(`${errorText}${migrationMissing ? '. Run migration 073_random_five_character_job_codes.sql in Supabase.' : ''}`);
     } finally {
       setBusy(false);
     }
@@ -4919,7 +4919,7 @@ function JobDocumentForm({ document = null, tabId = '', onClose, onSaved, onNumb
       {message && <div className="notice">{message}</div>}
       {error && <div className="error-box">{error}</div>}
       <form onSubmit={saveJob} className="trade-in-form-grid job-form-grid">
-        <label>Job number<input value={jobNo} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => setJobNo(e.target.value)} /></label>
+        <label>Job code<input value={jobNo} placeholder="5-character code assigned on save" readOnly /></label>
         <label>Date<input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} /></label>
         <label>Customer
           <div className="supplier-combo-field" tabIndex={-1} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setCustomerMenuOpen(false); }} onKeyDown={(e) => { if (e.key === 'Escape') setCustomerMenuOpen(false); }}>
