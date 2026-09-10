@@ -1322,6 +1322,7 @@ tr.selected-row td {
 }
 .pos-bill-card.selected { border-color: var(--primary); background: rgba(40, 169, 230, 0.12); }
 .pos-bill-card.return-row { border-left: 4px solid var(--warning); }
+.mobile-item-remove { display: none; }
 .bill-card-main {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr) 120px;
@@ -4801,19 +4802,28 @@ body.pos-resizing {
     bottom: 0;
     left: 0;
     z-index: 45;
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
+    display: flex;
+    width: 100%;
+    max-width: 100%;
     min-height: calc(62px + env(safe-area-inset-bottom));
     padding: 4px 5px env(safe-area-inset-bottom);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
     border-top: 1px solid #4e565a;
     background: rgba(31, 31, 31, .97);
     box-shadow: 0 -8px 25px rgba(0,0,0,.32);
     backdrop-filter: blur(12px);
   }
+  .mobile-bottom-navigation::-webkit-scrollbar { display: none; }
   .mobile-bottom-navigation button,
   .mobile-bottom-navigation > a {
-    min-width: 0;
+    flex: 0 0 clamp(68px, 20vw, 86px);
+    min-width: 68px;
     min-height: 56px;
     display: grid;
     place-items: center;
@@ -4824,6 +4834,7 @@ body.pos-resizing {
     background: transparent;
     color: #adb7bc;
     text-decoration: none;
+    scroll-snap-align: center;
   }
   .mobile-bottom-navigation button.active,
   .mobile-bottom-navigation > a:active { background: rgba(40,169,230,.16); color: #7bd7ff; }
@@ -4974,7 +4985,39 @@ body.pos-resizing {
   }
   .modal-actions { position: sticky; bottom: -14px; z-index: 2; margin: 14px -14px -14px; padding: 11px 14px calc(11px + env(safe-area-inset-bottom)); background: #242424; border-top: 1px solid var(--line); }
   .modal-actions button { flex: 1 1 125px; min-height: 46px; }
-  .item-entry-modal { padding: 15px; }
+  body:has(.customer-price-history-backdrop) { overflow: hidden; }
+  .customer-price-history-backdrop {
+    width: 100%;
+    max-width: 100%;
+    align-items: stretch;
+    overflow: hidden;
+  }
+  .customer-price-history-backdrop .item-entry-modal {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding: 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-radius: 0;
+  }
+  .customer-price-history-backdrop .item-entry-heading,
+  .customer-price-history-backdrop .item-entry-heading > div,
+  .customer-price-history-backdrop .item-entry-fields,
+  .customer-price-history-backdrop .customer-price-history,
+  .customer-price-history-backdrop .customer-price-history-row { min-width: 0; max-width: 100%; }
+  .customer-price-history-backdrop .item-entry-heading h3,
+  .customer-price-history-backdrop .item-entry-heading p { overflow-wrap: anywhere; }
+  .customer-price-history-backdrop .item-entry-heading { gap: 9px; padding-bottom: 11px; }
+  .customer-price-history-backdrop .item-entry-heading .secondary-button { flex: 0 0 auto; width: auto; }
+  .customer-price-history-backdrop .item-entry-fields { margin-top: 12px; gap: 10px; }
+  .customer-price-history-backdrop .item-entry-fields input { width: 100%; min-height: 50px; font-size: 19px; }
+  .customer-price-history-backdrop .customer-price-history { margin-top: 11px; }
+  .customer-price-history-backdrop .customer-price-history-list { max-height: 165px; }
+  .customer-price-history-backdrop .item-entry-total { margin-top: 11px; padding: 11px 12px; }
+  .customer-price-history-backdrop .modal-actions { bottom: -12px; margin: 12px -12px -12px; padding-inline: 12px; }
   .item-entry-fields { grid-template-columns: 1fr; }
   .item-entry-total strong { font-size: 24px; }
 
@@ -5021,10 +5064,27 @@ body.pos-resizing {
   .resizable-pos-grid .mobile-panel-active { display: block; }
   .left-bill-panel, .right-product-panel, .pos-category-panel { min-height: 0; padding: 10px; }
   .pos-bill-area, .compact-bill-cards, .pos-product-tiles { max-height: none; }
+  .left-bill-panel .pos-line-toolbar { display: none; }
   .empty-pos-bill { min-height: 230px; }
   .bill-card-main { grid-template-columns: 62px minmax(0, 1fr); gap: 7px; }
   .bill-card-main b { grid-column: 1 / -1; text-align: right; font-size: 17px; }
   .compact-controls, .bill-card-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mobile-item-remove {
+    width: 100%;
+    min-height: 42px;
+    margin-top: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 1px solid rgba(225, 91, 91, .62);
+    border-radius: 5px;
+    background: rgba(122, 39, 39, .22);
+    color: #ffb1b1;
+    font-size: 18px;
+    font-weight: 800;
+  }
+  .mobile-item-remove span { font-size: 12px; }
   .left-bill-panel .aronium-total-box .discount-row { grid-template-columns: 1fr; }
   .left-bill-panel .aronium-total-box .summary-line.strong { font-size: 21px; }
   .pos-search-bar { grid-template-columns: 1fr 30px; }

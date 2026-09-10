@@ -2634,6 +2634,15 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                     </label>
                   )}
                 </div>
+                <button
+                  type="button"
+                  className="mobile-item-remove"
+                  aria-label={`Remove ${item.name} from bill`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeItem(item.id);
+                  }}
+                >× <span>Remove item</span></button>
                 </div>
               </div>
             ))}
