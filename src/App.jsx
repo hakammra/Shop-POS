@@ -822,9 +822,11 @@ function PosApplication() {
           />
         </div>}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
-          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'Delivery Orders' ? 'Delivery' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
-          <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
-          <button type="button" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
+          <div className="mobile-bottom-navigation-scroll">
+            {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'Delivery Orders' ? 'Delivery' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
+            <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
+          </div>
+          <button type="button" className="mobile-bottom-more" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
         </nav>
       </main>
     </div>
@@ -1417,6 +1419,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const paymentLinesRef = useRef(null);
   const returnLookupRequestRef = useRef(0);
   const priceHistoryRequestRef = useRef(0);
+  const productSearchRequestRef = useRef(0);
+  const productSearchCacheRef = useRef(new Map());
   const [posLeftPercent, setPosLeftPercent] = useState(() => Number(window.localStorage.getItem('computer_shop_pos_split_left_percent') || 52));
   const [isResizingPos, setIsResizingPos] = useState(false);
   const [mobilePosPanel, setMobilePosPanel] = useState('products');
@@ -1493,7 +1497,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
   useRealtimeRefresh(['products', 'stock_balances', 'stock_movements', 'categories', 'product_assemblies', 'product_assembly_items'], () => {
     loadCategories();
-    loadProducts();
+    productSearchCacheRef.current.clear();
+    loadProducts({ force: true });
     loadPosAssemblies();
   });
   useRealtimeRefresh(['documents', 'document_items', 'customers', 'cashflow_entries'], () => {
@@ -1580,7 +1585,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   }, []);
 
   useEffect(() => {
-    const timeout = setTimeout(() => loadProducts(), 120);
+    const requestId = productSearchRequestRef.current + 1;
+    productSearchRequestRef.current = requestId;
+    const timeout = setTimeout(() => loadProducts({ requestId }), 90);
     return () => clearTimeout(timeout);
   }, [search, posCategoryId, categories.length]);
 
@@ -1635,14 +1642,36 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     else setCategories(data || []);
   }
 
-  async function loadProducts() {
+  function cachePosProductRows(key, rows) {
+    const cache = productSearchCacheRef.current;
+    cache.delete(key);
+    cache.set(key, { rows, createdAt: Date.now() });
+    while (cache.size > 8) cache.delete(cache.keys().next().value);
+  }
+
+  async function loadProducts({ requestId: suppliedRequestId, force = false } = {}) {
+    const requestId = suppliedRequestId ?? (productSearchRequestRef.current + 1);
+    if (suppliedRequestId == null) productSearchRequestRef.current = requestId;
+    const isCurrentRequest = () => requestId === productSearchRequestRef.current;
     const clean = search.trim().replace(/,/g, ' ');
     if (posCategoryId === 'assemblies') {
-      setProducts([]);
+      if (isCurrentRequest()) setProducts([]);
       return;
     }
     if (!clean && posCategoryId === 'root') {
-      setProducts([]);
+      if (isCurrentRequest()) setProducts([]);
+      return;
+    }
+
+    const seed = clean ? productSearchSeed(clean) : '';
+    const cacheKey = clean
+      ? `search:${normalizeProductSearch(seed)}`
+      : `category:${posCategoryId}`;
+    const cached = productSearchCacheRef.current.get(cacheKey);
+    if (!force && cached && Date.now() - cached.createdAt < 120000) {
+      productSearchCacheRef.current.delete(cacheKey);
+      productSearchCacheRef.current.set(cacheKey, cached);
+      if (isCurrentRequest()) setProducts(rankProductSearchResults(cached.rows, clean));
       return;
     }
 
@@ -1654,7 +1683,6 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       .limit(1200);
 
     if (clean) {
-      const seed = productSearchSeed(clean);
       query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
     } else if (posCategoryId === 'uncategorized') {
       query = query.is('category_id', null);
@@ -1663,8 +1691,13 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }
 
     const { data, error } = await query;
-    if (error) setMessage(error.message);
-    else setProducts(rankProductSearchResults(data || [], clean));
+    if (error) {
+      if (isCurrentRequest()) setMessage(error.message);
+      return;
+    }
+    const rows = data || [];
+    cachePosProductRows(cacheKey, rows);
+    if (isCurrentRequest()) setProducts(rankProductSearchResults(rows, clean));
   }
 
   async function loadPosAssemblies() {
@@ -2468,7 +2501,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : isEditingInvoice ? 'Invoice corrected and all effects reapplied' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : ''}.`);
     await loadCustomers();
     await loadPosAssemblies();
-    await loadProducts();
+    productSearchCacheRef.current.clear();
+    await loadProducts({ force: true });
     closeBill(true);
   }
 
@@ -2589,7 +2623,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
       <div className="pos-mobile-panel-tabs" role="tablist" aria-label="POS workspace">
         <button type="button" role="tab" aria-selected={mobilePosPanel === 'products'} className={mobilePosPanel === 'products' ? 'active' : ''} onClick={() => setMobilePosPanel('products')}><span>Products</span><small>Find and add items</small></button>
-        <button type="button" role="tab" aria-selected={mobilePosPanel === 'bill'} className={mobilePosPanel === 'bill' ? 'active' : ''} onClick={() => setMobilePosPanel('bill')}><span>Current Bill</span><small>{activeBill.items.length} item{activeBill.items.length === 1 ? '' : 's'} Â· {money(total)}</small></button>
+        <button type="button" role="tab" aria-selected={mobilePosPanel === 'bill'} className={mobilePosPanel === 'bill' ? 'active' : ''} onClick={() => setMobilePosPanel('bill')}><span>Current Bill</span><small>{activeBill.items.length} item{activeBill.items.length === 1 ? '' : 's'} · {money(total)}</small></button>
       </div>
 
       <div
@@ -2784,28 +2818,30 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       {selectedPosProduct && <div className="modal-backdrop customer-price-history-backdrop">
         <form className="modal-card item-entry-modal" onSubmit={confirmPosProduct}>
           <div className="item-entry-heading"><div><span>Add to current bill</span><h3>{selectedPosProduct.name}</h3><p>{selectedPosProduct.item_code || 'Product'} · {selectedPosProduct.track_inventory === false ? 'Non-stock item' : `Available ${numberValue(selectedPosProduct.available_qty)}`}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Close</button></div>
-          <div className="item-entry-fields">
-            <label>Selling price<input type="number" min={numberValue(selectedPosProduct.avg_cost) > 0 ? roundMoney(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100)) : 0} step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price')} />{numberValue(selectedPosProduct.avg_cost) > 0 && numberValue(appSettings.minimum_profit_percent, 5) > 0 && <small>Minimum before further discounts: {money(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100))}</small>}</label>
-            <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false || allowNegativeStock ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} autoFocus={!can('change_sale_price')} /></label>
-          </div>
-          <section className="customer-price-history" aria-live="polite">
-            <div className="customer-price-history-heading">
-              <div><span>Previous selling prices</span><strong>{selectedCustomer?.name || 'Select a customer to view history'}</strong></div>
-              {selectedCustomer && <small>Recent sales of this exact item</small>}
+          <div className="item-entry-scroll-body">
+            <div className="item-entry-fields">
+              <label>Selling price<input type="number" min={numberValue(selectedPosProduct.avg_cost) > 0 ? roundMoney(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100)) : 0} step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price') && !window.matchMedia('(max-width: 760px)').matches} />{numberValue(selectedPosProduct.avg_cost) > 0 && numberValue(appSettings.minimum_profit_percent, 5) > 0 && <small>Minimum before further discounts: {money(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100))}</small>}</label>
+              <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false || allowNegativeStock ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} autoFocus={!can('change_sale_price') && !window.matchMedia('(max-width: 760px)').matches} /></label>
             </div>
-            {!selectedCustomer && <p className="customer-price-history-empty">Choose a customer on the POS before selecting a product to see their price history.</p>}
-            {selectedCustomer && customerPriceHistoryLoading && <p className="customer-price-history-empty">Checking previous sales...</p>}
-            {selectedCustomer && !customerPriceHistoryLoading && customerPriceHistoryError && <p className="customer-price-history-error">Could not load history: {customerPriceHistoryError}</p>}
-            {selectedCustomer && !customerPriceHistoryLoading && !customerPriceHistoryError && !customerPriceHistory.length && <p className="customer-price-history-empty">No previous sale of this item was found for this customer.</p>}
-            {selectedCustomer && !customerPriceHistoryLoading && !customerPriceHistoryError && customerPriceHistory.length > 0 && <div className="customer-price-history-list">
-              {customerPriceHistory.map((row) => <div className="customer-price-history-row" key={row.id}>
-                <div><strong>{money(row.effectiveUnitPrice)}</strong><small>{fmtDate(row.document.document_date || row.document.created_at)} · {row.document.document_no}</small></div>
-                <span>{numberValue(row.qty)} sold{roundMoney(row.effectiveUnitPrice) !== roundMoney(row.unit_price) ? ` · listed ${money(row.unit_price)}` : ''}</span>
-                <button type="button" className="small-button" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : 'Use this previous net unit price'} onClick={() => setPosProductDraft((current) => ({ ...current, unitPrice: row.effectiveUnitPrice }))}>Use price</button>
-              </div>)}
-            </div>}
-          </section>
-          <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
+            <section className="customer-price-history" aria-live="polite">
+              <div className="customer-price-history-heading">
+                <div><span>Previous selling prices</span><strong>{selectedCustomer?.name || 'Select a customer to view history'}</strong></div>
+                {selectedCustomer && <small>Recent sales of this exact item</small>}
+              </div>
+              {!selectedCustomer && <p className="customer-price-history-empty">Choose a customer on the POS before selecting a product to see their price history.</p>}
+              {selectedCustomer && customerPriceHistoryLoading && <p className="customer-price-history-empty">Checking previous sales...</p>}
+              {selectedCustomer && !customerPriceHistoryLoading && customerPriceHistoryError && <p className="customer-price-history-error">Could not load history: {customerPriceHistoryError}</p>}
+              {selectedCustomer && !customerPriceHistoryLoading && !customerPriceHistoryError && !customerPriceHistory.length && <p className="customer-price-history-empty">No previous sale of this item was found for this customer.</p>}
+              {selectedCustomer && !customerPriceHistoryLoading && !customerPriceHistoryError && customerPriceHistory.length > 0 && <div className="customer-price-history-list">
+                {customerPriceHistory.map((row) => <div className="customer-price-history-row" key={row.id}>
+                  <div><strong>{money(row.effectiveUnitPrice)}</strong><small>{fmtDate(row.document.document_date || row.document.created_at)} · {row.document.document_no}</small></div>
+                  <span>{numberValue(row.qty)} sold{roundMoney(row.effectiveUnitPrice) !== roundMoney(row.unit_price) ? ` · listed ${money(row.unit_price)}` : ''}</span>
+                  <button type="button" className="small-button" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : 'Use this previous net unit price'} onClick={() => setPosProductDraft((current) => ({ ...current, unitPrice: row.effectiveUnitPrice }))}>Use price</button>
+                </div>)}
+              </div>}
+            </section>
+            <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
+          </div>
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button><button type="submit" className="primary-button">Add Item</button></div>
         </form>
       </div>}
