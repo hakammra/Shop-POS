@@ -5733,7 +5733,16 @@ body.pos-resizing {
 }
 
 @media (max-width: 900px) {
-  .assistant-drawer-shell { inset: 0; width: 100vw; max-width: none; height: 100dvh; }
+  .assistant-drawer-shell {
+    inset: 0;
+    width: 100dvw;
+    max-width: 100dvw;
+    height: 100dvh;
+    transform: none;
+    clip-path: inset(0 0 0 100%);
+    transition: clip-path 190ms ease, visibility 190ms;
+  }
+  .assistant-drawer-shell.open { transform: none; clip-path: inset(0); }
   .tech-assistant-drawer-mode { height: 100dvh; border-left: 0; }
   .assistant-drawer-backdrop { display: none; }
   .tech-assistant-page { width: 100%; max-width: 100vw; min-height: 0; overflow-x: hidden; }
@@ -5834,14 +5843,24 @@ body.pos-resizing {
 
 /* POS phone layout: keep the page and item editor inside the actual viewport. */
 @media (max-width: 900px) {
-  body:has(.pos-page-v16),
-  body:has(.pos-page-v16) #root,
-  body:has(.pos-page-v16) .app-shell,
-  body:has(.pos-page-v16) .main-panel {
+  html.pos-page-active,
+  html.pos-page-active body {
     width: 100%;
     min-width: 0;
     max-width: 100%;
-    overflow-x: hidden;
+    overflow-x: hidden !important;
+    overflow-x: clip !important;
+    overscroll-behavior-x: none;
+  }
+
+  html.pos-page-active #root,
+  html.pos-page-active .app-shell,
+  html.pos-page-active .main-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden !important;
+    overflow-x: clip !important;
   }
 
   .pos-page-v16 {
@@ -5868,15 +5887,21 @@ body.pos-resizing {
     max-width: 100%;
   }
 
-  body:has(.customer-price-history-backdrop) { overflow: hidden; }
+  html.pos-page-active:has(.customer-price-history-backdrop),
+  html.pos-page-active:has(.customer-price-history-backdrop) body { overflow: hidden !important; }
   .customer-price-history-backdrop {
     position: fixed;
-    inset: 0;
+    top: 0;
+    right: auto;
+    bottom: auto;
+    left: 0;
     z-index: 1600;
     display: block;
-    width: auto;
-    height: auto;
-    max-width: none;
+    width: 100dvw;
+    min-width: 0;
+    max-width: 100dvw;
+    height: 100dvh;
+    max-height: 100dvh;
     padding: 0;
     overflow: hidden;
   }
@@ -5884,11 +5909,11 @@ body.pos-resizing {
   .customer-price-history-backdrop .item-entry-modal {
     position: absolute;
     inset: 0;
-    width: auto;
+    width: 100%;
     min-width: 0;
-    max-width: none;
-    height: auto;
-    max-height: none;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
     padding: 0;
@@ -5940,4 +5965,12 @@ body.pos-resizing {
     padding: 9px 11px calc(9px + env(safe-area-inset-bottom));
   }
   .customer-price-history-backdrop .modal-actions button { width: 100%; min-width: 0; min-height: 44px; padding-inline: 6px; }
+
+  html.pos-page-active .mobile-bottom-navigation {
+    right: auto;
+    width: 100dvw;
+    min-width: 0;
+    max-width: 100dvw;
+    contain: layout paint;
+  }
 }

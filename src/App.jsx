@@ -673,6 +673,16 @@ function PosApplication() {
   const mobileQuickNav = visibleNavItems.filter((item) => ['pos', 'documents', 'cod_orders', 'jobs'].includes(item.key));
 
   useEffect(() => {
+    const posIsActive = activePage === 'pos';
+    document.documentElement.classList.toggle('pos-page-active', posIsActive);
+    document.body.classList.toggle('pos-page-active', posIsActive);
+    return () => {
+      document.documentElement.classList.remove('pos-page-active');
+      document.body.classList.remove('pos-page-active');
+    };
+  }, [activePage]);
+
+  useEffect(() => {
     document.body.classList.toggle('mobile-navigation-open', sidebarOpen);
     return () => document.body.classList.remove('mobile-navigation-open');
   }, [sidebarOpen]);
