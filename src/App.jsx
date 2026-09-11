@@ -454,6 +454,7 @@ function NavigationIcon({ name, fallback = '' } = {}) {
   if (name === 'chart') return <svg {...common}><path d="M4 20V5M4 20h16" /><path d="M7 16v-4h3v4M12 16V9h3v7M17 16V6h3v10" /></svg>;
   if (name === 'cash') return <svg {...common}><rect x="3" y="6" width="18" height="12" rx="2" /><circle cx="12" cy="12" r="3" /><path d="M6 9h.01M18 15h.01" /></svg>;
   if (name === 'globe') return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M3.5 12h17M12 3c2.2 2.5 3.2 5.5 3.2 9S14.2 18.5 12 21M12 3C9.8 5.5 8.8 8.5 8.8 12S9.8 18.5 12 21" /></svg>;
+  if (name === 'store') return <svg {...common}><path d="M4 10v10h16V10M3 10l2-6h14l2 6" /><path d="M3 10a3 3 0 0 0 5 2 3 3 0 0 0 4 0 3 3 0 0 0 4 0 3 3 0 0 0 5-2M9 20v-5h6v5" /></svg>;
   if (name === 'cube') return <svg {...common}><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></svg>;
   if (name === 'clipboard') return <svg {...common}><path d="M8 5H5v16h14V5h-3" /><rect x="8" y="3" width="8" height="4" rx="1" /><path d="m8 12 1.5 1.5L12 11M13 13h3m-8 4 1.5 1.5L12 16M13 18h3" /></svg>;
   if (name === 'edit') return <svg {...common}><path d="m4 20 4.2-1 10.7-10.7-3.2-3.2L5 15.8 4 20Z" /><path d="m13.8 7 3.2 3.2M4 20h6" /></svg>;
@@ -772,6 +773,7 @@ function PosApplication() {
             <div className="active-operator-badge" title={`${activeStaff.full_name} · ${activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active`}><span className="operator-dot" /><span className="topbar-control-icon"><NavigationIcon name="user" /></span><div><strong>{activeStaff.full_name}</strong><small>{activeStaff.role === 'admin' ? 'Admin' : 'Staff'} active</small></div></div>
             <button className="secondary-button topbar-lock-button" aria-label="Lock or switch user" title="Lock / Switch" onClick={lockPos}><span className="topbar-control-icon"><NavigationIcon name="switch" /></span><span className="topbar-control-label">Lock / Switch</span></button>
             <button className="secondary-button topbar-logout-button" aria-label="Logout device" title="Logout Device" onClick={logoutDevice}><span className="topbar-control-icon"><NavigationIcon name="logout" /></span><span className="topbar-control-label">Logout Device</span></button>
+            {activePage === 'pos' && <a className="secondary-button topbar-store-button" href="/store" target="_blank" rel="noreferrer" aria-label="Open online store" title="Open Online Store"><NavigationIcon name="store" /></a>}
             {staffCan(activeStaff, 'use_ai_assistant') && <button
               type="button"
               className={activePage === 'tech_assistant' || assistantDrawerOpen ? 'assistant-header-button active' : 'assistant-header-button'}
@@ -822,11 +824,8 @@ function PosApplication() {
           />
         </div>}
         <nav className="mobile-bottom-navigation" aria-label="Quick navigation">
-          <div className="mobile-bottom-navigation-scroll">
-            {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'Delivery Orders' ? 'Delivery' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
-            <a href="/store" target="_blank" rel="noreferrer"><span>◇</span><strong>Store</strong></a>
-          </div>
-          <button type="button" className="mobile-bottom-more" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
+          {mobileQuickNav.map((item) => <button type="button" key={item.key} className={activePage === item.key ? 'active' : ''} onClick={() => { setActivePage(item.key); setSidebarOpen(false); }}><span><NavigationIcon name={item.icon} fallback={item.icon} /></span><strong>{item.label === 'Delivery Orders' ? 'Delivery' : item.label === 'Jobs & Repairs' ? 'Jobs' : item.label}</strong></button>)}
+          <button type="button" onClick={() => setSidebarOpen(true)}><span>+</span><strong>More</strong></button>
         </nav>
       </main>
     </div>
@@ -2820,8 +2819,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <div className="item-entry-heading"><div><span>Add to current bill</span><h3>{selectedPosProduct.name}</h3><p>{selectedPosProduct.item_code || 'Product'} · {selectedPosProduct.track_inventory === false ? 'Non-stock item' : `Available ${numberValue(selectedPosProduct.available_qty)}`}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Close</button></div>
           <div className="item-entry-scroll-body">
             <div className="item-entry-fields">
-              <label>Selling price<input type="number" min={numberValue(selectedPosProduct.avg_cost) > 0 ? roundMoney(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100)) : 0} step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price') && !window.matchMedia('(max-width: 760px)').matches} />{numberValue(selectedPosProduct.avg_cost) > 0 && numberValue(appSettings.minimum_profit_percent, 5) > 0 && <small>Minimum before further discounts: {money(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100))}</small>}</label>
-              <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false || allowNegativeStock ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} autoFocus={!can('change_sale_price') && !window.matchMedia('(max-width: 760px)').matches} /></label>
+              <label>Selling price<input type="number" min={numberValue(selectedPosProduct.avg_cost) > 0 ? roundMoney(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100)) : 0} step="0.01" disabled={!can('change_sale_price')} title={!can('change_sale_price') ? 'Price override permission required' : ''} value={posProductDraft.unitPrice} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, unitPrice: e.target.value })} autoFocus={can('change_sale_price') && !window.matchMedia('(max-width: 900px)').matches} />{numberValue(selectedPosProduct.avg_cost) > 0 && numberValue(appSettings.minimum_profit_percent, 5) > 0 && <small>Minimum before further discounts: {money(numberValue(selectedPosProduct.avg_cost) * (1 + numberValue(appSettings.minimum_profit_percent, 5) / 100))}</small>}</label>
+              <label>Quantity<input type="number" min="0.001" max={selectedPosProduct.track_inventory === false || allowNegativeStock ? undefined : Math.max(numberValue(selectedPosProduct.available_qty) - activeBill.items.filter((item) => item.product_id === selectedPosProduct.product_id && !item.isReturn && numberValue(item.qty) > 0).reduce((sum, item) => sum + numberValue(item.qty), 0), 0)} step="0.001" value={posProductDraft.qty} onFocus={selectAllText} onChange={(e) => setPosProductDraft({ ...posProductDraft, qty: e.target.value })} autoFocus={!can('change_sale_price') && !window.matchMedia('(max-width: 900px)').matches} /></label>
             </div>
             <section className="customer-price-history" aria-live="polite">
               <div className="customer-price-history-heading">

@@ -130,6 +130,16 @@ label input, label select, label textarea { margin-top: 6px; }
 .topbar h2 { margin: 0; font-size: 25px; }
 .topbar p { margin: 3px 0 0; color: var(--muted); }
 .mobile-menu { display: none; }
+.topbar-store-button {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  display: inline-grid;
+  place-items: center;
+  padding: 8px;
+  color: #fff;
+  text-decoration: none;
+}
 
 .page-section { padding: 18px; }
 .documents-screen { padding: 0; }
@@ -4803,7 +4813,9 @@ body.pos-resizing {
     bottom: 0;
     left: 0;
     z-index: 45;
-    display: flex;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     width: 100%;
     max-width: 100%;
     min-height: calc(62px + env(safe-area-inset-bottom));
@@ -4815,24 +4827,8 @@ body.pos-resizing {
     box-shadow: 0 -8px 25px rgba(0,0,0,.32);
     backdrop-filter: blur(12px);
   }
-  .mobile-bottom-navigation-scroll {
-    display: flex;
+  .mobile-bottom-navigation button {
     min-width: 0;
-    flex: 1 1 auto;
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-    touch-action: pan-x;
-    -webkit-overflow-scrolling: touch;
-  }
-  .mobile-bottom-navigation-scroll::-webkit-scrollbar { display: none; }
-  .mobile-bottom-navigation-scroll button,
-  .mobile-bottom-navigation-scroll > a,
-  .mobile-bottom-navigation > .mobile-bottom-more {
-    flex: 0 0 clamp(68px, 20vw, 86px);
-    min-width: 68px;
     min-height: 56px;
     display: grid;
     place-items: center;
@@ -4843,16 +4839,8 @@ body.pos-resizing {
     background: transparent;
     color: #adb7bc;
     text-decoration: none;
-    scroll-snap-align: center;
   }
-  .mobile-bottom-navigation > .mobile-bottom-more {
-    flex-basis: 68px;
-    border-left: 1px solid #41494d;
-    background: #24282a;
-  }
-  .mobile-bottom-navigation-scroll button.active,
-  .mobile-bottom-navigation-scroll > a:active,
-  .mobile-bottom-navigation > .mobile-bottom-more:active { background: rgba(40,169,230,.16); color: #7bd7ff; }
+  .mobile-bottom-navigation button.active { background: rgba(40,169,230,.16); color: #7bd7ff; }
   .mobile-bottom-navigation span { font-size: 19px; line-height: 1; }
   .mobile-bottom-navigation strong { max-width: 100%; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .dashboard-primary-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -5842,4 +5830,114 @@ body.pos-resizing {
     place-items: center;
     padding: 0;
   }
+}
+
+/* POS phone layout: keep the page and item editor inside the actual viewport. */
+@media (max-width: 900px) {
+  body:has(.pos-page-v16),
+  body:has(.pos-page-v16) #root,
+  body:has(.pos-page-v16) .app-shell,
+  body:has(.pos-page-v16) .main-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .pos-page-v16 {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .pos-page-v16 > *,
+  .pos-page-v16 .pos-command-group,
+  .pos-page-v16 .pos-command-buttons,
+  .pos-page-v16 .pos-toolbar,
+  .pos-page-v16 .bill-tabs,
+  .pos-page-v16 .pos-bill-row-actions,
+  .pos-page-v16 .pos-customer-strip-v16,
+  .pos-page-v16 .pos-customer-picker,
+  .pos-page-v16 .pos-customer-shortcuts,
+  .pos-page-v16 .pos-mobile-panel-tabs,
+  .pos-page-v16 .resizable-pos-grid,
+  .pos-page-v16 .left-bill-panel,
+  .pos-page-v16 .right-product-panel {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  body:has(.customer-price-history-backdrop) { overflow: hidden; }
+  .customer-price-history-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: none;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .customer-price-history-backdrop .item-entry-modal {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 0;
+  }
+
+  .customer-price-history-backdrop .item-entry-heading {
+    min-width: 0;
+    padding: 10px 11px;
+    gap: 8px;
+  }
+  .customer-price-history-backdrop .item-entry-heading > div { min-width: 0; }
+  .customer-price-history-backdrop .item-entry-heading h3 { font-size: 16px; overflow-wrap: anywhere; }
+  .customer-price-history-backdrop .item-entry-heading p { margin-top: 4px; font-size: 11px; overflow-wrap: anywhere; }
+  .customer-price-history-backdrop .item-entry-heading .secondary-button { min-height: 40px; padding: 7px 9px; }
+
+  .customer-price-history-backdrop .item-entry-scroll-body {
+    min-width: 0;
+    min-height: 0;
+    padding: 0 11px 10px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .customer-price-history-backdrop .item-entry-fields {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-top: 9px;
+  }
+  .customer-price-history-backdrop .item-entry-fields label { min-width: 0; gap: 5px; font-size: 12px; }
+  .customer-price-history-backdrop .item-entry-fields input { width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; font-size: 17px; }
+  .customer-price-history-backdrop .item-entry-fields small { font-size: 10px; line-height: 1.25; overflow-wrap: anywhere; }
+  .customer-price-history-backdrop .customer-price-history { min-width: 0; margin-top: 9px; }
+  .customer-price-history-backdrop .customer-price-history-heading { padding: 8px 10px; }
+  .customer-price-history-backdrop .customer-price-history-heading strong { overflow-wrap: anywhere; }
+  .customer-price-history-backdrop .customer-price-history-list { max-height: 120px; }
+  .customer-price-history-backdrop .customer-price-history-empty,
+  .customer-price-history-backdrop .customer-price-history-error { padding: 9px 10px; font-size: 10px; }
+  .customer-price-history-backdrop .item-entry-total { min-width: 0; margin-top: 9px; padding: 9px 10px; }
+  .customer-price-history-backdrop .item-entry-total strong { min-width: 0; font-size: 19px; text-align: right; overflow-wrap: anywhere; }
+  .customer-price-history-backdrop .modal-actions {
+    position: static;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+    padding: 9px 11px calc(9px + env(safe-area-inset-bottom));
+  }
+  .customer-price-history-backdrop .modal-actions button { width: 100%; min-width: 0; min-height: 44px; padding-inline: 6px; }
 }
