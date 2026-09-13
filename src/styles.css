@@ -5845,9 +5845,9 @@ body.pos-resizing {
 @media (max-width: 900px) {
   html.pos-page-active,
   html.pos-page-active body {
-    width: 100%;
+    width: 100dvw;
     min-width: 0;
-    max-width: 100%;
+    max-width: 100dvw;
     overflow-x: hidden !important;
     overflow-x: clip !important;
     overscroll-behavior-x: none;
@@ -5856,18 +5856,27 @@ body.pos-resizing {
   html.pos-page-active #root,
   html.pos-page-active .app-shell,
   html.pos-page-active .main-panel {
-    width: 100%;
+    width: 100dvw;
     min-width: 0;
-    max-width: 100%;
+    max-width: 100dvw;
     overflow-x: hidden !important;
     overflow-x: clip !important;
+    zoom: 1 !important;
+    transform: none !important;
   }
 
   .pos-page-v16 {
-    width: 100%;
+    width: 100dvw;
     min-width: 0;
-    max-width: 100%;
+    max-width: 100dvw;
     overflow-x: hidden;
+    zoom: 1 !important;
+  }
+
+  html.pos-page-active .topbar {
+    width: 100dvw;
+    min-width: 0;
+    max-width: 100dvw;
   }
 
   .pos-page-v16 > *,

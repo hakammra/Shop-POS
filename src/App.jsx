@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './lib/supabaseClient';
+import { createPartyTransactionHistoryPdf } from './lib/partyTransactionHistoryPdf';
 import * as XLSX from 'xlsx';
 import Storefront from './Storefront';
 
@@ -459,6 +460,7 @@ function NavigationIcon({ name, fallback = '' } = {}) {
   if (name === 'clipboard') return <svg {...common}><path d="M8 5H5v16h14V5h-3" /><rect x="8" y="3" width="8" height="4" rx="1" /><path d="m8 12 1.5 1.5L12 11M13 13h3m-8 4 1.5 1.5L12 16M13 18h3" /></svg>;
   if (name === 'edit') return <svg {...common}><path d="m4 20 4.2-1 10.7-10.7-3.2-3.2L5 15.8 4 20Z" /><path d="m13.8 7 3.2 3.2M4 20h6" /></svg>;
   if (name === 'print') return <svg {...common}><path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><path d="M7 14h10v7H7Z" /><path d="M17 12h.01" /></svg>;
+  if (name === 'statement') return <svg {...common}><path d="M6 3h9l3 3v15H6Z" /><path d="M15 3v4h4M9 11h6M9 15h6M9 19h4" /><path d="m16 14 2 2 3-4" /></svg>;
   if (name === 'refresh') return <svg {...common}><path d="M20 6v5h-5M4 18v-5h5" /><path d="M18.1 9A7 7 0 0 0 6.2 6.2L4 9M5.9 15A7 7 0 0 0 17.8 17.8L20 15" /></svg>;
   if (name === 'trash') return <svg {...common}><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></svg>;
   return <>{fallback || name}</>;
@@ -597,7 +599,7 @@ function PosApplication() {
 
   async function logoutDevice() {
     await supabase.rpc('lock_pos_staff_session_v38');
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
   }
 
   useEffect(() => {
@@ -719,7 +721,7 @@ function PosApplication() {
   if (loadingSession) return <FullScreenMessage title="Loading" message="Checking login session..." />;
   if (!session) return <AuthScreen />;
   if (securityLoading && !securityState) return <FullScreenMessage title="Security" message="Checking this device..." />;
-  if (securityError) return <SecurityLoadError message={securityError} onRetry={loadSecurityState} onLogout={() => supabase.auth.signOut()} />;
+  if (securityError) return <SecurityLoadError message={securityError} onRetry={loadSecurityState} onLogout={() => supabase.auth.signOut({ scope: 'local' })} />;
   if (!securityState?.device_trusted || !activeStaff) {
     return (
       <PosSecurityGate
@@ -731,7 +733,7 @@ function PosApplication() {
           setActiveStaff(staff);
           setSecurityState((current) => ({ ...(current || {}), active_staff: staff }));
         }}
-        onLogout={() => supabase.auth.signOut()}
+        onLogout={() => supabase.auth.signOut({ scope: 'local' })}
       />
     );
   }
@@ -5047,6 +5049,7 @@ function JobsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState(null);
   const [showThermalLabel, setShowThermalLabel] = useState(false);
+  const [statementBusy, setStatementBusy] = useState(false);
   const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
   const [statusDraft, setStatusDraft] = useState('received');
   const [loading, setLoading] = useState(true);
@@ -9172,6 +9175,21 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
       .sort((a, b) => new Date(b.date) - new Date(a.date)));
   }
 
+  async function saveTransactionHistoryPdf() {
+    if (!selected || statementBusy) return;
+    setStatementBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      await createPartyTransactionHistoryPdf(selected, transactions, companySettings, { logoUrl: companyLogoUrl(companySettings) });
+      setMessage(`Transaction history PDF downloaded for ${selected.name}.`);
+    } catch (pdfError) {
+      setError(pdfError.message || String(pdfError));
+    } finally {
+      setStatementBusy(false);
+    }
+  }
+
   async function addRow(event) {
     event.preventDefault();
     setError('');
@@ -9370,6 +9388,7 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
           <div className="party-hero-actions">
             <button className="primary-button green-button party-open-payment" disabled={!hasOutstandingBalance} title={hasOutstandingBalance ? actionLabel : 'This balance is already settled'} onClick={() => setShowPaymentForm(true)}>{actionLabel}</button>
             <button className="secondary-button party-icon-button" aria-label="Edit profile" title="Edit profile" onClick={openEditProfile}><NavigationIcon name="edit" /></button>
+            <button className="secondary-button party-icon-button" aria-label="Download transaction history PDF" disabled={statementBusy} title={statementBusy ? 'Preparing transaction history PDF' : 'Download transaction history PDF'} onClick={saveTransactionHistoryPdf}><NavigationIcon name="statement" /></button>
             <button className="primary-button party-icon-button" aria-label="Print profile tag" disabled={!selected.party_code} title={!selected.party_code ? 'Run migration 052 first' : 'Design and print a thermal profile label'} onClick={() => setShowThermalLabel(true)}><NavigationIcon name="print" /></button>
             <button className="secondary-button party-icon-button" aria-label="Refresh profile" title="Refresh profile" onClick={() => loadTransactions(selected.id)}><NavigationIcon name="refresh" /></button>
             {isAdmin && <button className="danger-button party-delete-button party-icon-button" aria-label="Delete profile" disabled={deletingProfile} title={deletingProfile ? 'Deleting profile…' : 'Delete only an unused profile with no balance or history'} onClick={deletePartyProfile}><NavigationIcon name="trash" /></button>}
