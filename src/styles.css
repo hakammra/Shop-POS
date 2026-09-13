@@ -431,6 +431,62 @@ label input, label select, label textarea { margin-top: 6px; }
 }
 .add-menu button:hover { background: var(--primary); }
 
+/* Keep the long Documents action list inside its own horizontal scroller. */
+.documents-screen { min-width: 0; max-width: 100%; overflow-x: hidden; }
+.documents-toolbar-shell {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #303030;
+}
+.documents-add-menu-wrap { flex: 0 0 100px; }
+.documents-add-menu-wrap > .toolbar-button,
+.documents-action-toolbar > .toolbar-button {
+  box-sizing: border-box;
+  width: 100px;
+  min-width: 100px;
+  min-height: 88px;
+  padding: 7px 5px;
+  grid-template-rows: 38px minmax(2.3em, auto);
+  align-content: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.15;
+  text-align: center;
+}
+.documents-add-menu-wrap > .toolbar-button { width: 100%; }
+.documents-action-toolbar {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #69747a #292d30;
+}
+.documents-action-toolbar > .toolbar-button { flex: 0 0 100px; }
+.documents-add-menu-wrap > .toolbar-button > span,
+.documents-action-toolbar > .toolbar-button > span {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  font-size: 29px;
+}
+.documents-add-menu-wrap .add-menu { top: calc(100% + 5px); }
+
 .document-filters {
   display: grid;
   grid-template-columns: repeat(4, minmax(170px, 1fr)) 220px;
@@ -5732,11 +5788,11 @@ body.pos-resizing {
   cursor: pointer;
   user-select: none;
 }
-.pos-unconfirmed-toggle:has(.sr-only) { width: 36px; justify-content: center; padding: 5px; }
 .pos-unconfirmed-toggle input { position: absolute; opacity: 0; pointer-events: none; }
-.pos-unconfirmed-toggle > span { color: #7f8a91; font-size: 16px; line-height: 1; }
+.pos-unconfirmed-icon { color: #7f8a91; font-size: 16px; line-height: 1; }
+.pos-unconfirmed-label { color: inherit; font-size: 12px; line-height: 1.2; white-space: nowrap; }
 .pos-unconfirmed-toggle.active { border-color: #9b7b32; background: #393327; color: #e4c77d; }
-.pos-unconfirmed-toggle.active > span { color: #f0bf4d; }
+.pos-unconfirmed-toggle.active .pos-unconfirmed-icon { color: #f0bf4d; }
 .pos-unconfirmed-toggle:has(input:disabled) { cursor: default; }
 .internal-document-mark { color: #d3b260; font-weight: 750; white-space: nowrap; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
@@ -5786,7 +5842,24 @@ body.pos-resizing {
 .cod-workflow-panel { padding-top: 14px; border-top: 1px solid var(--line); }
 
 @media (max-width: 760px) {
-  .pos-unconfirmed-toggle { min-height: 32px; padding: 5px 8px; font-size: 11px; }
+  .pos-unconfirmed-toggle { width: 36px; min-height: 32px; justify-content: center; padding: 5px; }
+  .pos-unconfirmed-label { display: none; }
+  .documents-toolbar-shell { position: sticky; top: 60px; z-index: 25; gap: 5px; padding: 7px 8px; }
+  .documents-add-menu-wrap { flex-basis: 72px; }
+  .documents-add-menu-wrap > .toolbar-button,
+  .documents-action-toolbar > .toolbar-button {
+    width: 72px;
+    min-width: 72px;
+    min-height: 58px;
+    padding: 5px;
+    grid-template-rows: 24px minmax(2.2em, auto);
+    font-size: 11px;
+  }
+  .documents-action-toolbar { position: static; gap: 5px; }
+  .documents-action-toolbar > .toolbar-button { flex-basis: 72px; }
+  .documents-add-menu-wrap > .toolbar-button > span,
+  .documents-action-toolbar > .toolbar-button > span { width: 24px; height: 24px; font-size: 22px; }
+  .documents-add-menu-wrap .add-menu { position: fixed; top: 126px; right: 9px; left: 9px; }
   .cod-order-toolbar { display: grid; grid-template-columns: 1fr 1fr; }
   .cod-order-toolbar .toolbar-button { min-width: 0; }
   .cod-order-detail-grid { grid-template-columns: 1fr 1fr; }

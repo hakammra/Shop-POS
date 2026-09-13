@@ -2603,8 +2603,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               disabled={Boolean(activeBill.editUnconfirmedId || activeBill.editInvoiceId || activeBill.sourceDocumentType === 'unconfirmed_sale')}
               onChange={(event) => updateActiveBill({ unconfirmedMode: event.target.checked })}
             />
-            <span aria-hidden="true">◇</span>
-            <span className="sr-only">{activeBill.editUnconfirmedId ? 'Internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming saved sale' : 'Save for review'}</span>
+            <span className="pos-unconfirmed-icon" aria-hidden="true">◇</span>
+            <span className="pos-unconfirmed-label">{activeBill.editUnconfirmedId ? 'Internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming saved sale' : 'Save for review'}</span>
           </label>
           <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
         </div>
@@ -3845,8 +3845,8 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
   return (
     <section className="documents-screen">
-      <div className="action-toolbar">
-        <div className="toolbar-menu-wrap">
+      <div className="documents-toolbar-shell">
+        <div className="toolbar-menu-wrap documents-add-menu-wrap">
           <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && !['invoice', 'cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
           {showAddMenu && (
             <div className="add-menu">
@@ -3856,18 +3856,20 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
             </div>
           )}
         </div>
-        <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(true)}><span>▣</span>Print</button>
-        <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
-        <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
-        <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
-        <button className="toolbar-button" disabled={!canEditSelected || busyAction} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
-        <button className="toolbar-button" disabled={!selected || busyAction || !canDeleteSelected} title={selected?.document_type === 'invoice' && !canDeleteSelected ? 'Delete finalized sales documents permission required' : ''} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
-        <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
-        <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
-        <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
-        <button className="toolbar-button bright" disabled={!canConvertReservation || busyAction || !can('pos_sales')} onClick={convertReservationToInvoice}><span>⇢</span>Convert Reservation</button>
-        <button className="toolbar-button" disabled={!canConvertReservation || busyAction || !can('create_quotes')} onClick={cancelReservation}><span>×</span>Cancel Reservation</button>
-        <button className="toolbar-button bright" disabled={!canConvertUnconfirmed || busyAction} onClick={() => loadUnconfirmedSaleIntoPOS('unconfirmed_convert')}><span>✓</span>Confirm Sale</button>
+        <div className="action-toolbar documents-action-toolbar">
+          <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(true)}><span>▣</span>Print</button>
+          <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
+          <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
+          <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
+          <button className="toolbar-button" disabled={!canEditSelected || busyAction} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
+          <button className="toolbar-button" disabled={!selected || busyAction || !canDeleteSelected} title={selected?.document_type === 'invoice' && !canDeleteSelected ? 'Delete finalized sales documents permission required' : ''} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
+          <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
+          <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
+          <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
+          <button className="toolbar-button bright" disabled={!canConvertReservation || busyAction || !can('pos_sales')} onClick={convertReservationToInvoice}><span>⇢</span>Convert Reservation</button>
+          <button className="toolbar-button" disabled={!canConvertReservation || busyAction || !can('create_quotes')} onClick={cancelReservation}><span>×</span>Cancel Reservation</button>
+          <button className="toolbar-button bright" disabled={!canConvertUnconfirmed || busyAction} onClick={() => loadUnconfirmedSaleIntoPOS('unconfirmed_convert')}><span>✓</span>Confirm Sale</button>
+        </div>
       </div>
 
       <div className="document-tabbar">
