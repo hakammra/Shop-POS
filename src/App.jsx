@@ -32,7 +32,7 @@ const STAFF_PERMISSION_GROUPS = [
       { key: 'apply_discounts', label: 'Apply bill and item discounts', default: false },
       { key: 'process_returns', label: 'Process returns and exchanges', default: false },
       { key: 'void_sales', label: 'Void open bills', default: true },
-      { key: 'create_quotes', label: 'Create quotations', default: true },
+      { key: 'create_quotes', label: 'Create quotations and reservations', default: true },
       { key: 'view_dashboard', label: 'View dashboard totals', default: false }
     ]
   },
@@ -50,7 +50,7 @@ const STAFF_PERMISSION_GROUPS = [
     label: 'Records and inventory',
     items: [
       { key: 'view_documents', label: 'View and print documents', default: true },
-      { key: 'manage_inventory_documents', label: 'Create/edit purchases, transit, trade-ins and adjustments', default: false },
+      { key: 'manage_inventory_documents', label: 'Manage purchases, transit, stock condition and consignment', default: false },
       { key: 'delete_documents', label: 'Delete supported documents', default: false },
       { key: 'delete_sales_documents', label: 'Delete finalized sales documents', default: false },
       { key: 'manage_parties', label: 'Manage customers, suppliers and their payments', default: true },
@@ -113,9 +113,13 @@ const DOCUMENT_TYPES = [
   { value: 'unconfirmed_sale', label: 'Unconfirmed Sale' },
   { value: 'refund', label: 'Refund' },
   { value: 'quotation', label: 'Quotation' },
+  { value: 'reservation', label: 'Reservation Order' },
   { value: 'purchase', label: 'Purchase' },
   { value: 'stock_in_transit', label: 'Stock in Transit' },
   { value: 'stock_adjustment', label: 'Stock Adjustment' },
+  { value: 'stock_condition_transfer', label: 'Stock Condition Transfer' },
+  { value: 'consignment_intake', label: 'Consignment Intake' },
+  { value: 'consignment_return', label: 'Consignment Return' },
   { value: 'trade_in', label: 'Trade-In' },
   { value: 'job', label: 'Job' },
   { value: 'customer_payment', label: 'Customer Payment' },
@@ -132,6 +136,7 @@ const DOCUMENT_QUICK_FILTERS = [
   { value: 'invoice', label: 'Sales' },
   { value: 'purchase', label: 'Purchases' },
   { value: 'stock_in_transit', label: 'In Transit' },
+  { value: 'reservation', label: 'Reservations' },
   { value: 'quotation', label: 'Quotes' }
 ];
 
@@ -155,7 +160,8 @@ const STOCK_FILTERS = [
   { value: 'negative', label: 'Negative Qty', description: 'Qty is below zero' },
   { value: 'low', label: 'Low Stock', description: 'Qty is above zero and at or below low-stock level' },
   { value: 'in_transit', label: 'In Transit', description: 'Incoming stock not yet added to inventory' },
-  { value: 'reserved', label: 'Reserved', description: 'Stock reserved by a COD order or review sale' },
+  { value: 'reserved', label: 'Reserved', description: 'Stock reserved by a delivery order, review sale, or customer reservation' },
+  { value: 'consignment', label: 'Consignment', description: 'Stock owned by another person and held for sale' },
   { value: 'damaged', label: 'Warranty / Damaged', description: 'Non-sellable returned or damaged stock' },
   { value: 'unavailable', label: 'Unavailable', description: 'Available stock is zero or below' },
   { value: 'inactive', label: 'Inactive', description: 'Inactive products' }
@@ -195,7 +201,8 @@ const REALTIME_TABLES = [
   'assistant_supplier_knowledge',
   'assistant_pos_guides',
   'online_store_orders',
-  'online_store_order_items'
+  'online_store_order_items',
+  'consignment_sale_ledger'
 ];
 
 function useRealtimeRefresh(tables, refresh, debounceMs = 280) {
@@ -245,6 +252,8 @@ const emptyBill = (name = 'Bill 1') => ({
   notes: '',
   sourceQuoteId: '',
   sourceQuoteNo: '',
+  sourceReservationId: '',
+  sourceReservationNo: '',
   sourceDocumentId: '',
   sourceDocumentNo: '',
   sourceDocumentType: '',
@@ -1569,6 +1578,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         notes: quote.notes || (sourceType === 'quotation' ? `Converted from quotation ${quote.quoteNo || ''}` : ''),
         sourceQuoteId: quote.quoteId || '',
         sourceQuoteNo: quote.quoteNo || '',
+        sourceReservationId: quote.reservationId || '',
+        sourceReservationNo: quote.reservationNo || '',
+        useExistingCustomerCredit: quote.reservationId ? true : quote.useExistingCustomerCredit === true,
         sourceDocumentId: quote.sourceDocumentId || '',
         sourceDocumentNo: quote.sourceDocumentNo || '',
         sourceDocumentType: sourceType,
@@ -1589,7 +1601,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           ? `Loaded ${quote.sourceDocumentNo || ''} for correction. Saving will safely replace its posted effects.`
         : isUnconfirmedConvert
           ? `Loaded ${quote.sourceDocumentNo || ''}. Review it, then save to confirm the sale.`
-          : `Loaded quotation ${quote.quoteNo || ''} into POS. Select payment and save as invoice.`);
+          : quote.reservationId
+            ? `Loaded reservation ${quote.reservationNo || ''}. Its advance is available as customer credit; select payment only for the remaining amount.`
+            : `Loaded quotation ${quote.quoteNo || ''} into POS. Select payment and save as invoice.`);
     } catch {
       window.localStorage.removeItem(QUOTE_TO_POS_KEY);
     }
@@ -2371,6 +2385,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage('Add at least one item.');
       return;
     }
+    if (activeBill.sourceReservationId && isUnconfirmed) {
+      setMessage('A Reservation Order must be converted directly to a posted sale so its original reservation can be released safely. Turn off Save for review and save again.');
+      return;
+    }
     const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
     const positiveLineTotal = activeBill.items.filter((item) => numberValue(item.qty) > 0).reduce((sum, item) => sum + Math.max(numberValue(item.lineTotal), 0), 0);
     const positiveCartDiscount = activeBill.cartDiscountType === 'percent'
@@ -2420,6 +2438,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       cart_discount_type: activeBill.cartDiscountType,
       cart_discount_value: Number(activeBill.cartDiscountValue || 0),
       use_existing_customer_credit: useCreditForSave,
+      source_reservation_id: activeBill.sourceReservationId || null,
       notes: activeBill.notes || ''
     };
     const itemsPayload = activeBill.items.map((item) => ({
@@ -2453,20 +2472,20 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         ? 'confirm_unconfirmed_sale_v63'
         : isEditingInvoice
           ? 'replace_pos_invoice_v67'
-        : 'save_pos_invoice_v56';
+        : 'save_pos_invoice_v74';
     const rpcArgs = isEditingInvoice
       ? { p_document_id: activeBill.editInvoiceId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
       : isConfirmingUnconfirmed
       ? { p_source_document_id: activeBill.sourceDocumentId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
       : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
     let { data, error } = await supabase.rpc(rpcName, rpcArgs);
-    if (error && /save_pos_invoice_v56|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|schema cache|could not find the function/i.test(error.message || '')) {
+    if (error && /save_pos_invoice_v74|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|schema cache|could not find the function/i.test(error.message || '')) {
       setSaving(false);
       setMessage(isEditingInvoice
         ? 'Run migration 067_sales_invoice_corrections.sql in Supabase before editing finalized sales.'
         : isUnconfirmed || isConfirmingUnconfirmed
         ? 'Run migration 063_party_delete_review_reservations.sql in Supabase before using review sales.'
-        : 'Run migration 056_whatsapp_register_margin_cheques.sql in Supabase before saving new sales.');
+        : 'Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase before saving new sales.');
       return;
     }
     if (error) {
@@ -2509,7 +2528,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }
     setSavedInvoiceReceipt({ document: savedDocument, items: savedItems, flows: savedFlows });
     setSaving(false);
-    setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : isEditingInvoice ? 'Invoice corrected and all effects reapplied' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : ''}.`);
+    setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : isEditingInvoice ? 'Invoice corrected and all effects reapplied' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : activeBill.sourceReservationNo ? ` from reservation ${activeBill.sourceReservationNo}` : ''}.`);
     await loadCustomers();
     await loadPosAssemblies();
     productSearchCacheRef.current.clear();
@@ -2984,96 +3003,119 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
 
 function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
-  const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0, todaySales: 0, todayInvoices: 0, outstanding: 0, lowStock: [], pendingCod: 0, onlineNew: 0, recentDocuments: [] });
+  const today = new Date();
+  const localDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const [rangePreset, setRangePreset] = useState('today');
+  const [customStart, setCustomStart] = useState(localDate(new Date(today.getFullYear(), today.getMonth(), 1)));
+  const [customEnd, setCustomEnd] = useState(localDate(today));
+  const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0, salesCashReceived: 0, sales: 0, cogs: 0, grossProfit: 0, invoices: 0, purchaseValue: 0, transitValue: 0, pendingCheques: 0, outstanding: 0, lowStock: [], pendingCod: 0, onlineNew: 0, recentDocuments: [], profitRows: [] });
   const [error, setError] = useState('');
 
-  useEffect(() => { loadStats(); }, []);
-  useRealtimeRefresh(['products', 'customers', 'suppliers', 'documents', 'cashflow_entries'], loadStats);
+  const selectedRange = useMemo(() => {
+    const now = new Date(); const year = now.getFullYear(); const month = now.getMonth();
+    if (rangePreset === 'today') return { start: localDate(now), end: localDate(now), label: 'Today' };
+    if (rangePreset === 'yesterday') { const date = new Date(year, month, now.getDate() - 1); return { start: localDate(date), end: localDate(date), label: 'Yesterday' }; }
+    if (rangePreset === 'this_month') return { start: localDate(new Date(year, month, 1)), end: localDate(now), label: 'This Month' };
+    if (rangePreset === 'last_month') return { start: localDate(new Date(year, month - 1, 1)), end: localDate(new Date(year, month, 0)), label: 'Last Month' };
+    if (rangePreset === 'this_year') return { start: `${year}-01-01`, end: localDate(now), label: 'This Year' };
+    if (rangePreset === 'last_year') return { start: `${year - 1}-01-01`, end: `${year - 1}-12-31`, label: 'Last Year' };
+    if (rangePreset === 'all_time') return { start: '', end: localDate(now), label: 'Since Start' };
+    return { start: customStart, end: customEnd, label: customStart && customEnd ? `${fmtDate(customStart)} – ${fmtDate(customEnd)}` : 'Custom Range' };
+  }, [rangePreset, customStart, customEnd]);
+
+  useEffect(() => { loadStats(); }, [selectedRange.start, selectedRange.end]);
+  useRealtimeRefresh(['products', 'customers', 'suppliers', 'documents', 'document_items', 'cashflow_entries', 'cheque_payments'], loadStats);
 
   async function loadStats() {
     setError('');
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const fromIso = selectedRange.start ? `${selectedRange.start}T00:00:00` : '';
+    const toIso = selectedRange.end ? `${selectedRange.end}T23:59:59.999` : '';
+    let cashQuery = supabase.from('cashflow_entries').select('entry_type, amount, payment_methods(affects_cashflow), documents(document_type)');
+    let rangeDocsQuery = supabase.from('documents').select('id, document_no, document_type, total_amount, status, document_date, created_at').in('document_type', ['invoice', 'purchase', 'stock_in_transit']).neq('status', 'cancelled');
+    let chequeQuery = supabase.from('cheque_payments').select('id, status, amount, cheque_date').in('status', ['received', 'issued', 'deposited']);
+    if (fromIso) { cashQuery = cashQuery.gte('created_at', fromIso); rangeDocsQuery = rangeDocsQuery.gte('document_date', fromIso); }
+    if (toIso) { cashQuery = cashQuery.lte('created_at', toIso); rangeDocsQuery = rangeDocsQuery.lte('document_date', toIso); }
+    if (selectedRange.start) chequeQuery = chequeQuery.gte('cheque_date', selectedRange.start);
+    if (selectedRange.end) chequeQuery = chequeQuery.lte('cheque_date', selectedRange.end);
 
-    const [productsRes, customersRes, suppliersRes, docsRes, cashRes, todayDocsRes, outstandingRes, stockRes, codRes, recentRes, onlineRes] = await Promise.all([
+    const [productsRes, customersRes, suppliersRes, docsRes, cashRes, rangeDocsRes, chequeRes, outstandingRes, stockRes, codRes, recentRes, onlineRes] = await Promise.all([
       supabase.from('products').select('id', { count: 'exact', head: true }),
       supabase.from('customers').select('id', { count: 'exact', head: true }),
       supabase.from('suppliers').select('id', { count: 'exact', head: true }),
       supabase.from('documents').select('id', { count: 'exact', head: true }).neq('document_type', 'cod_order'),
-      supabase.from('cashflow_entries').select('entry_type, amount, payment_methods(affects_cashflow)').gte('created_at', todayStart.toISOString()),
-      supabase.from('documents').select('id, document_type, total_amount, status').gte('created_at', todayStart.toISOString()),
+      cashQuery, rangeDocsQuery, chequeQuery,
       supabase.from('documents').select('balance_amount').eq('document_type', 'invoice').gt('balance_amount', 0),
       supabase.from('product_stock_view').select('product_id, item_code, name, available_qty, min_stock_level, track_inventory').eq('is_active', true).eq('track_inventory', true).limit(1000),
       supabase.from('documents').select('id, status').eq('document_type', 'cod_order').limit(1000),
       supabase.from('documents').select('id, document_no, document_type, status, total_amount, created_at').order('created_at', { ascending: false }).limit(7),
       canViewOnlineOrders ? supabase.rpc('list_online_store_orders_v47', { p_status: 'new' }) : Promise.resolve({ data: [], error: null })
     ]);
+    const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error || rangeDocsRes.error || chequeRes.error || outstandingRes.error || stockRes.error || codRes.error || recentRes.error;
+    if (firstError) { setError(firstError.message); return; }
 
-    const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error || todayDocsRes.error || outstandingRes.error || stockRes.error || codRes.error || recentRes.error;
-    if (firstError) {
-      setError(firstError.message);
-      return;
-    }
-
-    const todayInvoices = (todayDocsRes.data || []).filter((row) => row.document_type === 'invoice');
+    const invoices = (rangeDocsRes.data || []).filter((row) => row.document_type === 'invoice');
+    const invoiceIds = invoices.map((row) => row.id);
+    const itemRes = invoiceIds.length ? await supabase.from('document_items').select('id,document_id,item_code,description,qty,unit_cost,line_total').in('document_id', invoiceIds) : { data: [], error: null };
+    if (itemRes.error) { setError(itemRes.error.message); return; }
+    const itemsByDocument = new Map();
+    (itemRes.data || []).forEach((item) => itemsByDocument.set(item.document_id, [...(itemsByDocument.get(item.document_id) || []), item]));
+    const profitRows = invoices.map((invoice) => {
+      const lines = itemsByDocument.get(invoice.id) || [];
+      const revenue = numberValue(invoice.total_amount);
+      const cogs = lines.reduce((sum, line) => sum + numberValue(line.qty) * numberValue(line.unit_cost), 0);
+      return { ...invoice, revenue, cogs, grossProfit: revenue - cogs, lines };
+    }).sort((left, right) => new Date(right.document_date || right.created_at) - new Date(left.document_date || left.created_at));
+    const sales = profitRows.reduce((sum, row) => sum + row.revenue, 0);
+    const cogs = profitRows.reduce((sum, row) => sum + row.cogs, 0);
+    const flowRows = (cashRes.data || []).filter((row) => row.payment_methods?.affects_cashflow !== false);
     const lowStock = (stockRes.data || []).filter((row) => numberValue(row.available_qty) <= numberValue(row.min_stock_level)).sort((a, b) => numberValue(a.available_qty) - numberValue(b.available_qty)).slice(0, 6);
     setStats({
-      products: productsRes.count || 0,
-      customers: customersRes.count || 0,
-      suppliers: suppliersRes.count || 0,
-      documents: docsRes.count || 0,
-      cashIn: (cashRes.data || []).filter((row) => row.entry_type === 'cash_in' && row.payment_methods?.affects_cashflow !== false).reduce((sum, row) => sum + Number(row.amount || 0), 0),
-      cashOut: (cashRes.data || []).filter((row) => row.entry_type === 'cash_out' && row.payment_methods?.affects_cashflow !== false).reduce((sum, row) => sum + Number(row.amount || 0), 0),
-      todaySales: todayInvoices.reduce((sum, row) => sum + numberValue(row.total_amount), 0),
-      todayInvoices: todayInvoices.length,
-      outstanding: (outstandingRes.data || []).reduce((sum, row) => sum + numberValue(row.balance_amount), 0),
-      lowStock,
+      products: productsRes.count || 0, customers: customersRes.count || 0, suppliers: suppliersRes.count || 0, documents: docsRes.count || 0,
+      cashIn: flowRows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0),
+      cashOut: flowRows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0),
+      salesCashReceived: flowRows.filter((row) => row.entry_type === 'cash_in' && row.documents?.document_type === 'invoice').reduce((sum, row) => sum + numberValue(row.amount), 0),
+      sales, cogs, grossProfit: sales - cogs, invoices: invoices.length,
+      purchaseValue: (rangeDocsRes.data || []).filter((row) => row.document_type === 'purchase').reduce((sum, row) => sum + numberValue(row.total_amount), 0),
+      transitValue: (rangeDocsRes.data || []).filter((row) => row.document_type === 'stock_in_transit' && row.status !== 'converted').reduce((sum, row) => sum + numberValue(row.total_amount), 0),
+      pendingCheques: (chequeRes.data || []).length,
+      outstanding: (outstandingRes.data || []).reduce((sum, row) => sum + numberValue(row.balance_amount), 0), lowStock,
       pendingCod: (codRes.data || []).filter((row) => !['converted', 'delivered', 'settled', 'returned', 'cancelled'].includes(row.status)).length,
-      onlineNew: onlineRes.error ? 0 : (onlineRes.data || []).length,
-      recentDocuments: recentRes.data || []
+      onlineNew: onlineRes.error ? 0 : (onlineRes.data || []).length, recentDocuments: recentRes.data || [], profitRows: profitRows.slice(0, 8)
     });
   }
 
-  return (
-    <section className="page-section dashboard-page">
-      {error && <div className="error-box">{error}</div>}
-      <header className="dashboard-welcome">
-        <div><span>Shop overview</span><h3>Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}.</h3><p>{new Date().toLocaleDateString('en-LK', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · Live figures from your POS</p></div>
-        <div className="dashboard-quick-actions"><button type="button" onClick={() => onNavigate?.('pos')}>New Sale</button><button type="button" onClick={() => onNavigate?.('documents')}>Documents</button>{canViewOnlineOrders && <button type="button" onClick={() => onNavigate?.('online_orders')}>Online Orders</button>}<button type="button" onClick={() => onNavigate?.('cashflow')}>Cashflow</button></div>
-      </header>
+  const margin = stats.sales ? stats.grossProfit / stats.sales * 100 : 0;
+  return <section className="page-section dashboard-page">
+    {error && <div className="error-box">{error}</div>}
+    <header className="dashboard-welcome"><div><span>Shop overview</span><h3>Business Dashboard</h3><p>{selectedRange.label} · sales, profit, cash movement and stock status</p></div><div className="dashboard-quick-actions"><button type="button" onClick={() => onNavigate?.('pos')}>New Sale</button><button type="button" onClick={() => onNavigate?.('documents')}>Documents</button>{canViewOnlineOrders && <button type="button" onClick={() => onNavigate?.('online_orders')}>Online Orders</button>}<button type="button" onClick={() => onNavigate?.('cashflow')}>Cashflow</button></div></header>
 
-      <div className="dashboard-primary-stats">
-        <article className="dashboard-metric sales"><span>Today's sales</span><strong>{money(stats.todaySales)}</strong><small>{stats.todayInvoices} invoice{stats.todayInvoices === 1 ? '' : 's'} saved today</small><i>↗</i></article>
-        <article className="dashboard-metric cash"><span>Cashflow in</span><strong>{money(stats.cashIn)}</strong><small>Out {money(stats.cashOut)} · Net {money(stats.cashIn - stats.cashOut)}</small><i>⇅</i></article>
-        <article className="dashboard-metric credit"><span>Customer outstanding</span><strong>{money(stats.outstanding)}</strong><small>Open invoice balances</small><i>◷</i></article>
-        <article className="dashboard-metric orders"><span>Orders needing work</span><strong>{stats.pendingCod + stats.onlineNew}</strong><small>{stats.pendingCod} delivery · {stats.onlineNew} new online</small><i>◎</i></article>
-      </div>
+    <div className="dashboard-range-bar"><div className="dashboard-range-presets">{[['today','Today'],['yesterday','Yesterday'],['this_month','This Month'],['last_month','Last Month'],['this_year','This Year'],['last_year','Last Year'],['all_time','Since Start'],['custom','Custom']].map(([key,label]) => <button type="button" key={key} className={rangePreset === key ? 'active' : ''} onClick={() => setRangePreset(key)}>{label}</button>)}</div>{rangePreset === 'custom' && <div className="dashboard-custom-range"><label>From<input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} /></label><label>To<input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} /></label></div>}</div>
 
-      <div className="dashboard-content-grid">
-        <article className="panel-card dashboard-activity">
-          <div className="dashboard-panel-title"><div><span>Latest activity</span><h3>Recent documents</h3></div><button type="button" onClick={() => onNavigate?.('documents')}>View all</button></div>
-          <div className="dashboard-document-list">{stats.recentDocuments.map((document) => <div key={document.id}><span className={`dashboard-doc-icon ${document.document_type}`}>{document.document_type === 'invoice' ? 'S' : document.document_type === 'purchase' ? 'P' : document.document_type === 'cod_order' ? 'C' : 'D'}</span><div><strong>{document.document_no}</strong><small>{documentTypeLabel(document.document_type)} · {fmtDate(document.created_at)}</small></div><span className="dashboard-doc-status">{String(document.status || '').replaceAll('_', ' ')}</span><b>{money(document.total_amount)}</b></div>)}{!stats.recentDocuments.length && <div className="muted-box">No documents yet.</div>}</div>
-        </article>
+    <div className="dashboard-primary-stats dashboard-financial-stats">
+      <article className="dashboard-metric sales"><span>Sales</span><strong>{money(stats.sales)}</strong><small>{stats.invoices} invoice{stats.invoices === 1 ? '' : 's'} · {money(stats.salesCashReceived)} cash/bank received</small><i>↗</i></article>
+      <article className="dashboard-metric cogs"><span>Cost of goods sold</span><strong>{money(stats.cogs)}</strong><small>Exact quantity × cost saved at sale</small><i>−</i></article>
+      <article className={`dashboard-metric profit ${stats.grossProfit < 0 ? 'negative' : ''}`}><span>Gross profit</span><strong>{money(stats.grossProfit)}</strong><small>{margin.toFixed(1)}% gross margin</small><i>=</i></article>
+      <article className="dashboard-metric cash"><span>Realized cash + bank</span><strong>{signedMoney(stats.cashIn - stats.cashOut)}</strong><small>{money(stats.cashIn)} in · {money(stats.cashOut)} out</small><i>⇅</i></article>
+      <article className="dashboard-metric purchases"><span>Purchase value</span><strong>{money(stats.purchaseValue)}</strong><small>Received purchases in this range</small><i>↓</i></article>
+      <article className="dashboard-metric transit"><span>Stock in transit</span><strong>{money(stats.transitValue)}</strong><small>Open transit documents in this range</small><i>⌛</i></article>
+      <article className="dashboard-metric cheques"><span>Pending cheques</span><strong>{stats.pendingCheques}</strong><small>Received, issued, or deposited in this range</small><i>▤</i></article>
+      <article className="dashboard-metric credit"><span>Customer outstanding</span><strong>{money(stats.outstanding)}</strong><small>Current open invoice balances</small><i>◷</i></article>
+      <article className="dashboard-metric orders"><span>Orders needing work</span><strong>{stats.pendingCod + stats.onlineNew}</strong><small>{stats.pendingCod} delivery · {stats.onlineNew} new online</small><i>◎</i></article>
+    </div>
 
-        <article className="panel-card dashboard-stock-watch">
-          <div className="dashboard-panel-title"><div><span>Inventory watch</span><h3>Low stock</h3></div><button type="button" onClick={() => onNavigate?.('stock')}>Open stock</button></div>
-          <div className="dashboard-stock-list">{stats.lowStock.map((product) => <div key={product.product_id}><span><strong>{product.name}</strong><small>{product.item_code}</small></span><b className={numberValue(product.available_qty) <= 0 ? 'empty' : ''}>{numberValue(product.available_qty)} available</b></div>)}{!stats.lowStock.length && <div className="dashboard-all-good"><span>✓</span><strong>Stock levels look healthy</strong><small>No products are at or below their minimum level.</small></div>}</div>
-        </article>
-      </div>
+    <article className="panel-card dashboard-profit-panel"><div className="dashboard-panel-title"><div><span>Profit calculation</span><h3>{selectedRange.label}</h3></div><div className="dashboard-profit-equation"><span><small>Sales</small><strong>{money(stats.sales)}</strong></span><b>−</b><span><small>COGS</small><strong>{money(stats.cogs)}</strong></span><b>=</b><span><small>Gross profit</small><strong className={stats.grossProfit >= 0 ? 'positive-balance' : 'negative-balance'}>{money(stats.grossProfit)}</strong></span></div></div><div className="table-wrap dashboard-profit-table"><table><thead><tr><th>Invoice</th><th>Date</th><th>Sales</th><th>COGS</th><th>Gross Profit</th><th>Margin</th></tr></thead><tbody>{stats.profitRows.map((row) => <tr key={row.id}><td><strong>{row.document_no}</strong><small className="table-subtext">{row.lines.length} item line{row.lines.length === 1 ? '' : 's'}</small></td><td>{fmtDate(row.document_date || row.created_at)}</td><td>{money(row.revenue)}</td><td>{money(row.cogs)}</td><td className={row.grossProfit >= 0 ? 'positive-balance' : 'negative-balance'}>{money(row.grossProfit)}</td><td>{row.revenue ? `${(row.grossProfit / row.revenue * 100).toFixed(1)}%` : '0.0%'}</td></tr>)}{!stats.profitRows.length && <EmptyRow colSpan={6} text={`No sales for ${selectedRange.label.toLowerCase()}.`} />}</tbody></table></div></article>
 
-      <div className="dashboard-mini-stats">
-        <div><span>Products</span><strong>{stats.products}</strong></div><div><span>Customers</span><strong>{stats.customers}</strong></div><div><span>Suppliers</span><strong>{stats.suppliers}</strong></div><div><span>All documents</span><strong>{stats.documents}</strong></div>
-      </div>
-    </section>
-  );
+    <div className="dashboard-content-grid"><article className="panel-card dashboard-activity"><div className="dashboard-panel-title"><div><span>Latest activity</span><h3>Recent documents</h3></div><button type="button" onClick={() => onNavigate?.('documents')}>View all</button></div><div className="dashboard-document-list">{stats.recentDocuments.map((document) => <div key={document.id}><span className={`dashboard-doc-icon ${document.document_type}`}>{document.document_type === 'invoice' ? 'S' : document.document_type === 'purchase' ? 'P' : document.document_type === 'cod_order' ? 'C' : 'D'}</span><div><strong>{document.document_no}</strong><small>{documentTypeLabel(document.document_type)} · {fmtDate(document.created_at)}</small></div><span className="dashboard-doc-status">{String(document.status || '').replaceAll('_', ' ')}</span><b>{money(document.total_amount)}</b></div>)}{!stats.recentDocuments.length && <div className="muted-box">No documents yet.</div>}</div></article><article className="panel-card dashboard-stock-watch"><div className="dashboard-panel-title"><div><span>Inventory watch</span><h3>Low stock</h3></div><button type="button" onClick={() => onNavigate?.('stock')}>Open stock</button></div><div className="dashboard-stock-list">{stats.lowStock.map((product) => <div key={product.product_id}><span><strong>{product.name}</strong><small>{product.item_code}</small></span><b className={numberValue(product.available_qty) <= 0 ? 'empty' : ''}>{numberValue(product.available_qty)} available</b></div>)}{!stats.lowStock.length && <div className="dashboard-all-good"><span>✓</span><strong>Stock levels look healthy</strong><small>No products are at or below their minimum level.</small></div>}</div></article></div>
+    <div className="dashboard-mini-stats"><div><span>Products</span><strong>{stats.products}</strong></div><div><span>Customers</span><strong>{stats.customers}</strong></div><div><span>Suppliers</span><strong>{stats.suppliers}</strong></div><div><span>All documents</span><strong>{stats.documents}</strong></div></div>
+  </section>;
 }
 
 function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = null, customerTarget = null, onCustomerTargetHandled, onOpenPOS, onOpenParties, onOpenCashflow, onOpenJobs } = {}) {
   const can = (permission) => isAdmin || permissions?.[permission] === true;
   const canManageDocumentType = (type) => {
     if (type === 'invoice') return can('pos_sales') && can('edit_sales_documents');
-    if (['purchase', 'stock_in_transit', 'stock_adjustment', 'trade_in'].includes(type)) return can('manage_inventory_documents');
-    if (type === 'quotation') return can('create_quotes');
+    if (['purchase', 'stock_in_transit', 'stock_adjustment', 'stock_condition_transfer', 'consignment_intake', 'consignment_return', 'trade_in'].includes(type)) return can('manage_inventory_documents');
+    if (['quotation', 'reservation'].includes(type)) return can('create_quotes');
     if (type === 'unconfirmed_sale') return can('pos_sales');
     if (type === 'job') return can('manage_jobs');
     if (type === 'cod_order') return can('manage_cod_orders');
@@ -3090,7 +3132,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [documentTabs, setDocumentTabs] = useState(() => {
     const savedTabs = safeReadJson(DOCUMENT_DRAFT_TABS_KEY, []);
-    const draftTabs = Array.isArray(savedTabs) ? savedTabs.filter((tab) => tab.id && (tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document') && canManageDocumentType(tab.documentType || tab.document?.document_type)) : [];
+    const draftTabs = Array.isArray(savedTabs) ? savedTabs.filter((tab) => tab.id && (tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'stock_condition_transfer' || tab.kind === 'consignment_document' || tab.kind === 'reservation_document' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document') && canManageDocumentType(tab.documentType || tab.document?.document_type)) : [];
     return [{ id: 'view', kind: 'view', label: 'View documents' }, ...draftTabs];
   });
   const [activeDocumentTabId, setActiveDocumentTabId] = useState('view');
@@ -3136,7 +3178,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
   useEffect(() => {
     const draftTabs = documentTabs
-      .filter((tab) => tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document')
+      .filter((tab) => tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'stock_condition_transfer' || tab.kind === 'consignment_document' || tab.kind === 'reservation_document' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document')
       .map((tab) => ({
         id: tab.id,
         kind: tab.kind,
@@ -3176,7 +3218,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
     let query = supabase
       .from('documents')
-      .select('id, document_no, job_no, job_status, device_type, device_specs, job_problem, job_accessories, estimated_days, job_ready_at, job_completed_at, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, unconfirmed_payments, unconfirmed_header, confirmed_at')
+      .select('id, document_no, job_no, job_status, device_type, device_specs, job_problem, job_accessories, estimated_days, job_ready_at, job_completed_at, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, reservation_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, unconfirmed_payments, unconfirmed_header, confirmed_at')
       .neq('document_type', 'cod_order')
       .order('document_date', { ascending: false })
       .order('created_at', { ascending: false })
@@ -3411,6 +3453,18 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       setActiveDocumentTabId(tab.id);
       return;
     }
+    if (type === 'stock_condition_transfer') {
+      const tab = { id: createClientId(), kind: 'stock_condition_transfer', documentType: type, label: 'Stock Condition Transfer' };
+      setDocumentTabs((current) => [...current, tab]);
+      setActiveDocumentTabId(tab.id);
+      return;
+    }
+    if (type === 'consignment_intake' || type === 'consignment_return') {
+      const tab = { id: createClientId(), kind: 'consignment_document', documentType: type, label: type === 'consignment_intake' ? 'Consignment Intake' : 'Consignment Return' };
+      setDocumentTabs((current) => [...current, tab]);
+      setActiveDocumentTabId(tab.id);
+      return;
+    }
     if (type === 'job') {
       onOpenJobs?.();
       return;
@@ -3422,6 +3476,12 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         documentType: type,
         label: 'New Quotation'
       };
+      setDocumentTabs((current) => [...current, tab]);
+      setActiveDocumentTabId(tab.id);
+      return;
+    }
+    if (type === 'reservation') {
+      const tab = { id: createClientId(), kind: 'reservation_document', documentType: type, label: 'New Reservation' };
       setDocumentTabs((current) => [...current, tab]);
       setActiveDocumentTabId(tab.id);
       return;
@@ -3522,6 +3582,43 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     }));
     setMessage(`${selected.document_no} loaded into POS. Complete payment there to save it as a sales invoice.`);
     onOpenPOS?.();
+  }
+
+  async function convertReservationToInvoice() {
+    if (!can('pos_sales')) { setError('POS sales permission required.'); return; }
+    if (!selected || selected.document_type !== 'reservation' || selected.status !== 'reserved') return;
+    setBusyAction(true); setError(''); setMessage('');
+    const { data: reservationItems, error: itemError } = await supabase.from('document_items').select('*').eq('document_id', selected.id).order('created_at');
+    setBusyAction(false);
+    if (itemError) { setError(itemError.message); return; }
+    if (!reservationItems?.length) { setError('This reservation has no items.'); return; }
+    window.localStorage.setItem(QUOTE_TO_POS_KEY, JSON.stringify({
+      reservationId: selected.id,
+      reservationNo: selected.document_no,
+      sourceDocumentType: 'reservation',
+      customerId: selected.customer_id || '',
+      customerName: selected.party_name || '',
+      notes: `${selected.notes || ''}\nConverted from reservation ${selected.document_no}`.trim(),
+      useExistingCustomerCredit: true,
+      items: reservationItems
+    }));
+    setMessage(`${selected.document_no} loaded into POS. The recorded advance will be offered as customer credit.`);
+    onOpenPOS?.();
+  }
+
+  async function cancelReservation() {
+    if (!selected || selected.document_type !== 'reservation' || selected.status !== 'reserved') return;
+    if (!window.confirm(`Cancel ${selected.document_no} and release its reserved stock? Any advance remains on the customer account so it can be refunded or used later.`)) return;
+    setBusyAction(true); setError(''); setMessage('');
+    const { data, error: cancelError } = await supabase.rpc('cancel_reservation_v74', { p_document_id: selected.id });
+    setBusyAction(false);
+    if (cancelError) {
+      const migrationMissing = /cancel_reservation_v74|schema cache|could not find the function/i.test(cancelError.message || '');
+      setError(`${cancelError.message}${migrationMissing ? '. Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase.' : ''}`);
+      return;
+    }
+    setMessage(`${data?.document_no || selected.document_no} cancelled. Stock was released; the advance remains customer credit.`);
+    await loadDocuments();
   }
 
   async function loadUnconfirmedSaleIntoPOS(mode) {
@@ -3730,9 +3827,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
   const canConvertTransit = selected?.document_type === 'stock_in_transit' && selected?.status === 'in_transit';
   const canConvertQuote = selected?.document_type === 'quotation' && selected?.status !== 'converted';
+  const canConvertReservation = selected?.document_type === 'reservation' && selected?.status === 'reserved';
   const canConvertUnconfirmed = isAdmin && selected?.document_type === 'unconfirmed_sale' && selected?.status === 'unconfirmed';
   const canApplyStock = selected && ['purchase', 'stock_in_transit'].includes(selected.document_type) && selected.status === 'draft';
-  const canDeleteSelected = selected?.document_type === 'invoice' ? can('delete_sales_documents') : can('delete_documents');
+  const canEditSelected = selected && ['invoice', 'unconfirmed_sale', 'purchase', 'stock_in_transit', 'quotation', 'cod_order'].includes(selected.document_type) && canManageDocumentType(selected.document_type);
+  const canDeleteSelected = selected?.document_type === 'invoice'
+    ? can('delete_sales_documents')
+    : ['unconfirmed_sale', 'purchase', 'stock_in_transit'].includes(selected?.document_type) && can('delete_documents');
   const activeDocumentTab = documentTabs.find((tab) => tab.id === activeDocumentTabId) || documentTabs[0];
 
   function closeDocumentTab(tabId) {
@@ -3759,11 +3860,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
         <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
         <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
-        <button className="toolbar-button" disabled={!selected || busyAction || !canManageDocumentType(selected?.document_type)} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
+        <button className="toolbar-button" disabled={!canEditSelected || busyAction} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
         <button className="toolbar-button" disabled={!selected || busyAction || !canDeleteSelected} title={selected?.document_type === 'invoice' && !canDeleteSelected ? 'Delete finalized sales documents permission required' : ''} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
         <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
         <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
         <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
+        <button className="toolbar-button bright" disabled={!canConvertReservation || busyAction || !can('pos_sales')} onClick={convertReservationToInvoice}><span>⇢</span>Convert Reservation</button>
+        <button className="toolbar-button" disabled={!canConvertReservation || busyAction || !can('create_quotes')} onClick={cancelReservation}><span>×</span>Cancel Reservation</button>
         <button className="toolbar-button bright" disabled={!canConvertUnconfirmed || busyAction} onClick={() => loadUnconfirmedSaleIntoPOS('unconfirmed_convert')}><span>✓</span>Confirm Sale</button>
       </div>
 
@@ -3878,7 +3981,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
                     <td>{fmtDate(document.document_date || document.created_at)}</td>
                     <td>{document.payment_method_name || '-'}</td>
                     <td>{money(document.total_amount)}</td>
-                    <td>{document.document_type === 'cod_order' ? codStatusLabel(document.status) : document.status === 'converted' && ['stock_in_transit', 'quotation', 'unconfirmed_sale'].includes(document.document_type) ? 'Converted ✓' : document.status}</td>
+                    <td>{document.document_type === 'cod_order' ? codStatusLabel(document.status) : document.status === 'converted' && ['stock_in_transit', 'quotation', 'reservation', 'unconfirmed_sale'].includes(document.document_type) ? 'Converted ✓' : document.status}</td>
                   </tr>
                 );
               })}
@@ -3905,7 +4008,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
                 <tr key={item.id} className={Number(item.qty) < 0 ? 'return-row' : ''}>
                   <td>{item.id.slice(0, 8)}</td>
                   <td>{item.item_code || '-'}</td>
-                  <td>{item.description}</td>
+                  <td>{item.description}{item.stock_from_bucket && item.stock_to_bucket && <small className="table-subtext">{item.stock_from_bucket} → {item.stock_to_bucket}</small>}</td>
                   <td>{Number(item.qty)}</td>
                   <td>{money(item.unit_cost)}</td>
                   <td>{money(item.unit_price)}</td>
@@ -3922,7 +4025,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       )}
 
       <div className="document-workspace">
-        {documentTabs.filter((tab) => tab.kind === 'new_purchase_like' || tab.kind === 'edit_document' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'job_intake' || tab.kind === 'quotation_document' || tab.kind === 'cod_order').map((tab) => {
+        {documentTabs.filter((tab) => tab.kind === 'new_purchase_like' || tab.kind === 'edit_document' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'stock_condition_transfer' || tab.kind === 'consignment_document' || tab.kind === 'reservation_document' || tab.kind === 'job_intake' || tab.kind === 'quotation_document' || tab.kind === 'cod_order').map((tab) => {
           const isActive = activeDocumentTabId === tab.id;
           return (
             <div key={tab.id} className={isActive ? 'document-tab-panel active' : 'document-tab-panel hidden-document-tab'}>
@@ -3987,6 +4090,12 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
                   onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }}
                 />
               )}
+              {tab.kind === 'stock_condition_transfer' && (
+                <StockConditionTransferForm onClose={() => closeDocumentTab(tab.id)} onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }} />
+              )}
+              {tab.kind === 'consignment_document' && (
+                <ConsignmentDocumentForm documentType={tab.documentType} onClose={() => closeDocumentTab(tab.id)} onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }} />
+              )}
               {tab.kind === 'job_intake' && (
                 <JobDocumentForm
                   tabId={tab.id}
@@ -4003,6 +4112,15 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
                   onNumberReady={(number) => {
                     setDocumentTabs((current) => current.map((item) => (item.id === tab.id ? { ...item, label: number || item.label } : item)));
                   }}
+                  onClose={() => closeDocumentTab(tab.id)}
+                  onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }}
+                />
+              )}
+              {tab.kind === 'reservation_document' && (
+                <QuotationDocumentForm
+                  documentType="reservation"
+                  tabId={tab.id}
+                  onNumberReady={(number) => setDocumentTabs((current) => current.map((item) => (item.id === tab.id ? { ...item, label: number || item.label } : item)))}
                   onClose={() => closeDocumentTab(tab.id)}
                   onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }}
                 />
@@ -4132,11 +4250,15 @@ function paidStatusLabel(document) {
 function documentPrefix(type) {
   if (type === 'invoice' || type === 'sale') return '100';
   if (type === 'cod_order') return '120';
+  if (type === 'reservation') return '130';
   if (type === 'purchase') return '200';
   if (type === 'stock_in_transit') return '300';
   if (type === 'quotation') return '400';
   if (type === 'refund') return '500';
   if (type === 'stock_adjustment') return '600';
+  if (type === 'stock_condition_transfer') return '610';
+  if (type === 'consignment_intake') return '620';
+  if (type === 'consignment_return') return '630';
   if (type === 'trade_in') return '700';
   if (type === 'job') return '750';
   if (type === 'customer_payment') return '800';
@@ -5240,11 +5362,12 @@ function emptyQuotationLine() {
   };
 }
 
-function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, onNumberReady }) {
+function QuotationDocumentForm({ document = null, documentType = 'quotation', tabId = '', onClose, onSaved, onNumberReady }) {
+  const isReservation = documentType === 'reservation';
   const isEditing = Boolean(document?.id);
   const rawSavedDraft = tabId ? safeReadJson(documentDraftKey(tabId), null) : null;
   const savedDraft = rawSavedDraft && (!isEditing || rawSavedDraft.editDocumentId === document?.id) ? rawSavedDraft : null;
-  const isDraftForQuote = savedDraft?.documentType === 'quotation';
+  const isDraftForQuote = savedDraft?.documentType === documentType;
 
   const [documentNo, setDocumentNo] = useState((isDraftForQuote ? savedDraft?.documentNo : '') || document?.document_no || '');
   const [externalNo, setExternalNo] = useState((isDraftForQuote ? savedDraft?.externalNo : '') || document?.external_document_no || '');
@@ -5255,6 +5378,10 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
   const [showQuickCustomer, setShowQuickCustomer] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [notes, setNotes] = useState((isDraftForQuote ? savedDraft?.notes : '') || document?.notes || '');
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [advanceAmount, setAdvanceAmount] = useState((isDraftForQuote ? savedDraft?.advanceAmount : '') || '');
+  const [advancePaymentMethodId, setAdvancePaymentMethodId] = useState((isDraftForQuote ? savedDraft?.advancePaymentMethodId : '') || '');
+  const [advanceCheque, setAdvanceCheque] = useState((isDraftForQuote ? savedDraft?.advanceCheque : null) || { cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
 
   const [productSearch, setProductSearch] = useState('');
   const [categories, setCategories] = useState([]);
@@ -5270,6 +5397,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
   useEffect(() => {
     loadCustomersForQuotation();
     loadCategoriesForQuotation();
+    if (isReservation) loadReservationPaymentMethods();
     if (isEditing) loadExistingQuotationItems();
     if (documentNo) onNumberReady?.(documentNo);
   }, []);
@@ -5281,7 +5409,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
   useEffect(() => {
     if (!tabId) return;
     window.localStorage.setItem(documentDraftKey(tabId), JSON.stringify({
-      documentType: 'quotation',
+      documentType,
       editDocumentId: document?.id || '',
       documentNo,
       externalNo,
@@ -5289,9 +5417,12 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
       customerId,
       customerSearch,
       notes,
-      lines
+      lines,
+      advanceAmount,
+      advancePaymentMethodId,
+      advanceCheque
     }));
-  }, [tabId, document?.id, documentNo, externalNo, documentDate, customerId, customerSearch, notes, lines]);
+  }, [tabId, document?.id, documentType, documentNo, externalNo, documentDate, customerId, customerSearch, notes, lines, advanceAmount, advancePaymentMethodId, advanceCheque]);
 
   const total = lines.reduce((sum, line) => sum + quotationLineTotal(line), 0);
 
@@ -5299,6 +5430,21 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
     const { data, error: customerError } = await supabase.from('customers').select('id, name, phone, address').order('name').limit(1500);
     if (customerError) setError(customerError.message);
     else setCustomers(data || []);
+  }
+
+  async function loadReservationPaymentMethods() {
+    const { data, error: methodError } = await supabase
+      .from('payment_methods')
+      .select('id, name, affects_cashflow, requires_cheque_details')
+      .eq('is_active', true)
+      .eq('is_paid_method', true)
+      .order('name');
+    if (methodError) {
+      setError(methodError.message);
+      return;
+    }
+    setPaymentMethods(data || []);
+    setAdvancePaymentMethodId((current) => current || data?.[0]?.id || '');
   }
 
   async function loadCategoriesForQuotation() {
@@ -5393,6 +5539,10 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
       setError('Quantity must be greater than zero.');
       return;
     }
+    if (isReservation && selectedLineProduct.track_inventory !== false && qty > numberValue(selectedLineProduct.available_qty)) {
+      setError(`Only ${numberValue(selectedLineProduct.available_qty)} units are currently available to reserve.`);
+      return;
+    }
     const newLine = {
       id: createClientId(),
       product_id: selectedLineProduct.product_id,
@@ -5433,7 +5583,22 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
     setMessage('');
     const validLines = lines.filter((line) => line.product_id && numberValue(line.qty) > 0);
     if (!validLines.length) {
-      setError('Add at least one product to the quotation.');
+      setError(`Add at least one product to the ${isReservation ? 'reservation' : 'quotation'}.`);
+      setBusy(false);
+      return;
+    }
+    if (isReservation && !customerId) {
+      setError('Select a named customer for the reservation.');
+      setBusy(false);
+      return;
+    }
+    if (isReservation && numberValue(advanceAmount) > total + 0.005) {
+      setError('The advance cannot exceed the reservation total.');
+      setBusy(false);
+      return;
+    }
+    if (isReservation && numberValue(advanceAmount) > 0 && !advancePaymentMethodId) {
+      setError('Select the advance payment method.');
       setBusy(false);
       return;
     }
@@ -5441,15 +5606,15 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
       const header = {
         document_no: documentNo.trim(),
         external_document_no: externalNo.trim() || null,
-        document_type: 'quotation',
-        status: document?.status === 'converted' ? 'converted' : 'draft',
+        document_type: documentType,
+        status: isReservation ? 'reserved' : document?.status === 'converted' ? 'converted' : 'draft',
         customer_id: customerId || null,
         supplier_id: null,
         payment_method_id: null,
         payment_method_name: null,
         total_amount: total,
-        paid_amount: 0,
-        balance_amount: total,
+        paid_amount: isReservation ? numberValue(advanceAmount) : 0,
+        balance_amount: total - (isReservation ? numberValue(advanceAmount) : 0),
         currency: 'LKR',
         document_date: documentDate || todayInputDate(),
         notes: notes.trim() || ''
@@ -5476,7 +5641,22 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
         const { error: itemError } = await supabase.from('document_items').insert(itemPayload.map((item) => ({ ...item, document_id: docId })));
         if (itemError) throw itemError;
       } else {
-        const { data: docData, error: insertError } = await supabase.rpc('save_quotation_v24', {
+        const selectedAdvanceMethod = paymentMethods.find((method) => method.id === advancePaymentMethodId);
+        const reservationPayments = isReservation && numberValue(advanceAmount) > 0 ? [{
+          source_line_id: createClientId(),
+          payment_method_id: advancePaymentMethodId,
+          payment_method_name: selectedAdvanceMethod?.name || 'Advance',
+          amount: numberValue(advanceAmount),
+          direction: 'in',
+          cheque_number: selectedAdvanceMethod?.requires_cheque_details ? advanceCheque.cheque_number : null,
+          cheque_date: selectedAdvanceMethod?.requires_cheque_details ? advanceCheque.cheque_date : null,
+          cheque_bank_name: selectedAdvanceMethod?.requires_cheque_details ? advanceCheque.cheque_bank_name : null
+        }] : [];
+        const { data: docData, error: insertError } = await supabase.rpc(isReservation ? 'save_reservation_v74' : 'save_quotation_v24', isReservation ? {
+          p_header: header,
+          p_items: itemPayload,
+          p_payments: reservationPayments
+        } : {
           p_header: header,
           p_items: itemPayload
         });
@@ -5485,7 +5665,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
         setDocumentNo(docData?.document_no || '');
       }
 
-      setMessage(`Quotation saved: ${isEditing ? documentNo : 'new number assigned'}.`);
+      setMessage(`${isReservation ? 'Reservation' : 'Quotation'} saved: ${isEditing ? documentNo : 'new number assigned'}.`);
       if (tabId) window.localStorage.removeItem(documentDraftKey(tabId));
       onSaved();
     } catch (err) {
@@ -5499,8 +5679,8 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
     <div className="document-form-panel quotation-form-panel">
       <div className="section-title-row">
         <div>
-          <h3>{isEditing ? `Edit ${documentNo}` : 'New Quotation'}</h3>
-          <p>Quotations save to Documents, do not need payment, and do not update stock. Convert the quotation to Sales when the customer confirms.</p>
+          <h3>{isEditing ? `Edit ${documentNo}` : isReservation ? 'New Reservation Order' : 'New Quotation'}</h3>
+          <p>{isReservation ? 'Reserves sellable stock for a named customer. An optional advance is recorded now and becomes customer credit for the final sale.' : 'Quotations save to Documents, do not need payment, and do not update stock. Convert the quotation to Sales when the customer confirms.'}</p>
         </div>
         <button className="secondary-button" onClick={onClose}>Close</button>
       </div>
@@ -5508,7 +5688,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
       {error && <div className="error-box">{error}</div>}
       <form onSubmit={saveQuotation}>
         <div className="purchase-form-grid">
-          <label>Quotation number<input value={documentNo} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => setDocumentNo(e.target.value)} /></label>
+          <label>{isReservation ? 'Reservation' : 'Quotation'} number<input value={documentNo} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => setDocumentNo(e.target.value)} /></label>
           <label>Customer / profile
             <div className="supplier-combo-field" tabIndex={-1} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setCustomerMenuOpen(false); }} onKeyDown={(e) => { if (e.key === 'Escape') setCustomerMenuOpen(false); }}>
               <div className="inline-field">
@@ -5517,9 +5697,9 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
               </div>
               {customerMenuOpen && (
                 <div className="supplier-suggestion-menu">
-                  <button type="button" onClick={() => { setCustomerId(''); setCustomerSearch(''); setCustomerMenuOpen(false); }}>
+                  {!isReservation && <button type="button" onClick={() => { setCustomerId(''); setCustomerSearch(''); setCustomerMenuOpen(false); }}>
                     <strong>Walk-in customer</strong><span>-</span><small>No saved balance</small>
-                  </button>
+                  </button>}
                   {filteredCustomers.map((customer) => (
                     <button type="button" key={customer.id} onClick={() => selectCustomer(customer)}>
                       <strong>{customer.name}</strong>
@@ -5534,7 +5714,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
           </label>
           <label>Reference no<input value={externalNo} onFocus={selectAllText} onChange={(e) => setExternalNo(e.target.value)} placeholder="Optional" /></label>
           <label>Date<input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} /></label>
-          <label className="wide-field">Notes<input value={notes} onFocus={selectAllText} onChange={(e) => setNotes(e.target.value)} placeholder="Quotation notes or validity" /></label>
+          <label className="wide-field">Notes<input value={notes} onFocus={selectAllText} onChange={(e) => setNotes(e.target.value)} placeholder={isReservation ? 'Collection date, promised terms, or internal note' : 'Quotation notes or validity'} /></label>
         </div>
 
         <div className="document-edit-layout">
@@ -5555,7 +5735,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
 
           <div className="document-lines-panel">
             <div className="document-lines-toolbar">
-              <span className="count-label">Quotation items: {lines.filter((line) => line.product_id).length}</span>
+              <span className="count-label">{isReservation ? 'Reserved' : 'Quotation'} items: {lines.filter((line) => line.product_id).length}</span>
               <strong>Total: {money(total)}</strong>
             </div>
             <div className="table-wrap purchase-items-wrap">
@@ -5585,7 +5765,7 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
         {selectedLineProduct && (
           <div className="modal-backdrop">
             <div className="modal-card item-entry-modal">
-              <div className="item-entry-heading"><div><span>Add quotation item</span><h3>{selectedLineProduct.name}</h3><p>{selectedLineProduct.item_code}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Close</button></div>
+              <div className="item-entry-heading"><div><span>Add {isReservation ? 'reservation' : 'quotation'} item</span><h3>{selectedLineProduct.name}</h3><p>{selectedLineProduct.item_code}{isReservation ? ` · Available ${numberValue(selectedLineProduct.available_qty)}` : ''}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Close</button></div>
               <div className="item-entry-fields">
                 <label>Selling price<input type="number" min="0" step="0.01" value={lineDraft.unit_price} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, unit_price: e.target.value })} autoFocus /></label>
                 <label>Quantity<input type="number" min="0.001" step="0.001" value={lineDraft.qty} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, qty: e.target.value })} /></label>
@@ -5599,13 +5779,19 @@ function QuotationDocumentForm({ document = null, tabId = '', onClose, onSaved, 
           </div>
         )}
 
+        {isReservation && <div className="panel-card reservation-advance-panel">
+          <div><strong>Advance payment</strong><small>Optional. The money is recorded now and held as customer credit until the reservation becomes a sale or is refunded.</small></div>
+          <label>Amount<input type="number" min="0" max={total} step="0.01" value={advanceAmount} onFocus={selectAllText} onChange={(event) => setAdvanceAmount(event.target.value)} /></label>
+          <label>Payment method<select value={advancePaymentMethodId} disabled={numberValue(advanceAmount) <= 0} onChange={(event) => setAdvancePaymentMethodId(event.target.value)}><option value="">Select method</option>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}{method.affects_cashflow === false ? ' · excluded from cashflow' : ''}</option>)}</select></label>
+          {paymentMethods.find((method) => method.id === advancePaymentMethodId)?.requires_cheque_details && numberValue(advanceAmount) > 0 && <div className="reservation-cheque-fields"><label>Cheque number<input value={advanceCheque.cheque_number} onChange={(event) => setAdvanceCheque({ ...advanceCheque, cheque_number: event.target.value })} required /></label><label>Cheque date<input type="date" value={advanceCheque.cheque_date} onChange={(event) => setAdvanceCheque({ ...advanceCheque, cheque_date: event.target.value })} required /></label><label>Bank<input value={advanceCheque.cheque_bank_name} onChange={(event) => setAdvanceCheque({ ...advanceCheque, cheque_bank_name: event.target.value })} /></label></div>}
+        </div>}
         <div className="document-total-row">
-          <span>Quotation total</span>
+          <span>{isReservation ? 'Reservation total' : 'Quotation total'}</span>
           <strong>{money(total)}</strong>
         </div>
         <div className="form-footer-actions">
           <button type="button" className="secondary-button" onClick={onClose}>Close</button>
-          <button className="primary-button" disabled={busy}>{busy ? 'Saving...' : isEditing ? 'Save Quotation Changes' : 'Save Quotation'}</button>
+          <button className="primary-button" disabled={busy}>{busy ? 'Saving...' : isEditing ? `Save ${isReservation ? 'Reservation' : 'Quotation'} Changes` : `Save ${isReservation ? 'Reservation' : 'Quotation'}`}</button>
         </div>
       </form>
       {showQuickCustomer && <QuickCustomerModal initialName={customerSearch} onClose={() => setShowQuickCustomer(false)} onCreated={(customer) => { setCustomers((current) => [...current, customer].sort((a, b) => a.name.localeCompare(b.name))); selectCustomer(customer); setShowQuickCustomer(false); }} />}
@@ -5965,6 +6151,7 @@ function documentPaymentSummary(document, flows = []) {
       grouped.set(label, roundMoney(numberValue(grouped.get(label)) + Math.abs(numberValue(payment.amount))));
     });
   }
+
   if (!grouped.size && document?.payment_method_name && numberValue(document?.paid_amount) > 0) grouped.set(document.payment_method_name, Math.abs(numberValue(document.paid_amount)));
   return [...grouped.entries()].map(([label, amount]) => ({ label, amount }));
 }
@@ -7271,6 +7458,9 @@ function emptyProductForm(categoryId = '') {
     warranty_months: 0,
     serial_required: false,
     track_inventory: true,
+    inventory_ownership: 'owned',
+    consignment_owner_id: '',
+    consignment_unit_payout: 0,
     status: 'active'
   };
 }
@@ -7597,6 +7787,7 @@ function ProductsPage({ assistantTarget = null } = {}) {
   const [productSection, setProductSection] = useState('products');
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [consignmentOwners, setConsignmentOwners] = useState([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState('all');
   const [searchBy, setSearchBy] = useState('any');
   const [search, setSearch] = useState('');
@@ -7610,7 +7801,7 @@ function ProductsPage({ assistantTarget = null } = {}) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => { loadCategories(); }, []);
+  useEffect(() => { loadCategories(); loadConsignmentOwners(); }, []);
   useEffect(() => {
     const timeout = setTimeout(() => loadProducts(), 180);
     return () => clearTimeout(timeout);
@@ -7640,6 +7831,11 @@ function ProductsPage({ assistantTarget = null } = {}) {
     const { data, error: categoryError } = await supabase.from('categories').select('id, name, parent_id, path').order('path', { ascending: true });
     if (categoryError) setError(categoryError.message);
     else setCategories(data || []);
+  }
+
+  async function loadConsignmentOwners() {
+    const { data } = await supabase.from('customers').select('id, name, phone').eq('is_supplier', true).order('name').limit(1500);
+    setConsignmentOwners(data || []);
   }
 
   async function loadProducts() {
@@ -7699,6 +7895,9 @@ function ProductsPage({ assistantTarget = null } = {}) {
       warranty_months: numberValue(product.warranty_months),
       serial_required: !!product.serial_required,
       track_inventory: product.track_inventory !== false,
+      inventory_ownership: product.inventory_ownership || 'owned',
+      consignment_owner_id: product.consignment_owner_id || '',
+      consignment_unit_payout: numberValue(product.consignment_unit_payout ?? product.avg_cost),
       status: product.status || (product.is_active ? 'active' : 'inactive')
     });
     setShowForm(true);
@@ -7723,6 +7922,11 @@ function ProductsPage({ assistantTarget = null } = {}) {
     setBusy(true);
     setError('');
     setMessage('');
+    if (form.inventory_ownership === 'consignment' && !form.consignment_owner_id) {
+      setError('Select the owner/supplier for this consignment product.');
+      setBusy(false);
+      return;
+    }
 
     const payload = {
       item_code: form.item_code.trim(),
@@ -7735,6 +7939,9 @@ function ProductsPage({ assistantTarget = null } = {}) {
       warranty_months: Math.max(Math.round(numberValue(form.warranty_months)), 0),
       serial_required: !!form.serial_required,
       track_inventory: form.track_inventory !== false,
+      inventory_ownership: form.inventory_ownership || 'owned',
+      consignment_owner_id: form.inventory_ownership === 'consignment' ? form.consignment_owner_id || null : null,
+      consignment_unit_payout: form.inventory_ownership === 'consignment' ? numberValue(form.consignment_unit_payout) : null,
       status: form.status,
       is_active: form.status === 'active',
       online_visible: false
@@ -8013,6 +8220,11 @@ function ProductsPage({ assistantTarget = null } = {}) {
                   }} />
                 </label>
                 <label className={`checkbox-label product-inventory-toggle ${form.track_inventory === false ? 'stockless' : ''}`}><input type="checkbox" checked={form.track_inventory !== false} onChange={(e) => setForm({ ...form, track_inventory: e.target.checked })} /> <span><strong>Track inventory</strong><small>{form.track_inventory === false ? 'Non-stock item: always available in POS and no stock movements.' : 'Stock item: sales are limited to available quantity.'}</small></span><InfoTip text="Turn this off for services, installation work, and unlimited digital items. Keep it on for limited licence keys or any physical product." /></label>
+                <label>Ownership<select value={form.inventory_ownership || 'owned'} onChange={(e) => setForm({ ...form, inventory_ownership: e.target.value, track_inventory: e.target.value === 'consignment' ? true : form.track_inventory })}><option value="owned">Shop owned</option><option value="consignment">Consignment · owned by another person</option></select></label>
+                {form.inventory_ownership === 'consignment' && <>
+                  <label>Consignment owner<select value={form.consignment_owner_id} onChange={(e) => setForm({ ...form, consignment_owner_id: e.target.value })} required><option value="">Select owner / supplier</option>{consignmentOwners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}{owner.phone ? ` · ${owner.phone}` : ''}</option>)}</select></label>
+                  <label>Owner payout per unit <InfoTip text="The amount owed to the owner only after one unit sells. It is also the cost used for gross-profit calculation." /><input type="number" min="0" step="0.01" value={form.consignment_unit_payout} onFocus={selectAllText} onChange={(e) => { const payout = Number(e.target.value); setForm({ ...form, consignment_unit_payout: payout, avg_cost: payout, markup: markupPercent(payout, form.selling_price) }); }} /></label>
+                </>}
                 <label>Low stock level <InfoTip text="This is only the warning threshold. Current quantities are managed and viewed on the Stock page." /><input type="number" step="1" disabled={form.track_inventory === false} value={form.min_stock_level} onFocus={selectAllText} onChange={(e) => setForm({ ...form, min_stock_level: Number(e.target.value) })} /></label>
                 <label>Warranty months <InfoTip text="Default warranty period used when registering a sold unit. Use 0 for products without warranty." /><input type="number" min="0" step="1" value={form.warranty_months} onFocus={selectAllText} onChange={(e) => setForm({ ...form, warranty_months: Number(e.target.value) })} /></label>
                 <label className="checkbox-label product-warranty-toggle"><input type="checkbox" checked={!!form.serial_required} onChange={(e) => setForm({ ...form, serial_required: e.target.checked })} /> Serial number required for warranty</label>
@@ -8056,7 +8268,7 @@ function ProductsPage({ assistantTarget = null } = {}) {
                     <td>{money(product.avg_cost)}</td>
                     <td>{formatPercent(markupPercent(product.avg_cost, product.selling_price))}</td>
                     <td>{money(product.selling_price)}</td>
-                    <td><span className={product.track_inventory === false ? 'status-pill non-stock' : 'status-pill tracked-stock'}>{product.track_inventory === false ? 'Non-stock' : 'Stock item'}</span></td>
+                    <td><span className={product.inventory_ownership === 'consignment' ? 'status-pill consignment-stock' : product.track_inventory === false ? 'status-pill non-stock' : 'status-pill tracked-stock'}>{product.inventory_ownership === 'consignment' ? `Consignment · ${product.consignment_owner_name || 'owner'}` : product.track_inventory === false ? 'Non-stock' : 'Shop stock'}</span></td>
                     <td>{product.track_inventory === false ? '-' : numberValue(product.min_stock_level, 1)}</td>
                     <td>{numberValue(product.warranty_months) > 0 ? `${numberValue(product.warranty_months)} months` : '-'}</td>
                     <td>{product.serial_required ? 'Required' : 'Optional'}</td>
@@ -8295,7 +8507,7 @@ function CategoryTree({ categories, selectedCategoryId, setSelectedCategoryId, c
   );
 }
 
-const INVENTORY_DOCUMENT_TYPES = ['purchase', 'stock_in_transit', 'trade_in', 'stock_adjustment'];
+const INVENTORY_DOCUMENT_TYPES = ['purchase', 'stock_in_transit', 'trade_in', 'stock_adjustment', 'stock_condition_transfer', 'consignment_intake', 'consignment_return'];
 
 function InventoryDocumentsPage() {
   const [documents, setDocuments] = useState([]);
@@ -8370,6 +8582,12 @@ function InventoryDocumentsPage() {
   if (formMode?.type === 'stock_adjustment') {
     return <section className="page-section"><StockAdjustmentForm onClose={() => closeForm(false)} onSaved={() => closeForm(true)} /></section>;
   }
+  if (formMode?.type === 'stock_condition_transfer') {
+    return <section className="page-section"><StockConditionTransferForm onClose={() => closeForm(false)} onSaved={() => closeForm(true)} /></section>;
+  }
+  if (formMode?.type === 'consignment_intake' || formMode?.type === 'consignment_return') {
+    return <section className="page-section"><ConsignmentDocumentForm documentType={formMode.type} onClose={() => closeForm(false)} onSaved={() => closeForm(true)} /></section>;
+  }
 
   const visibleDocuments = documents.filter((document) => {
     if (filter.type && document.document_type !== filter.type) return false;
@@ -8386,6 +8604,8 @@ function InventoryDocumentsPage() {
           <button className="secondary-button" onClick={() => setFormMode({ type: 'stock_in_transit', tabId: createClientId() })}>New Stock in Transit</button>
           <button className="secondary-button" onClick={() => setFormMode({ type: 'trade_in', tabId: createClientId() })}>New Trade-In</button>
           <button className="secondary-button" onClick={() => setFormMode({ type: 'stock_adjustment' })}>New Stock Adjustment</button>
+          <button className="secondary-button" onClick={() => setFormMode({ type: 'stock_condition_transfer' })}>Condition Transfer</button>
+          <button className="secondary-button" onClick={() => setFormMode({ type: 'consignment_intake' })}>Consignment Intake</button>
         </div>
       </div>
       {message && <div className="notice success">{message}</div>}
@@ -8400,7 +8620,7 @@ function InventoryDocumentsPage() {
         <input value={filter.search} onChange={(e) => setFilter({ ...filter, search: e.target.value })} placeholder="Search document number, reference, or notes" />
         <select value={filter.type} onChange={(e) => setFilter({ ...filter, type: e.target.value })}>
           <option value="">All inventory documents</option>
-          <option value="purchase">Purchases</option><option value="stock_in_transit">Stock in Transit</option><option value="trade_in">Trade-Ins</option><option value="stock_adjustment">Stock Adjustments</option>
+          <option value="purchase">Purchases</option><option value="stock_in_transit">Stock in Transit</option><option value="trade_in">Trade-Ins</option><option value="stock_adjustment">Stock Adjustments</option><option value="stock_condition_transfer">Condition Transfers</option><option value="consignment_intake">Consignment Intake</option><option value="consignment_return">Consignment Returns</option>
         </select>
         <button className="secondary-button" onClick={() => loadInventoryDocuments()}>Refresh</button>
       </div>
@@ -8428,6 +8648,141 @@ function InventoryDocumentsPage() {
       {previewId && <DocumentPreviewModal documentId={previewId} onClose={() => setPreviewId('')} />}
     </section>
   );
+}
+
+function StockConditionTransferForm({ onClose, onSaved }) {
+  const [documentDate, setDocumentDate] = useState(todayInputDate());
+  const [search, setSearch] = useState('');
+  const [products, setProducts] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [fromBucket, setFromBucket] = useState('sellable');
+  const [toBucket, setToBucket] = useState('damaged');
+  const [qty, setQty] = useState(1);
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const timeout = setTimeout(async () => {
+      const clean = search.trim().replace(/,/g, ' ');
+      let query = supabase.from('product_stock_view').select('product_id,item_code,name,barcode,brand_name,category_name,avg_cost,sellable_qty,reserved_qty,damaged_qty,checking_qty,available_qty,track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(clean ? 500 : 80);
+      if (clean) { const seed = productSearchSeed(clean); query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`); }
+      const { data, error: productError } = await query;
+      if (productError) setError(productError.message); else setProducts(rankProductSearchResults(data || [], clean));
+    }, 160);
+    return () => clearTimeout(timeout);
+  }, [search]);
+
+  const bucketQty = (product, bucket) => bucket === 'sellable' ? numberValue(product?.sellable_qty) : bucket === 'damaged' ? numberValue(product?.damaged_qty) : numberValue(product?.checking_qty);
+  const movableQty = selected && fromBucket === 'sellable' ? Math.max(bucketQty(selected, fromBucket) - numberValue(selected.reserved_qty), 0) : bucketQty(selected, fromBucket);
+
+  async function saveTransfer(event) {
+    event.preventDefault(); setError('');
+    if (!selected) { setError('Select a product.'); return; }
+    if (fromBucket === toBucket) { setError('Choose a different destination condition.'); return; }
+    if (numberValue(qty) <= 0 || numberValue(qty) > movableQty) { setError(`Enter a quantity from 0.001 to ${movableQty}.`); return; }
+    setBusy(true);
+    const { data, error: saveError } = await supabase.rpc('save_stock_condition_transfer_v74', {
+      p_product_id: selected.product_id, p_qty: numberValue(qty), p_from_bucket: fromBucket,
+      p_to_bucket: toBucket, p_notes: notes.trim(), p_document_date: documentDate
+    });
+    setBusy(false);
+    if (saveError) {
+      const migrationMissing = /save_stock_condition_transfer_v74|schema cache|could not find the function/i.test(saveError.message || '');
+      setError(`${saveError.message}${migrationMissing ? '. Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase.' : ''}`);
+      return;
+    }
+    window.alert(`${data?.document_no || 'Condition transfer'} saved. No cashflow or cost was changed.`);
+    onSaved?.();
+  }
+
+  return <div className="document-form-panel stock-condition-form">
+    <div className="section-title-row"><div><h3>Stock Condition Transfer</h3><p>Move the same physical units between Sellable, Damaged, and Checking. This creates an audit document but no cashflow and no cost change.</p></div><button type="button" className="secondary-button" onClick={onClose}>Close</button></div>
+    {error && <div className="error-box">{error}</div>}
+    <form onSubmit={saveTransfer}>
+      <div className="condition-transfer-layout">
+        <div className="panel-card condition-product-picker"><label>Find product<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Code, name, or barcode" /></label><div>{products.map((product) => <button type="button" key={product.product_id} className={selected?.product_id === product.product_id ? 'selected' : ''} onClick={() => setSelected(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>Sellable {numberValue(product.sellable_qty)} · Damaged {numberValue(product.damaged_qty)} · Checking {numberValue(product.checking_qty)}</small></button>)}</div></div>
+        <div className="panel-card condition-transfer-fields">
+          <div className="condition-selected-product">{selected ? <><span>{selected.item_code}</span><strong>{selected.name}</strong><small>{numberValue(selected.reserved_qty)} reserved · {movableQty} movable from {fromBucket}</small></> : <span>Select a product from the list</span>}</div>
+          <div className="condition-arrow-grid"><label>From<select value={fromBucket} onChange={(event) => { const value = event.target.value; setFromBucket(value); if (value === toBucket) setToBucket(value === 'sellable' ? 'damaged' : 'sellable'); }}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></label><span>→</span><label>To<select value={toBucket} onChange={(event) => setToBucket(event.target.value)}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></label></div>
+          <label>Quantity<input type="number" min="0.001" max={movableQty || undefined} step="0.001" value={qty} onFocus={selectAllText} onChange={(event) => setQty(event.target.value)} /></label>
+          <label>Date<input type="date" value={documentDate} onChange={(event) => setDocumentDate(event.target.value)} /></label>
+          <label>Reason / reference<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Damaged on arrival, supplier replacement received, inspection completed..." required /></label>
+          <button className="primary-button" disabled={busy || !selected}>{busy ? 'Saving...' : 'Save Condition Transfer'}</button>
+        </div>
+      </div>
+    </form>
+  </div>;
+}
+
+function ConsignmentDocumentForm({ documentType = 'consignment_intake', onClose, onSaved }) {
+  const isReturn = documentType === 'consignment_return';
+  const [owners, setOwners] = useState([]);
+  const [ownerId, setOwnerId] = useState('');
+  const [products, setProducts] = useState([]);
+  const [search, setSearch] = useState('');
+  const [lines, setLines] = useState([]);
+  const [documentDate, setDocumentDate] = useState(todayInputDate());
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => { (async () => { const { data, error: ownerError } = await supabase.from('customers').select('id,name,phone').eq('is_supplier', true).order('name').limit(1500); if (ownerError) setError(ownerError.message); else setOwners(data || []); })(); }, []);
+  useEffect(() => {
+    if (!ownerId) { setProducts([]); return undefined; }
+    const timeout = setTimeout(async () => {
+      const clean = search.trim().replace(/,/g, ' ');
+      let query = supabase.from('product_stock_view').select('product_id,item_code,name,avg_cost,consignment_unit_payout,inventory_ownership,consignment_owner_id,sellable_qty,reserved_qty,damaged_qty,checking_qty,available_qty').eq('is_active', true).eq('inventory_ownership', 'consignment').eq('consignment_owner_id', ownerId).order('item_code').limit(300);
+      if (clean) { const seed = productSearchSeed(clean); query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%`); }
+      const { data, error: productError } = await query;
+      if (productError) {
+        const migrationMissing = /inventory_ownership|schema cache/i.test(productError.message || '');
+        setError(`${productError.message}${migrationMissing ? '. Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase.' : ''}`);
+      } else setProducts(rankProductSearchResults(data || [], clean));
+    }, 160);
+    return () => clearTimeout(timeout);
+  }, [ownerId, search]);
+
+  function addProduct(product) {
+    if (lines.some((line) => line.product_id === product.product_id)) return;
+    setLines((current) => [...current, { ...product, id: createClientId(), qty: 1, unit_cost: numberValue(product.consignment_unit_payout ?? product.avg_cost), source_bucket: 'sellable' }]);
+  }
+  function updateLine(id, patch) { setLines((current) => current.map((line) => line.id === id ? { ...line, ...patch } : line)); }
+  function removeLine(id) { setLines((current) => current.filter((line) => line.id !== id)); }
+  function bucketAvailable(line) { return line.source_bucket === 'damaged' ? numberValue(line.damaged_qty) : line.source_bucket === 'checking' ? numberValue(line.checking_qty) : numberValue(line.available_qty); }
+
+  async function saveConsignment(event) {
+    event.preventDefault(); setError('');
+    if (!ownerId) { setError('Select the consignment owner.'); return; }
+    if (!lines.length) { setError('Add at least one consignment product.'); return; }
+    const invalid = lines.find((line) => numberValue(line.qty) <= 0 || (isReturn && numberValue(line.qty) > bucketAvailable(line)));
+    if (invalid) { setError(isReturn ? `${invalid.item_code}: only ${bucketAvailable(invalid)} units can be returned from ${invalid.source_bucket}.` : 'Every quantity must be greater than zero.'); return; }
+    setBusy(true);
+    const { data, error: saveError } = await supabase.rpc('save_consignment_document_v74', {
+      p_document_type: documentType, p_owner_id: ownerId, p_items: lines.map((line) => ({ product_id: line.product_id, item_code: line.item_code, qty: numberValue(line.qty), unit_cost: numberValue(line.unit_cost), source_bucket: line.source_bucket })), p_notes: notes.trim(), p_document_date: documentDate
+    });
+    setBusy(false);
+    if (saveError) {
+      const migrationMissing = /save_consignment_document_v74|schema cache|could not find the function/i.test(saveError.message || '');
+      setError(`${saveError.message}${migrationMissing ? '. Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase.' : ''}`);
+      return;
+    }
+    window.alert(`${data?.document_no || 'Consignment document'} saved. ${isReturn ? 'The units were removed without cashflow.' : 'No owner payable was created yet; it is created when each unit sells.'}`);
+    onSaved?.();
+  }
+
+  return <div className="document-form-panel consignment-form">
+    <div className="section-title-row"><div><h3>{isReturn ? 'Consignment Return to Owner' : 'Consignment Intake'}</h3><p>{isReturn ? 'Return unsold or damaged consignment stock to its owner without creating cash movement.' : 'Receive stock owned by another person. Their agreed payout becomes product cost; the payable is created only when the item sells.'}</p></div><button type="button" className="secondary-button" onClick={onClose}>Close</button></div>
+    {error && <div className="error-box">{error}</div>}
+    <form onSubmit={saveConsignment}>
+      <div className="purchase-form-grid"><label>Owner / supplier<select value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setLines([]); }} required><option value="">Select owner</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}{owner.phone ? ` · ${owner.phone}` : ''}</option>)}</select></label><label>Date<input type="date" value={documentDate} onChange={(event) => setDocumentDate(event.target.value)} /></label><label className="wide-field">Notes<input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Agreement, reference, or reason" /></label></div>
+      {!ownerId ? <div className="muted-box">Select an owner. Consignment products assigned to that profile will appear here.</div> : <div className="consignment-layout">
+        <div className="panel-card condition-product-picker"><label>Find consignment product<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Code or name" /></label><div>{products.map((product) => <button type="button" key={product.product_id} disabled={lines.some((line) => line.product_id === product.product_id)} onClick={() => addProduct(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>Sellable {numberValue(product.available_qty)} · Damaged {numberValue(product.damaged_qty)} · Payout {money(product.consignment_unit_payout ?? product.avg_cost)}</small></button>)}{!products.length && <div className="muted-box">No products assigned to this owner. Create or edit a Product and set Ownership to Consignment first.</div>}</div></div>
+        <div className="panel-card table-wrap"><table><thead><tr><th>Product</th>{isReturn && <th>From</th>}<th>Qty</th><th>Owner payout</th><th>Value</th><th></th></tr></thead><tbody>{lines.map((line) => <tr key={line.id}><td><strong>{line.item_code}</strong><small className="table-subtext">{line.name}</small></td>{isReturn && <td><select value={line.source_bucket} onChange={(event) => updateLine(line.id, { source_bucket: event.target.value })}><option value="sellable">Sellable ({numberValue(line.available_qty)})</option><option value="damaged">Damaged ({numberValue(line.damaged_qty)})</option><option value="checking">Checking ({numberValue(line.checking_qty)})</option></select></td>}<td><input type="number" min="0.001" max={isReturn ? bucketAvailable(line) : undefined} step="0.001" value={line.qty} onChange={(event) => updateLine(line.id, { qty: event.target.value })} /></td><td><input type="number" min="0" step="0.01" readOnly={isReturn} value={line.unit_cost} onChange={(event) => updateLine(line.id, { unit_cost: event.target.value })} /></td><td>{money(numberValue(line.qty) * numberValue(line.unit_cost))}</td><td><button type="button" className="small-button danger" onClick={() => removeLine(line.id)}>Remove</button></td></tr>)}{!lines.length && <EmptyRow colSpan={isReturn ? 6 : 5} text="Add consignment products from the list." />}</tbody></table></div>
+      </div>}
+      <div className="form-footer-actions"><button type="button" className="secondary-button" onClick={onClose}>Close</button><button className="primary-button" disabled={busy || !ownerId || !lines.length}>{busy ? 'Saving...' : isReturn ? 'Save Consignment Return' : 'Save Consignment Intake'}</button></div>
+    </form>
+  </div>;
 }
 
 function StockAdjustmentForm({ onClose, onSaved }) {
@@ -8584,6 +8939,7 @@ function StockPage({ onOpenDocuments }) {
     if (stockView === 'low') filtered = filtered.filter((row) => numberValue(row.sellable_qty) > 0 && numberValue(row.sellable_qty) <= numberValue(row.min_stock_level, 1));
     if (stockView === 'in_transit') filtered = filtered.filter((row) => numberValue(row.in_transit_qty) > 0);
     if (stockView === 'reserved') filtered = filtered.filter((row) => numberValue(row.reserved_qty) > 0);
+    if (stockView === 'consignment') filtered = filtered.filter((row) => row.inventory_ownership === 'consignment');
     if (stockView === 'damaged') filtered = filtered.filter((row) => numberValue(row.damaged_qty) > 0);
     if (stockView === 'unavailable') filtered = filtered.filter((row) => numberValue(row.available_qty) <= 0);
     if (stockView === 'inactive') filtered = filtered.filter((row) => row.status === 'inactive' || !row.is_active);
@@ -8657,7 +9013,8 @@ function StockPage({ onOpenDocuments }) {
     }
   }
 
-  const totalCostValue = rows.reduce((sum, row) => sum + numberValue(row.sellable_qty) * numberValue(row.avg_cost), 0);
+  const totalCostValue = rows.filter((row) => row.inventory_ownership !== 'consignment').reduce((sum, row) => sum + numberValue(row.sellable_qty) * numberValue(row.avg_cost), 0);
+  const totalConsignmentValue = rows.filter((row) => row.inventory_ownership === 'consignment').reduce((sum, row) => sum + numberValue(row.sellable_qty) * numberValue(row.consignment_unit_payout ?? row.avg_cost), 0);
   const totalSaleValue = rows.reduce((sum, row) => sum + numberValue(row.sellable_qty) * numberValue(row.selling_price), 0);
   const totalAvailableSaleValue = rows.reduce((sum, row) => sum + numberValue(row.available_qty) * numberValue(row.selling_price), 0);
   const totalInTransitValue = rows.reduce((sum, row) => sum + numberValue(row.in_transit_qty) * numberValue(row.avg_cost), 0);
@@ -8671,7 +9028,7 @@ function StockPage({ onOpenDocuments }) {
         <button className="toolbar-button" onClick={onOpenDocuments}><span>▣</span>Stock adjustment</button>
         <button className="toolbar-button" onClick={onOpenDocuments}><span>⇣</span>Receive purchase</button>
         <button className="toolbar-button" onClick={onOpenDocuments}><span>⏳</span>Transit docs</button>
-        <button className="toolbar-button"><span>▤</span>Reserve docs</button>
+        <button className="toolbar-button" onClick={onOpenDocuments}><span>▤</span>Reservation docs</button>
         <label className={`toolbar-button file-toolbar-button ${importingStock ? 'disabled' : ''}`}>
           <span>↓</span>{importingStock ? 'Importing...' : 'Import Stock'}
           <input type="file" accept=".csv,.xlsx,.xls" disabled={importingStock} onChange={handleStockImport} />
@@ -8711,14 +9068,15 @@ function StockPage({ onOpenDocuments }) {
           </div>
 
           <div className="mini-stats-row stock-stats-grid">
-            <StatCard label="Sellable stock cost" value={money(totalCostValue)} />
+            <StatCard label="Shop-owned stock cost" value={money(totalCostValue)} />
+            <StatCard label="Consignment payout value" value={money(totalConsignmentValue)} />
             <StatCard label="Sellable stock sale value" value={money(totalSaleValue)} />
             <StatCard label="Available sale value" value={money(totalAvailableSaleValue)} />
             <StatCard label="In-transit value" value={money(totalInTransitValue)} />
             <StatCard label="Reserved quantity" value={totalReserved} />
           </div>
 
-          <div className="notice slim-notice stock-guide-note"><strong>Stock quantity guide</strong><InfoTip text="Qty is sellable physical stock. Available is Qty minus Reserved. COD orders and review sales reserve automatically; their source document releases or fulfils the reservation. In Transit is incoming stock not yet received. Warranty and Damaged are non-sellable quantities." /></div>
+          <div className="notice slim-notice stock-guide-note"><strong>Stock quantity guide</strong><InfoTip text="Qty is sellable physical stock. Available is Qty minus Reserved. Delivery orders, review sales, and reservation orders reserve automatically. In Transit is incoming shop stock not yet received. Warranty and Damaged are non-sellable quantities. Consignment is physically here but remains owned by its supplier until sold." /></div>
 
           {message && <div className="notice success">{message}</div>}
           {error && <div className="error-box">{error}</div>}
@@ -8729,6 +9087,7 @@ function StockPage({ onOpenDocuments }) {
                 <tr>
                   <th>SKU / Code</th>
                   <th>Name</th>
+                  <th>Ownership</th>
                   <th>Qty</th>
                   <th>Reserved</th>
                   <th>Available</th>
@@ -8749,6 +9108,7 @@ function StockPage({ onOpenDocuments }) {
                     <tr key={row.product_id} className={isLow ? 'low-stock-row' : ''}>
                       <td><strong>{row.item_code}</strong></td>
                       <td>{row.name}</td>
+                      <td><span className={row.inventory_ownership === 'consignment' ? 'status-pill consignment-stock' : 'status-pill tracked-stock'}>{row.inventory_ownership === 'consignment' ? `Consignment · ${row.consignment_owner_name || 'owner'}` : 'Shop owned'}</span></td>
                       <td>{numberValue(row.sellable_qty)}</td>
                       <td>{numberValue(row.reserved_qty)}</td>
                       <td>{numberValue(row.available_qty)}</td>
@@ -8763,7 +9123,7 @@ function StockPage({ onOpenDocuments }) {
                     </tr>
                   );
                 })}
-                {rows.length === 0 && <EmptyRow colSpan={13} text="No stock rows found." />}
+                {rows.length === 0 && <EmptyRow colSpan={14} text="No stock rows found." />}
               </tbody>
             </table>
           </div>
@@ -8913,6 +9273,7 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
   const [paymentForm, setPaymentForm] = useState({ amount: '', method_id: '', document_type: 'customer_payment', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
   const [previewDocumentId, setPreviewDocumentId] = useState('');
   const [showThermalLabel, setShowThermalLabel] = useState(false);
+  const [statementBusy, setStatementBusy] = useState(false);
   const [lastPaymentShare, setLastPaymentShare] = useState(null);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState('');
@@ -10577,7 +10938,7 @@ function ReportsPage() {
     if (activeReport === 'purchase_invoices' || activeReport === 'unpaid_purchases') { const rows = activeReport === 'unpaid_purchases' ? purchaseDocuments.filter((row) => numberValue(row.balance_amount) > 0) : purchaseDocuments; return { title: activeReport === 'unpaid_purchases' ? 'Unpaid Purchases' : 'Purchase Invoice List', description: activeReport === 'unpaid_purchases' ? 'Purchase documents that still have a supplier balance.' : 'All purchase documents in the selected period.', totals: [['Documents', rows.length], ['Total', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))], ['Outstanding', money(rows.reduce((sum, row) => sum + numberValue(row.balance_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Document' }, { key: 'external_document_no', label: 'Supplier Invoice' }, { key: 'supplier', label: 'Supplier', render: supplierName }, { key: 'total', label: 'Total', render: (row) => money(row.total_amount) }, { key: 'paid', label: 'Paid', render: (row) => money(row.paid_amount) }, { key: 'balance', label: 'Balance', render: (row) => money(row.balance_amount) }, { key: 'status', label: 'Status' }], rows }; }
     if (activeReport === 'cod_orders') { const rows = documents.filter((row) => row.document_type === 'cod_order'); return { title: 'Delivery Orders', description: 'COD and prepaid deliveries created, dispatched, returned, delivered, or settled in the period.', totals: [['Orders', rows.length], ['Order Value', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))], ['COD to Collect', money(rows.filter((row) => row.delivery_payment_mode !== 'prepaid' && !['converted', 'returned', 'cancelled'].includes(row.status)).reduce((sum, row) => sum + numberValue(row.cod_collect_amount || row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Delivery Order' }, { key: 'recipient_name', label: 'Customer' }, { key: 'delivery_phone', label: 'Phone' }, { key: 'delivery_service', label: 'Courier' }, { key: 'tracking_number', label: 'Tracking' }, { key: 'status', label: 'Status' }, { key: 'amount', label: 'Order Value', render: (row) => money(row.total_amount) }], rows }; }
     if (activeReport === 'jobs_repairs') { const rows = documents.filter((row) => row.document_type === 'job'); return { title: 'Jobs & Repairs', description: 'Repair jobs received and their current status.', totals: [['Jobs', rows.length], ['Open', rows.filter((row) => !['completed', 'cancelled'].includes(row.job_status || row.status)).length], ['Completed', rows.filter((row) => (row.job_status || row.status) === 'completed').length]], columns: [{ key: 'date', label: 'Received', render: (row) => fmtDate(row.document_date) }, { key: 'job_no', label: 'Job Number', render: (row) => row.job_no || row.document_no }, { key: 'customer', label: 'Customer', render: (row) => customerMap.get(row.customer_id)?.name || '-' }, { key: 'status', label: 'Job Status', render: (row) => (row.job_status || row.status || '').replace('_', ' ') }, { key: 'notes', label: 'Notes' }], rows }; }
-    if (activeReport === 'inventory_documents') { const rows = documents.filter((row) => ['stock_in_transit', 'stock_adjustment', 'trade_in'].includes(row.document_type)); return { title: 'Inventory Documents', description: 'Stock in transit, stock adjustments, and trade-in documents.', totals: [['Documents', rows.length], ['Value', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Document' }, { key: 'type', label: 'Type', render: (row) => documentTypeLabel(row.document_type) }, { key: 'party', label: 'Customer / Supplier', render: (row) => customerMap.get(row.customer_id)?.name || supplierMap.get(row.supplier_id)?.name || '-' }, { key: 'status', label: 'Status' }, { key: 'total', label: 'Value', render: (row) => money(row.total_amount) }], rows }; }
+    if (activeReport === 'inventory_documents') { const rows = documents.filter((row) => ['stock_in_transit', 'stock_adjustment', 'stock_condition_transfer', 'consignment_intake', 'consignment_return', 'trade_in'].includes(row.document_type)); return { title: 'Inventory Documents', description: 'Transit, adjustment, stock-condition, consignment, and trade-in documents.', totals: [['Documents', rows.length], ['Value', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Document' }, { key: 'type', label: 'Type', render: (row) => documentTypeLabel(row.document_type) }, { key: 'party', label: 'Customer / Supplier', render: (row) => customerMap.get(row.customer_id)?.name || supplierMap.get(row.supplier_id)?.name || '-' }, { key: 'status', label: 'Status' }, { key: 'total', label: 'Value', render: (row) => money(row.total_amount) }], rows }; }
     if (activeReport === 'stock_movement') return { title: 'Stock Movement', description: 'Every stock quantity change recorded during the period.', totals: [['Movements', stockMovements.length], ['Quantity Movement', stockMovements.reduce((sum, row) => sum + numberValue(row.qty), 0)]], columns: [{ key: 'date', label: 'Date', render: (row) => new Date(row.created_at).toLocaleString('en-LK') }, { key: 'document', label: 'Document', render: (row) => row.documents?.document_no || '-' }, { key: 'type', label: 'Movement', render: (row) => String(row.movement_type || '').replaceAll('_', ' ') }, { key: 'code', label: 'Code', render: (row) => row.products?.item_code || '-' }, { key: 'product', label: 'Product', render: (row) => row.products?.name || '-' }, { key: 'qty', label: 'Qty' }, { key: 'unit_cost', label: 'Unit Cost', render: (row) => money(row.unit_cost) }, { key: 'value', label: 'Value', render: (row) => money(numberValue(row.qty) * numberValue(row.unit_cost)) }], rows: stockMovements };
     const cashIn = filteredCashflows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0); const cashOut = filteredCashflows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0); return { title: 'Transaction History', description: 'Cash, bank, card, credit, customer payments, supplier payments, expenses, and other income.', totals: [['Cash In', money(cashIn)], ['Cash Out', money(cashOut)], ['Net', signedMoney(cashIn - cashOut)], ['Entries', filteredCashflows.length]], columns: [{ key: 'date', label: 'Date', render: (row) => new Date(row.created_at).toLocaleString('en-LK') }, { key: 'direction', label: 'Type', render: (row) => row.entry_type.replace('_', ' ') }, { key: 'method', label: 'Payment Type', render: (row) => row.payment_methods?.name || row.account_name || '-' }, { key: 'document', label: 'Document', render: (row) => documentMap.get(row.document_id)?.document_no || '-' }, { key: 'document_type', label: 'Document Type', render: (row) => documentTypeLabel(documentMap.get(row.document_id)?.document_type) }, { key: 'description', label: 'Description' }, { key: 'amount', label: 'Amount', render: (row) => `${row.entry_type === 'cash_out' ? '-' : row.entry_type === 'cash_in' ? '+' : ''}${money(row.amount)}`, className: (row) => row.entry_type === 'cash_out' ? 'negative-balance' : row.entry_type === 'cash_in' ? 'positive-balance' : '' }], rows: filteredCashflows };
   }

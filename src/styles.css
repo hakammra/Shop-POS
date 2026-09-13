@@ -104,6 +104,66 @@ label input, label select, label textarea { margin-top: 6px; }
   font-size: 24px;
   font-weight: 700;
 }
+
+/* v74: inventory condition, reservation, consignment, and responsive profit dashboard */
+.status-pill.consignment-stock { border-color: #a47a39; background: #4a371d; color: #ffd58d; }
+.reservation-advance-panel { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(130px, .35fr) minmax(210px, .55fr); align-items: end; gap: 12px; margin-top: 12px; border-left: 3px solid #dcae43; }
+.reservation-advance-panel > div { align-self: center; display: grid; gap: 4px; }
+.reservation-advance-panel small { color: var(--muted); line-height: 1.4; }
+.reservation-cheque-fields { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.condition-transfer-layout,.consignment-layout { display: grid; grid-template-columns: minmax(270px, .7fr) minmax(0, 1.3fr); gap: 12px; margin-top: 12px; }
+.condition-product-picker { min-width: 0; }
+.condition-product-picker > label { display: grid; gap: 6px; font-weight: 800; }
+.condition-product-picker > div { max-height: 480px; display: grid; gap: 5px; margin-top: 9px; overflow-y: auto; }
+.condition-product-picker button { min-width: 0; display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 3px 9px; padding: 9px 10px; border: 1px solid #444b4f; background: #292929; color: #fff; text-align: left; }
+.condition-product-picker button:hover,.condition-product-picker button.selected { border-color: var(--primary); background: #203945; }
+.condition-product-picker button:disabled { opacity: .48; }
+.condition-product-picker button strong { color: #8edfff; }
+.condition-product-picker button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.condition-product-picker button small { grid-column: 1 / -1; color: var(--muted); }
+.condition-transfer-fields { display: grid; align-content: start; gap: 11px; }
+.condition-transfer-fields label { display: grid; gap: 6px; font-weight: 800; }
+.condition-transfer-fields textarea { min-height: 96px; resize: vertical; }
+.condition-selected-product { min-height: 76px; display: grid; align-content: center; gap: 4px; padding: 11px; border: 1px solid #43545c; background: #24343b; }
+.condition-selected-product span { color: #8edfff; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.condition-selected-product small { color: var(--muted); }
+.condition-arrow-grid { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 10px; }
+.condition-arrow-grid > span { padding-bottom: 11px; color: #72d7ff; font-size: 23px; }
+.consignment-layout { grid-template-columns: minmax(260px, .62fr) minmax(0, 1.38fr); }
+.consignment-layout .table-wrap { min-width: 0; overflow: auto; }
+.consignment-layout table { min-width: 680px; }
+.consignment-form .form-footer-actions,.stock-condition-form .form-footer-actions { margin-top: 12px; }
+
+.dashboard-range-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px; border: 1px solid #414a4f; background: #252a2d; }
+.dashboard-range-presets { min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
+.dashboard-range-presets button { flex: 0 0 auto; min-height: 34px; padding: 6px 11px; border: 1px solid #465158; background: #2c3134; color: #adb8bd; font-weight: 800; white-space: nowrap; }
+.dashboard-range-presets button.active { border-color: var(--primary); background: #1d5269; color: #fff; }
+.dashboard-custom-range { display: flex; gap: 7px; }
+.dashboard-custom-range label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 800; }
+.dashboard-custom-range input { min-height: 34px; padding: 5px 7px; }
+.dashboard-primary-stats.dashboard-financial-stats { grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); }
+.dashboard-metric.cogs { --metric-glow: rgba(239,178,63,.15); }.dashboard-metric.cogs > i { color: #ffd077; }
+.dashboard-metric.profit { --metric-glow: rgba(66,196,119,.17); border-color: rgba(66,196,119,.46); }.dashboard-metric.profit > strong,.dashboard-metric.profit > i { color: #83e9aa; }
+.dashboard-metric.profit.negative { --metric-glow: rgba(229,77,77,.17); border-color: rgba(229,77,77,.48); }.dashboard-metric.profit.negative > strong,.dashboard-metric.profit.negative > i { color: #ff9d9d; }
+.dashboard-metric.purchases { --metric-glow: rgba(231,132,72,.14); }.dashboard-metric.purchases > i { color: #ffba88; }
+.dashboard-metric.transit { --metric-glow: rgba(66,153,225,.15); }.dashboard-metric.transit > i { color: #8bc7ff; }
+.dashboard-metric.cheques { --metric-glow: rgba(186,135,238,.14); }.dashboard-metric.cheques > i { color: #d4adff; }
+.dashboard-profit-panel { min-width: 0; padding: 0; overflow: hidden; }
+.dashboard-profit-equation { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.dashboard-profit-equation span { min-width: 118px; display: grid; gap: 3px; }
+.dashboard-profit-equation small { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.dashboard-profit-equation strong { overflow-wrap: anywhere; font-size: 13px; }
+.dashboard-profit-equation b { color: #7c898f; font-size: 18px; }
+.dashboard-profit-table { max-height: 360px; overflow: auto; }
+.dashboard-profit-table table { min-width: 760px; }
+.dashboard-profit-table th,.dashboard-profit-table td { white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .reservation-advance-panel,.reservation-cheque-fields,.condition-transfer-layout,.consignment-layout { grid-template-columns: 1fr; }
+  .condition-product-picker > div { max-height: 260px; }
+  .condition-arrow-grid { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .consignment-layout table { min-width: 620px; }
+}
 .navigation-svg-icon {
   display: block;
   width: 1.25em;
@@ -5982,4 +6042,37 @@ body.pos-resizing {
     max-width: 100dvw;
     contain: layout paint;
   }
+}
+
+/* Keep the v74 mobile dashboard rules after every desktop dashboard revision. */
+@media (max-width: 760px) {
+  .dashboard-page { width: 100%; min-width: 0; max-width: 100%; gap: 9px; padding: 8px; overflow-x: hidden; }
+  .dashboard-welcome { min-width: 0; min-height: 0; align-items: stretch; flex-direction: column; padding: 13px; }
+  .dashboard-welcome h3 { font-size: 22px; }
+  .dashboard-quick-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-range-bar { min-width: 0; align-items: stretch; flex-direction: column; }
+  .dashboard-range-presets { width: 100%; padding-bottom: 2px; }
+  .dashboard-custom-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-custom-range label { min-width: 0; display: grid; }
+  .dashboard-custom-range input { width: 100%; min-width: 0; }
+  .dashboard-primary-stats.dashboard-financial-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  .dashboard-financial-stats .dashboard-metric { min-height: 112px; padding: 12px; }
+  .dashboard-financial-stats .dashboard-metric > strong { font-size: clamp(15px, 4.4vw, 19px); }
+  .dashboard-financial-stats .dashboard-metric > small { font-size: 9px; }
+  .dashboard-profit-panel .dashboard-panel-title { align-items: stretch; flex-direction: column; }
+  .dashboard-profit-equation { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); width: 100%; gap: 5px; }
+  .dashboard-profit-equation span { min-width: 0; }
+  .dashboard-profit-equation strong { font-size: 10px; }
+  .dashboard-content-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-document-list > div { grid-template-columns: 31px minmax(0, 1fr) auto; gap: 7px; padding: 8px; }
+  .dashboard-doc-status { display: none; }
+  .dashboard-document-list > div > b { max-width: 92px; overflow: hidden; font-size: 10px; text-overflow: ellipsis; }
+  .dashboard-stock-list > div { min-width: 0; padding-inline: 9px; }
+  .dashboard-stock-list span strong { max-width: 54vw; }
+  .dashboard-mini-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 430px) {
+  .dashboard-primary-stats.dashboard-financial-stats { grid-template-columns: 1fr; }
+  .dashboard-financial-stats .dashboard-metric { min-height: 96px; }
 }
