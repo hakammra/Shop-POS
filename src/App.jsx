@@ -140,6 +140,15 @@ const DOCUMENT_QUICK_FILTERS = [
   { value: 'quotation', label: 'Quotes' }
 ];
 
+const DOCUMENT_ADD_GROUPS = [
+  { key: 'sales', label: 'Sales related', types: ['quotation', 'reservation', 'customer_payment'] },
+  { key: 'purchases', label: 'Purchase related', types: ['purchase', 'stock_in_transit', 'supplier_payment', 'trade_in'] },
+  { key: 'inventory', label: 'Inventory related', types: ['stock_adjustment', 'stock_condition_transfer'] },
+  { key: 'consignment', label: 'Consignment', types: ['consignment_intake', 'consignment_return'] },
+  { key: 'operations', label: 'Service & delivery', types: ['job', 'cod_order'] },
+  { key: 'cashflow', label: 'Cashflow related', types: ['expense', 'other_income'] }
+];
+
 const PAYMENT_OPTIONS = ['Cash', 'Card', 'Bank 1', 'Bank 2', 'Credit'];
 
 const WARRANTY_CLAIM_STATUSES = [
@@ -469,6 +478,7 @@ function NavigationIcon({ name, fallback = '' } = {}) {
   if (name === 'clipboard') return <svg {...common}><path d="M8 5H5v16h14V5h-3" /><rect x="8" y="3" width="8" height="4" rx="1" /><path d="m8 12 1.5 1.5L12 11M13 13h3m-8 4 1.5 1.5L12 16M13 18h3" /></svg>;
   if (name === 'edit') return <svg {...common}><path d="m4 20 4.2-1 10.7-10.7-3.2-3.2L5 15.8 4 20Z" /><path d="m13.8 7 3.2 3.2M4 20h6" /></svg>;
   if (name === 'print') return <svg {...common}><path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" /><path d="M7 14h10v7H7Z" /><path d="M17 12h.01" /></svg>;
+  if (name === 'download') return <svg {...common}><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5" /><path d="M5 20h14" /></svg>;
   if (name === 'statement') return <svg {...common}><path d="M6 3h9l3 3v15H6Z" /><path d="M15 3v4h4M9 11h6M9 15h6M9 19h4" /><path d="m16 14 2 2 3-4" /></svg>;
   if (name === 'refresh') return <svg {...common}><path d="M20 6v5h-5M4 18v-5h5" /><path d="M18.1 9A7 7 0 0 0 6.2 6.2L4 9M5.9 15A7 7 0 0 0 17.8 17.8L20 15" /></svg>;
   if (name === 'trash') return <svg {...common}><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></svg>;
@@ -3127,9 +3137,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   const [selected, setSelected] = useState(null);
   const [items, setItems] = useState([]);
   const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
-  const [filters, setFilters] = useState({ product: '', customer: '', number: '', user: '', type: '', paid: '', periodFrom: '', periodTo: '' });
+  const [filters, setFilters] = useState({ product: '', customer: '', number: '', user: '', type: '', paid: '', datePreset: 'all', periodFrom: '', periodTo: '' });
   const [parties, setParties] = useState([]);
+  const [productOptions, setProductOptions] = useState([]);
+  const [staffOptions, setStaffOptions] = useState([]);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [openAddGroup, setOpenAddGroup] = useState('');
+  const addMenuRef = useRef(null);
   const [documentTabs, setDocumentTabs] = useState(() => {
     const savedTabs = safeReadJson(DOCUMENT_DRAFT_TABS_KEY, []);
     const draftTabs = Array.isArray(savedTabs) ? savedTabs.filter((tab) => tab.id && (tab.kind === 'new_purchase_like' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'stock_condition_transfer' || tab.kind === 'consignment_document' || tab.kind === 'reservation_document' || tab.kind === 'job_intake' || tab.kind === 'cod_order' || tab.kind === 'edit_document') && canManageDocumentType(tab.documentType || tab.document?.document_type)) : [];
@@ -3147,6 +3161,28 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   }, []);
 
   useEffect(() => {
+    if (!showAddMenu) return undefined;
+    function closeOnOutsidePress(event) {
+      if (!addMenuRef.current?.contains(event.target)) {
+        setShowAddMenu(false);
+        setOpenAddGroup('');
+      }
+    }
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') {
+        setShowAddMenu(false);
+        setOpenAddGroup('');
+      }
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePress);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePress);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showAddMenu]);
+
+  useEffect(() => {
     if (!assistantTarget?.document_no) return;
     setActiveDocumentTabId('view');
     setFilters((current) => ({ ...current, number: assistantTarget.document_no }));
@@ -3156,7 +3192,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   useEffect(() => {
     if (!customerTarget?.name) return;
     setActiveDocumentTabId('view');
-    setFilters({ product: '', customer: customerTarget.name, number: '', user: '', type: '', paid: '', periodFrom: '', periodTo: '' });
+    setFilters({ product: '', customer: customerTarget.name, number: '', user: '', type: '', paid: '', datePreset: 'all', periodFrom: '', periodTo: '' });
     setMessage(`Showing documents for ${customerTarget.name}.`);
     onCustomerTargetHandled?.();
   }, [customerTarget?.nonce]);
@@ -3169,6 +3205,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     loadDocumentFilterParties();
     loadDocuments(true);
   });
+  useRealtimeRefresh(['products', 'staff'], loadDocumentFilterParties);
   useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
 
   useEffect(() => {
@@ -3220,13 +3257,15 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       .from('documents')
       .select('id, document_no, job_no, job_status, device_type, device_specs, job_problem, job_accessories, estimated_days, job_ready_at, job_completed_at, external_document_no, document_type, status, total_amount, paid_amount, balance_amount, currency, document_date, created_at, shipping_method, expected_arrival_date, linked_document_id, supplier_id, customer_id, payment_method_id, notes, order_source, order_taken_by, created_by_staff_id, updated_by_staff_id, recipient_name, delivery_phone, delivery_address, delivery_service, tracking_number, delivery_charge, delivery_charge_paid, delivery_fee_mode, cod_collect_amount, cod_received_amount, cod_stock_reserved, reservation_stock_reserved, dispatched_at, delivered_at, settled_at, returned_at, return_reason, unconfirmed_payments, unconfirmed_header, confirmed_at')
       .neq('document_type', 'cod_order')
-      .order('document_date', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(250);
 
     if (matchingDocumentIds) query = query.in('id', matchingDocumentIds);
     if (filters.type) query = query.eq('document_type', filters.type);
-    if (filters.number) query = query.ilike('document_no', `%${filters.number}%`);
+    if (filters.number) {
+      const cleanNumber = filters.number.replace(/[,%()]/g, ' ').trim();
+      query = query.or(`document_no.ilike.%${cleanNumber}%,job_no.ilike.%${cleanNumber}%`);
+    }
     if (filters.periodFrom) query = query.gte('document_date', `${filters.periodFrom}T00:00:00`);
     if (filters.periodTo) query = query.lte('document_date', `${filters.periodTo}T23:59:59`);
 
@@ -3242,23 +3281,33 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     const supplierIds = [...new Set(filtered.map((doc) => doc.supplier_id).filter(Boolean))];
     const paymentIds = [...new Set(filtered.map((doc) => doc.payment_method_id).filter(Boolean))];
     const staffIds = [...new Set(filtered.flatMap((doc) => [doc.created_by_staff_id, doc.updated_by_staff_id]).filter(Boolean))];
+    const documentIds = filtered.map((doc) => doc.id);
 
-    const [customerLookupRes, supplierLookupRes, paymentLookupRes, staffLookupRes] = await Promise.all([
+    const [customerLookupRes, supplierLookupRes, paymentLookupRes, staffLookupRes, flowLookupRes] = await Promise.all([
       customerIds.length ? supabase.from('customers').select('id, name').in('id', customerIds) : Promise.resolve({ data: [] }),
       supplierIds.length ? supabase.from('suppliers').select('id, name').in('id', supplierIds) : Promise.resolve({ data: [] }),
       paymentIds.length ? supabase.from('payment_methods').select('id, name').in('id', paymentIds) : Promise.resolve({ data: [] }),
-      staffIds.length ? supabase.from('staff_directory_v38').select('id, full_name').in('id', staffIds) : Promise.resolve({ data: [] })
+      staffIds.length ? supabase.from('staff_directory_v38').select('id, full_name').in('id', staffIds) : Promise.resolve({ data: [] }),
+      documentIds.length ? supabase.from('cashflow_entries').select('document_id, account_name, payment_method_id, payment_methods(name)').in('document_id', documentIds).order('created_at', { ascending: true }) : Promise.resolve({ data: [] })
     ]);
 
     const customerMap = new Map((customerLookupRes.data || []).map((row) => [row.id, row.name]));
     const supplierMap = new Map((supplierLookupRes.data || []).map((row) => [row.id, row.name]));
     const paymentMap = new Map((paymentLookupRes.data || []).map((row) => [row.id, row.name]));
     const staffMap = new Map((staffLookupRes.data || []).map((row) => [row.id, row.full_name]));
+    const documentPaymentMap = new Map();
+    for (const flow of flowLookupRes.data || []) {
+      const label = flow.payment_methods?.name || flow.account_name || '';
+      if (!label) continue;
+      const names = documentPaymentMap.get(flow.document_id) || [];
+      if (!names.includes(label)) names.push(label);
+      documentPaymentMap.set(flow.document_id, names);
+    }
 
     filtered = filtered.map((doc) => ({
       ...doc,
       party_name: customerMap.get(doc.customer_id) || supplierMap.get(doc.supplier_id) || doc.recipient_name || '',
-      payment_method_name: paymentMap.get(doc.payment_method_id) || '',
+      payment_method_name: (documentPaymentMap.get(doc.id) || []).join(', ') || paymentMap.get(doc.payment_method_id) || '',
       user_name: staffMap.get(doc.created_by_staff_id) || '',
       updated_by_name: staffMap.get(doc.updated_by_staff_id) || ''
     }));
@@ -3289,9 +3338,11 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   }
 
   async function loadDocumentFilterParties() {
-    const [customerRes, supplierRes] = await Promise.all([
+    const [customerRes, supplierRes, productRes, staffRes] = await Promise.all([
       supabase.from('customers').select('name, phone').order('name', { ascending: true }).limit(500),
-      supabase.from('suppliers').select('name, phone').order('name', { ascending: true }).limit(500)
+      supabase.from('suppliers').select('name, phone').order('name', { ascending: true }).limit(500),
+      supabase.from('product_stock_view').select('product_id, item_code, name').eq('is_active', true).order('item_code', { ascending: true }).limit(1500),
+      supabase.from('staff_directory_v38').select('id, full_name').order('full_name', { ascending: true }).limit(250)
     ]);
     const merged = new Map();
     if (!customerRes.error) {
@@ -3308,6 +3359,32 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       }
     }
     setParties([...merged.values()].sort((a, b) => a.label.localeCompare(b.label)));
+    if (!productRes.error) setProductOptions(productRes.data || []);
+    if (!staffRes.error) setStaffOptions(staffRes.data || []);
+  }
+
+  function applyDocumentDatePreset(datePreset) {
+    if (datePreset === 'custom') {
+      setFilters((current) => ({ ...current, datePreset }));
+      return;
+    }
+    const now = new Date();
+    let periodFrom = '';
+    let periodTo = '';
+    if (datePreset === 'today') periodFrom = periodTo = localDateInput(now);
+    if (datePreset === 'yesterday') {
+      const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+      periodFrom = periodTo = localDateInput(yesterday);
+    }
+    if (datePreset === 'this_month') {
+      periodFrom = localDateInput(new Date(now.getFullYear(), now.getMonth(), 1));
+      periodTo = localDateInput(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    }
+    if (datePreset === 'last_month') {
+      periodFrom = localDateInput(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+      periodTo = localDateInput(new Date(now.getFullYear(), now.getMonth(), 0));
+    }
+    setFilters((current) => ({ ...current, datePreset, periodFrom, periodTo }));
   }
 
   async function selectDocument(document) {
@@ -3408,6 +3485,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
 
   function openAddDocument(type) {
     setShowAddMenu(false);
+    setOpenAddGroup('');
     if (!canManageDocumentType(type)) {
       setError('The active user does not have permission to create this document type.');
       return;
@@ -3511,6 +3589,26 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     }
     if (selected.document_type === 'invoice') {
       loadFinalizedSaleIntoPOS();
+      return;
+    }
+    if (['customer_payment', 'supplier_payment'].includes(selected.document_type)) {
+      if (!canManageDocumentType(selected.document_type)) {
+        setError('Customer and supplier payment editing requires the Manage Parties permission.');
+        return;
+      }
+      const existingPaymentTab = documentTabs.find((tab) => tab.kind === 'party_payment_edit' && tab.document?.id === selected.id);
+      if (existingPaymentTab) {
+        setActiveDocumentTabId(existingPaymentTab.id);
+        return;
+      }
+      const paymentTab = {
+        id: createClientId(),
+        kind: 'party_payment_edit',
+        document: selected,
+        label: `Edit ${selected.document_no}`
+      };
+      setDocumentTabs((current) => [...current, paymentTab]);
+      setActiveDocumentTabId(paymentTab.id);
       return;
     }
     if (!['purchase', 'stock_in_transit', 'quotation', 'cod_order'].includes(selected.document_type)) {
@@ -3826,11 +3924,11 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   }
 
   const canConvertTransit = selected?.document_type === 'stock_in_transit' && selected?.status === 'in_transit';
-  const canConvertQuote = selected?.document_type === 'quotation' && selected?.status !== 'converted';
+  const canConvertQuote = selected?.document_type === 'quotation' && !['converted', 'cancelled'].includes(selected?.status);
   const canConvertReservation = selected?.document_type === 'reservation' && selected?.status === 'reserved';
   const canConvertUnconfirmed = isAdmin && selected?.document_type === 'unconfirmed_sale' && selected?.status === 'unconfirmed';
   const canApplyStock = selected && ['purchase', 'stock_in_transit'].includes(selected.document_type) && selected.status === 'draft';
-  const canEditSelected = selected && ['invoice', 'unconfirmed_sale', 'purchase', 'stock_in_transit', 'quotation', 'cod_order'].includes(selected.document_type) && canManageDocumentType(selected.document_type);
+  const canEditSelected = selected && ['invoice', 'unconfirmed_sale', 'purchase', 'stock_in_transit', 'quotation', 'cod_order', 'customer_payment', 'supplier_payment'].includes(selected.document_type) && canManageDocumentType(selected.document_type);
   const canDeleteSelected = selected?.document_type === 'invoice'
     ? can('delete_sales_documents')
     : ['unconfirmed_sale', 'purchase', 'stock_in_transit'].includes(selected?.document_type) && can('delete_documents');
@@ -3846,29 +3944,44 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   return (
     <section className="documents-screen">
       <div className="documents-toolbar-shell">
-        <div className="toolbar-menu-wrap documents-add-menu-wrap">
-          <button className="toolbar-button bright" disabled={!DOCUMENT_TYPES.some((type) => type.value && !['invoice', 'cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value))} onClick={() => setShowAddMenu(!showAddMenu)}><span>＋</span>Add</button>
+        <div className="toolbar-menu-wrap documents-add-menu-wrap" ref={addMenuRef}>
+          <button className="toolbar-button bright" disabled={!DOCUMENT_ADD_GROUPS.some((group) => group.types.some((type) => canManageDocumentType(type)))} aria-haspopup="menu" aria-expanded={showAddMenu} onClick={() => { setShowAddMenu((current) => !current); if (showAddMenu) setOpenAddGroup(''); }}><span>＋</span>Add</button>
           {showAddMenu && (
-            <div className="add-menu">
-              {DOCUMENT_TYPES.filter((type) => type.value && !['invoice', 'cod_order', 'unconfirmed_sale'].includes(type.value) && canManageDocumentType(type.value)).map((type) => (
-                <button key={type.value} onClick={() => openAddDocument(type.value)}>{type.label}</button>
-              ))}
+            <div className="add-menu document-add-tree" role="menu">
+              {DOCUMENT_ADD_GROUPS.map((group) => {
+                const availableTypes = group.types.filter((type) => canManageDocumentType(type));
+                if (!availableTypes.length) return null;
+                const expanded = openAddGroup === group.key;
+                return <div className={`document-add-group ${expanded ? 'expanded' : ''}`} key={group.key}>
+                  <button type="button" className="document-add-group-toggle" aria-expanded={expanded} onClick={() => setOpenAddGroup(expanded ? '' : group.key)}>
+                    <span className="document-add-triangle">{expanded ? '▾' : '▸'}</span>
+                    <strong>{group.label}</strong>
+                    <em>{availableTypes.length}</em>
+                  </button>
+                  {expanded && <div className="document-add-branches">
+                    {availableTypes.map((type) => {
+                      const definition = DOCUMENT_TYPES.find((item) => item.value === type);
+                      return <button type="button" role="menuitem" key={type} onClick={() => openAddDocument(type)}><span>└</span>{definition?.label || documentTypeLabel(type)}</button>;
+                    })}
+                  </div>}
+                </div>;
+              })}
             </div>
           )}
         </div>
         <div className="action-toolbar documents-action-toolbar">
-          <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(true)}><span>▣</span>Print</button>
-          <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span>◫</span>Print preview</button>
-          <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span>⌁</span>Save as PDF</button>
+          <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(true)}><span><NavigationIcon name="print" /></span>Print</button>
+          <button className="toolbar-button" disabled={!selected} onClick={() => printSelectedDocument(false)}><span><NavigationIcon name="document" /></span>Print preview</button>
+          <button className="toolbar-button" disabled={!selected} onClick={saveSelectedDocumentPdf}><span><NavigationIcon name="download" /></span>Save as PDF</button>
           <button className="toolbar-button whatsapp-document-button" disabled={!selected || busyAction} onClick={shareSelectedDocumentWhatsApp}><span><WhatsAppIcon /></span>WhatsApp</button>
-          <button className="toolbar-button" disabled={!canEditSelected || busyAction} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span>✎</span>Edit</button>
-          <button className="toolbar-button" disabled={!selected || busyAction || !canDeleteSelected} title={selected?.document_type === 'invoice' && !canDeleteSelected ? 'Delete finalized sales documents permission required' : ''} onClick={deleteSelectedDocument}><span>▥</span>Delete</button>
-          <button className="toolbar-button" disabled={!canApplyStock || busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>
-          <button className="toolbar-button bright" disabled={!canConvertTransit || busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>
-          <button className="toolbar-button bright" disabled={!canConvertQuote || busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>
-          <button className="toolbar-button bright" disabled={!canConvertReservation || busyAction || !can('pos_sales')} onClick={convertReservationToInvoice}><span>⇢</span>Convert Reservation</button>
-          <button className="toolbar-button" disabled={!canConvertReservation || busyAction || !can('create_quotes')} onClick={cancelReservation}><span>×</span>Cancel Reservation</button>
-          <button className="toolbar-button bright" disabled={!canConvertUnconfirmed || busyAction} onClick={() => loadUnconfirmedSaleIntoPOS('unconfirmed_convert')}><span>✓</span>Confirm Sale</button>
+          <button className="toolbar-button" disabled={!canEditSelected || busyAction} title={selected?.document_type === 'invoice' && !canManageDocumentType('invoice') ? 'Edit finalized sales documents permission required' : ''} onClick={openEditDocument}><span><NavigationIcon name="edit" /></span>Edit</button>
+          <button className="toolbar-button" disabled={!selected || busyAction || !canDeleteSelected} title={selected?.document_type === 'invoice' && !canDeleteSelected ? 'Delete finalized sales documents permission required' : ''} onClick={deleteSelectedDocument}><span><NavigationIcon name="trash" /></span>Delete</button>
+          {canApplyStock && <button className="toolbar-button" disabled={busyAction || !can('manage_inventory_documents')} onClick={applySelectedDocumentStock}><span>✓</span>Apply Stock</button>}
+          {canConvertTransit && <button className="toolbar-button bright" disabled={busyAction || !can('manage_inventory_documents')} onClick={convertTransitToPurchase}><span>⇢</span>Convert to Purchase</button>}
+          {canConvertQuote && <button className="toolbar-button bright" disabled={busyAction || !can('pos_sales')} onClick={convertQuotationToInvoice}><span>⇢</span>Convert Quote to Sales</button>}
+          {canConvertReservation && <button className="toolbar-button bright" disabled={busyAction || !can('pos_sales')} onClick={convertReservationToInvoice}><span>⇢</span>Convert Reservation</button>}
+          {canConvertReservation && <button className="toolbar-button" disabled={busyAction || !can('create_quotes')} onClick={cancelReservation}><span>×</span>Cancel Reservation</button>}
+          {canConvertUnconfirmed && <button className="toolbar-button bright" disabled={busyAction} onClick={() => loadUnconfirmedSaleIntoPOS('unconfirmed_convert')}><span>✓</span>Confirm Sale</button>}
         </div>
       </div>
 
@@ -3879,7 +3992,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
             className={activeDocumentTabId === tab.id ? 'document-tab active' : 'document-tab'}
             onClick={() => setActiveDocumentTabId(tab.id)}
           >
-            <span>{tab.kind === 'view' ? '⌕' : tab.kind === 'edit_document' ? '✎' : tab.kind === 'trade_in_intake' ? '↔' : '＋'}</span>
+            <span>{tab.kind === 'view' ? '⌕' : ['edit_document', 'party_payment_edit'].includes(tab.kind) ? '✎' : tab.kind === 'trade_in_intake' ? '↔' : '＋'}</span>
             {tab.label}
             {tab.id !== 'view' && (
               <em onClick={(event) => { event.stopPropagation(); closeDocumentTab(tab.id); }}>×</em>
@@ -3904,7 +4017,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
         ))}
       </div>
       <div className="document-filters">
-        <FilterInput label="Product / Item code" value={filters.product} onChange={(value) => setFilters({ ...filters, product: value })} placeholder="Type SKU/code or product name" />
+        <label>
+          Product / Item code
+          <input list="document-product-options" value={filters.product} onChange={(event) => setFilters({ ...filters, product: event.target.value })} placeholder="Type or select a product" />
+          <datalist id="document-product-options">
+            {productOptions.map((product) => <option key={product.product_id} value={product.item_code}>{product.name}</option>)}
+          </datalist>
+        </label>
         <label>
           Customer / Supplier
           <input list="document-party-options" value={filters.customer} onChange={(e) => setFilters({ ...filters, customer: e.target.value })} placeholder="Type or select customer/supplier" />
@@ -3915,7 +4034,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
           </datalist>
         </label>
         <FilterInput label="Document number" value={filters.number} onChange={(value) => setFilters({ ...filters, number: value })} />
-        <FilterInput label="User" value={filters.user} onChange={(value) => setFilters({ ...filters, user: value })} />
+        <label>
+          User
+          <input list="document-user-options" value={filters.user} onChange={(event) => setFilters({ ...filters, user: event.target.value })} placeholder="Type or select a user" />
+          <datalist id="document-user-options">
+            {staffOptions.map((staff) => <option key={staff.id} value={staff.full_name} />)}
+          </datalist>
+        </label>
         <label>
           Document type
           <select value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })}>
@@ -3932,16 +4057,27 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
           </select>
         </label>
         <label>
+          Date range
+          <select value={filters.datePreset} onChange={(event) => applyDocumentDatePreset(event.target.value)}>
+            <option value="all">All dates</option>
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="this_month">This month</option>
+            <option value="last_month">Last month</option>
+            <option value="custom">Custom range</option>
+          </select>
+        </label>
+        {filters.datePreset === 'custom' && <label>
           From
           <input type="date" value={filters.periodFrom} onChange={(e) => setFilters({ ...filters, periodFrom: e.target.value })} />
-        </label>
-        <label>
+        </label>}
+        {filters.datePreset === 'custom' && <label>
           To
           <input type="date" value={filters.periodTo} onChange={(e) => setFilters({ ...filters, periodTo: e.target.value })} />
-        </label>
+        </label>}
         <div className="filter-actions">
           <button className="primary-button" onClick={loadDocuments}>Refresh</button>
-          <button className="secondary-button" onClick={() => setFilters({ product: '', customer: '', number: '', user: '', type: '', paid: '', periodFrom: '', periodTo: '' })}>Clear</button>
+          <button className="secondary-button" onClick={() => setFilters({ product: '', customer: '', number: '', user: '', type: '', paid: '', datePreset: 'all', periodFrom: '', periodTo: '' })}>Clear</button>
         </div>
       </div>
 
@@ -3950,44 +4086,47 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       <SplitTables
         titleA={`Documents (${documents.length})`}
         tableA={
-          <table>
+          <table className="documents-main-table">
             <thead>
               <tr>
-                <th>ID</th>
+                <th>Date</th>
                 <th>Number</th>
-                <th>Job No</th>
-                <th>External No</th>
                 <th>Document Type</th>
                 <th>Paid</th>
                 <th>Customer / Supplier</th>
                 <th>Created by</th>
-                <th>Date</th>
                 <th>Payment</th>
                 <th>Total</th>
                 <th>Status</th>
+                <th>ID</th>
               </tr>
             </thead>
             <tbody>
               {documents.map((document) => {
                 const name = documentPartyDisplayName(document);
+                const convertibleType = ['stock_in_transit', 'quotation', 'reservation', 'unconfirmed_sale'].includes(document.document_type);
+                const isConverted = convertibleType && document.status === 'converted';
+                const isAwaitingConversion = convertibleType && !['converted', 'cancelled'].includes(document.status);
+                const rowClassName = [selected?.id === document.id ? 'selected-row' : '', isConverted ? 'document-row-converted' : '', isAwaitingConversion ? 'document-row-awaiting-conversion' : ''].filter(Boolean).join(' ');
+                const paidStatus = paidStatusLabel(document);
+                const statusText = document.document_type === 'cod_order' ? codStatusLabel(document.status) : isConverted ? 'Converted ✓' : document.status;
+                const statusClass = String(statusText || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
                 return (
-                  <tr key={document.id} className={selected?.id === document.id ? 'selected-row' : ''} onClick={() => selectDocument(document)}>
-                    <td>{document.id.slice(0, 8)}</td>
-                    <td>{document.document_no}</td>
-                    <td>{document.job_no || '-'}</td>
-                    <td>{document.external_document_no || '-'}</td>
+                  <tr key={document.id} className={rowClassName} onClick={() => selectDocument(document)}>
+                    <td>{fmtDate(document.document_date || document.created_at)}</td>
+                    <td className="document-number-cell"><strong>{document.document_type === 'job' && document.job_no ? document.job_no : document.document_no}</strong></td>
                     <td>{document.document_type === 'unconfirmed_sale' ? <span className="internal-document-mark" title="Internal review required">◇ {documentTypeLabel(document.document_type)}</span> : documentTypeLabel(document.document_type)}</td>
-                    <td>{paidStatusLabel(document)}</td>
+                    <td><span className={`document-status-pill payment-${paidStatus.toLowerCase()}`}>{paidStatus}</span></td>
                     <td>{name}</td>
                     <td>{document.user_name || '-'}</td>
-                    <td>{fmtDate(document.document_date || document.created_at)}</td>
                     <td>{document.payment_method_name || '-'}</td>
                     <td>{money(document.total_amount)}</td>
-                    <td>{document.document_type === 'cod_order' ? codStatusLabel(document.status) : document.status === 'converted' && ['stock_in_transit', 'quotation', 'reservation', 'unconfirmed_sale'].includes(document.document_type) ? 'Converted ✓' : document.status}</td>
+                    <td><span className={`document-status-pill status-${statusClass}`}>{statusText}</span></td>
+                    <td>{document.id.slice(0, 8)}</td>
                   </tr>
                 );
               })}
-              {documents.length === 0 && <EmptyRow colSpan={12} text="No documents found." />}
+              {documents.length === 0 && <EmptyRow colSpan={10} text="No documents found." />}
             </tbody>
           </table>
         }
@@ -4027,7 +4166,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       )}
 
       <div className="document-workspace">
-        {documentTabs.filter((tab) => tab.kind === 'new_purchase_like' || tab.kind === 'edit_document' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'stock_condition_transfer' || tab.kind === 'consignment_document' || tab.kind === 'reservation_document' || tab.kind === 'job_intake' || tab.kind === 'quotation_document' || tab.kind === 'cod_order').map((tab) => {
+        {documentTabs.filter((tab) => tab.kind === 'new_purchase_like' || tab.kind === 'edit_document' || tab.kind === 'party_payment_edit' || tab.kind === 'trade_in_intake' || tab.kind === 'stock_adjustment' || tab.kind === 'stock_condition_transfer' || tab.kind === 'consignment_document' || tab.kind === 'reservation_document' || tab.kind === 'job_intake' || tab.kind === 'quotation_document' || tab.kind === 'cod_order').map((tab) => {
           const isActive = activeDocumentTabId === tab.id;
           return (
             <div key={tab.id} className={isActive ? 'document-tab-panel active' : 'document-tab-panel hidden-document-tab'}>
@@ -4092,6 +4231,13 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
                   onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }}
                 />
               )}
+              {tab.kind === 'party_payment_edit' && (
+                <PartyPaymentEditForm
+                  document={tab.document}
+                  onClose={() => closeDocumentTab(tab.id)}
+                  onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }}
+                />
+              )}
               {tab.kind === 'stock_condition_transfer' && (
                 <StockConditionTransferForm onClose={() => closeDocumentTab(tab.id)} onSaved={() => { closeDocumentTab(tab.id); loadDocuments(); }} />
               )}
@@ -4141,6 +4287,119 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       </div>
     </section>
   );
+}
+
+function PartyPaymentEditForm({ document, onClose, onSaved }) {
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [form, setForm] = useState({ amount: '', method_id: '', direction: 'in', note: '', cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const selectedMethod = paymentMethods.find((method) => method.id === form.method_id);
+  const isSupplierPayment = document.document_type === 'supplier_payment';
+
+  useEffect(() => {
+    let active = true;
+    async function loadPayment() {
+      setLoading(true);
+      setError('');
+      const [methodRes, flowRes, chequeRes] = await Promise.all([
+        supabase.from('payment_methods').select('id, name, is_active, is_paid_method, requires_cheque_details, affects_cashflow, account_kind').eq('is_paid_method', true).order('name'),
+        supabase.from('cashflow_entries').select('id, entry_type, amount, payment_method_id, account_name').eq('document_id', document.id).in('entry_type', ['cash_in', 'cash_out']).order('created_at', { ascending: true }).limit(2),
+        supabase.from('cheque_payments').select('source_line_id, cheque_number, cheque_date, bank_name, status').eq('document_id', document.id).order('created_at', { ascending: true }).limit(1).maybeSingle()
+      ]);
+      if (!active) return;
+      const loadError = methodRes.error || flowRes.error || chequeRes.error;
+      if (loadError) {
+        setError(loadError.message);
+        setLoading(false);
+        return;
+      }
+      const flows = flowRes.data || [];
+      if (flows.length !== 1) {
+        setError('This payment does not have exactly one linked payment-account movement, so it cannot be edited safely. Run SQL 071 if this is an older payment, then refresh.');
+        setPaymentMethods(methodRes.data || []);
+        setLoading(false);
+        return;
+      }
+      const flow = flows[0];
+      const cheque = chequeRes.data;
+      setPaymentMethods(methodRes.data || []);
+      setForm({
+        amount: String(numberValue(flow.amount || document.paid_amount || document.total_amount)),
+        method_id: flow.payment_method_id || document.payment_method_id || '',
+        direction: flow.entry_type === 'cash_out' ? 'out' : 'in',
+        note: document.notes || '',
+        cheque_number: cheque?.cheque_number || '',
+        cheque_date: cheque?.cheque_date || todayInputDate(),
+        cheque_bank_name: cheque?.bank_name || ''
+      });
+      if (cheque && !['received', 'issued'].includes(cheque.status)) {
+        setError(`This cheque is already ${cheque.status}. Reverse that cheque status before editing its payment document.`);
+      }
+      setLoading(false);
+    }
+    loadPayment();
+    return () => { active = false; };
+  }, [document.id]);
+
+  async function saveCorrection(event) {
+    event.preventDefault();
+    setError('');
+    const amount = numberValue(form.amount);
+    if (amount <= 0) { setError('Amount must be greater than zero.'); return; }
+    if (!form.method_id) { setError('Select the correct payment account.'); return; }
+    if (selectedMethod?.requires_cheque_details && (!form.cheque_number.trim() || !form.cheque_date)) {
+      setError('Cheque number and cheque date are required.');
+      return;
+    }
+    setBusy(true);
+    const { error: saveError } = await supabase.rpc('replace_party_payment_v75', {
+      p_document_id: document.id,
+      p_payment_method_id: form.method_id,
+      p_amount: amount,
+      p_direction: form.direction,
+      p_note: form.note || null,
+      p_cheque_details: {
+        source_line_id: createClientId(),
+        cheque_number: form.cheque_number || null,
+        cheque_date: form.cheque_date || null,
+        cheque_bank_name: form.cheque_bank_name || null
+      }
+    });
+    setBusy(false);
+    if (saveError) {
+      const migrationMissing = /replace_party_payment_v75|schema cache|could not find the function/i.test(saveError.message || '');
+      setError(`${saveError.message}${migrationMissing ? '. Run migration 075_edit_party_payments_documents_ui.sql in Supabase, then refresh.' : ''}`);
+      return;
+    }
+    onSaved?.();
+  }
+
+  const directionOptions = isSupplierPayment
+    ? [{ value: 'out', label: 'Pay supplier' }, { value: 'in', label: 'Receive supplier refund' }]
+    : [{ value: 'in', label: 'Receive customer payment' }, { value: 'out', label: 'Refund customer' }];
+
+  return <form className="panel-card form-card party-payment-edit-form" onSubmit={saveCorrection}>
+    <div className="section-title-row">
+      <div><span className="eyebrow">Payment correction</span><h3>{document.document_no}</h3><p>{document.party_name || 'Customer / Supplier'} · Changing this updates the party balance, payment account, cashflow classification, cheque record and accounting entry together.</p></div>
+      <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+    </div>
+    {error && <div className="error-box">{error}</div>}
+    {loading ? <div className="muted-box">Loading payment details...</div> : <div className="party-payment-edit-grid">
+      <label>Payment action<select value={form.direction} onChange={(event) => setForm({ ...form, direction: event.target.value })}>{directionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <label>Payment account<select value={form.method_id} onChange={(event) => setForm({ ...form, method_id: event.target.value })} required>{paymentMethods.filter((method) => method.is_active || method.id === form.method_id).map((method) => <option key={method.id} value={method.id}>{method.name}{method.affects_cashflow === false ? ' · excluded from Cash In/Out' : ''}{method.is_active ? '' : ' · inactive'}</option>)}</select></label>
+      <label>Amount<input type="number" min="0.01" step="0.01" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} required /></label>
+      <label className="wide-field">Note<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="Optional correction note" /></label>
+      {selectedMethod?.requires_cheque_details && <>
+        <label>Cheque number<input value={form.cheque_number} onChange={(event) => setForm({ ...form, cheque_number: event.target.value })} required /></label>
+        <label>Cheque date<input type="date" value={form.cheque_date} onChange={(event) => setForm({ ...form, cheque_date: event.target.value })} required /></label>
+        <label>Bank / branch<input value={form.cheque_bank_name} onChange={(event) => setForm({ ...form, cheque_bank_name: event.target.value })} /></label>
+      </>}
+    </div>}
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={loading || busy || Boolean(error && /cannot be edited safely|already .*reverse/i.test(error))}>{busy ? 'Saving correction...' : 'Save payment correction'}</button></div>
+  </form>;
 }
 
 function DocumentHeaderEditor({ document, onClose, onSaved, embedded = false }) {
