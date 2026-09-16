@@ -1,0 +1,180 @@
+import { createClient } from 'npm:@supabase/supabase-js@2';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+const wholesaleBridgeUrl = 'https://xxmdrrzoflakyzecmrmy.supabase.co/functions/v1/retail-bridge';
+
+function json(body: Record<string, unknown>, status = 200) {
+  return Response.json(body, { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
+function messageOf(error: unknown) {
+  return error instanceof Error ? error.message : String(error || 'Wholesale integration failed.');
+}
+
+function requiredEnvironment() {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  const bridgeSecret = Deno.env.get('RETAIL_BRIDGE_SHARED_SECRET') || '';
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) throw new Error('Retail Supabase function environment is incomplete.');
+  if (!bridgeSecret) throw new Error('RETAIL_BRIDGE_SHARED_SECRET is not configured in the Retail Supabase project.');
+  return { supabaseUrl, anonKey, serviceRoleKey, bridgeSecret };
+}
+
+async function callWholesale(bridgeSecret: string, init?: RequestInit) {
+  const response = await fetch(wholesaleBridgeUrl, {
+    ...init,
+    headers: {
+      'x-retail-bridge-secret': bridgeSecret,
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init?.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.success !== true) {
+    throw new Error(String(payload?.error || payload?.message || `Wholesale bridge returned ${response.status}.`));
+  }
+  return payload;
+}
+
+async function refreshCatalog(admin: any, bridgeSecret: string) {
+  const catalog = await callWholesale(bridgeSecret, { method: 'GET' });
+  if (!Array.isArray(catalog?.products)) throw new Error('Wholesale catalog response did not contain a products list.');
+  const { data, error } = await admin.rpc('sync_retail_wholesale_catalog_v76', { p_catalog: catalog.products });
+  if (error) throw error;
+  return data;
+}
+
+async function loadTransfer(admin: any, transferId: string) {
+  const { data, error } = await admin
+    .from('retail_wholesale_transfers')
+    .select('*')
+    .eq('id', transferId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Retail wholesale transfer was not found.');
+  return data;
+}
+
+function validateWholesaleResponse(response: any, transfer: any) {
+  if (!response?.wholesale_document_id || !response?.wholesale_document_no || !Array.isArray(response?.lines)) {
+    throw new Error('Wholesale returned an incomplete transfer response.');
+  }
+  if (response.idempotency_key !== transfer.idempotency_key) throw new Error('Wholesale idempotency key did not match the Retail transfer.');
+  if (response.retail_sale_reference !== transfer.retail_sale_reference) throw new Error('Wholesale sale reference did not match the Retail transfer.');
+  if (response.payment_status !== 'credit') throw new Error('Wholesale transfer was not posted as credit.');
+}
+
+async function continueTransfer(userClient: any, admin: any, bridgeSecret: string, transferId: string) {
+  let transfer = await loadTransfer(admin, transferId);
+  await admin.from('retail_wholesale_transfers').update({
+    attempt_count: Number(transfer.attempt_count || 0) + 1,
+    last_error: null,
+    updated_at: new Date().toISOString()
+  }).eq('id', transferId);
+
+  if (!transfer.wholesale_response) {
+    const wholesaleResponse = await callWholesale(bridgeSecret, {
+      method: 'POST',
+      body: JSON.stringify(transfer.wholesale_request)
+    });
+    validateWholesaleResponse(wholesaleResponse, transfer);
+    const { error: storeError } = await admin.from('retail_wholesale_transfers').update({
+      status: 'wholesale_posted',
+      next_step: 'retail_post',
+      wholesale_response: wholesaleResponse,
+      wholesale_document_id: wholesaleResponse.wholesale_document_id,
+      wholesale_document_no: wholesaleResponse.wholesale_document_no,
+      wholesale_customer_id: wholesaleResponse.wholesale_customer_id || null,
+      wholesale_transfer_total: Number(wholesaleResponse.transfer_total || 0),
+      wholesale_posted_at: new Date().toISOString(),
+      last_error: null,
+      updated_at: new Date().toISOString()
+    }).eq('id', transferId);
+    if (storeError) throw storeError;
+    transfer = await loadTransfer(admin, transferId);
+  }
+
+  const { data, error } = await userClient.rpc('post_retail_wholesale_transfer_v76', { p_transfer_id: transferId });
+  if (error) throw error;
+  return data;
+}
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (request.method !== 'POST') return json({ success: false, error: 'Method not allowed.' }, 405);
+
+  let transferId = '';
+  let admin: any = null;
+  let pendingTransfer = false;
+  try {
+    const { supabaseUrl, anonKey, serviceRoleKey, bridgeSecret } = requiredEnvironment();
+    const authorization = request.headers.get('Authorization') || '';
+    if (!authorization.toLowerCase().startsWith('bearer ')) return json({ success: false, error: 'Login required.' }, 401);
+
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authorization } },
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+    const { data: userData, error: userError } = await userClient.auth.getUser();
+    if (userError || !userData?.user) return json({ success: false, error: 'Your login session has expired.' }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    const action = String(body?.action || 'checkout');
+
+    if (action === 'refresh_catalog') {
+      const { error: authorizationError } = await userClient.rpc('authorize_retail_wholesale_catalog_v76');
+      if (authorizationError) throw authorizationError;
+      const result = await refreshCatalog(admin, bridgeSecret);
+      return json({ success: true, catalog: result });
+    }
+
+    if (action === 'retry') {
+      const { error: authorizationError } = await userClient.rpc('authorize_retail_wholesale_admin_v76');
+      if (authorizationError) throw authorizationError;
+      transferId = String(body?.transfer_id || '');
+      if (!transferId) throw new Error('Transfer ID is required.');
+      const result = await continueTransfer(userClient, admin, bridgeSecret, transferId);
+      return json({ success: true, ...result });
+    }
+
+    if (action !== 'checkout') return json({ success: false, error: 'Unsupported bridge action.' }, 400);
+    transferId = String(body?.transfer_id || '');
+    if (!transferId || !body?.payload) throw new Error('Transfer ID and checkout payload are required.');
+
+    // This refresh is intentionally performed immediately before checkout.
+    await refreshCatalog(admin, bridgeSecret);
+    const { error: prepareError } = await userClient.rpc('prepare_retail_wholesale_transfer_v76', {
+      p_transfer_id: transferId,
+      p_payload: body.payload
+    });
+    if (prepareError) throw prepareError;
+    pendingTransfer = true;
+    const result = await continueTransfer(userClient, admin, bridgeSecret, transferId);
+    return json({ success: true, ...result });
+  } catch (error) {
+    const errorMessage = messageOf(error);
+    if (admin && transferId) {
+      try {
+        const transfer = await loadTransfer(admin, transferId);
+        pendingTransfer = true;
+        if (transfer.status !== 'retail_posted') {
+          await admin.from('retail_wholesale_transfers').update({
+            status: 'failed',
+            next_step: transfer.wholesale_response ? 'retail_post' : 'wholesale_post',
+            last_error: errorMessage.slice(0, 2000),
+            updated_at: new Date().toISOString()
+          }).eq('id', transferId);
+        }
+      } catch {
+        // Preparing the outbox may itself have failed, so there may be no row to mark.
+      }
+    }
+    return json({ success: false, pending: pendingTransfer, transfer_id: transferId || null, error: errorMessage });
+  }
+});

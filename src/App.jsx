@@ -211,7 +211,9 @@ const REALTIME_TABLES = [
   'assistant_pos_guides',
   'online_store_orders',
   'online_store_order_items',
-  'consignment_sale_ledger'
+  'consignment_sale_ledger',
+  'retail_wholesale_product_links',
+  'retail_wholesale_transfers'
 ];
 
 function useRealtimeRefresh(tables, refresh, debounceMs = 280) {
@@ -1454,6 +1456,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [posLeftPercent, setPosLeftPercent] = useState(() => Number(window.localStorage.getItem('computer_shop_pos_split_left_percent') || 52));
   const [isResizingPos, setIsResizingPos] = useState(false);
   const [mobilePosPanel, setMobilePosPanel] = useState('products');
+  const [wholesaleBusy, setWholesaleBusy] = useState(false);
+  const [showWholesaleAdmin, setShowWholesaleAdmin] = useState(false);
+  const [pendingWholesaleTransfers, setPendingWholesaleTransfers] = useState([]);
 
   const activeBill = bills.find((bill) => bill.id === activeBillId) || bills[0] || emptyBill();
   const selectedCustomer = customers.find((row) => row.id === activeBill.customerId);
@@ -1530,6 +1535,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     productSearchCacheRef.current.clear();
     loadProducts({ force: true });
     loadPosAssemblies();
+  });
+  useRealtimeRefresh(['retail_wholesale_product_links'], () => {
+    productSearchCacheRef.current.clear();
+    loadProducts({ force: true });
   });
   useRealtimeRefresh(['documents', 'document_items', 'customers', 'cashflow_entries'], () => {
     loadCustomers();
@@ -1710,22 +1719,28 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
 
-    let query = supabase
-      .from('product_stock_view')
+    const buildProductQuery = (source) => {
+      let query = supabase
+      .from(source)
       .select('*')
       .eq('is_active', true)
       .order('item_code', { ascending: true })
       .limit(1200);
 
-    if (clean) {
-      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
-    } else if (posCategoryId === 'uncategorized') {
-      query = query.is('category_id', null);
-    } else {
-      query = query.eq('category_id', posCategoryId);
-    }
+      if (clean) {
+        query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+      } else if (posCategoryId === 'uncategorized') {
+        query = query.is('category_id', null);
+      } else {
+        query = query.eq('category_id', posCategoryId);
+      }
+      return query;
+    };
 
-    const { data, error } = await query;
+    let { data, error } = await buildProductQuery('pos_product_catalog_v76');
+    if (error && /pos_product_catalog_v76|schema cache|does not exist/i.test(error.message || '')) {
+      ({ data, error } = await buildProductQuery('product_stock_view'));
+    }
     if (error) {
       if (isCurrentRequest()) setMessage(error.message);
       return;
@@ -1757,6 +1772,48 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
     setPaymentMethods((data || []).filter((method) => !method.name.toLowerCase().includes('store credit')));
+  }
+
+  async function refreshWholesaleCatalog() {
+    if (!can('manage_products')) { setMessage('Product-management permission required.'); return; }
+    setWholesaleBusy(true); setMessage('');
+    const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
+      body: { action: 'refresh_catalog' }
+    });
+    if (error || !data?.success) {
+      setMessage(data?.error || error?.message || 'Wholesale catalog refresh failed.');
+    } else {
+      productSearchCacheRef.current.clear();
+      await loadCategories();
+      await loadProducts({ force: true });
+      setMessage(`Wholesale Catalog refreshed: ${data.catalog?.products || 0} products.`);
+    }
+    setWholesaleBusy(false);
+  }
+
+  async function loadPendingWholesaleTransfers(openPanel = true) {
+    const { data, error } = await supabase.rpc('get_pending_retail_wholesale_transfers_v76');
+    if (error) {
+      setMessage(/get_pending_retail_wholesale_transfers_v76|schema cache|could not find/i.test(error.message || '')
+        ? 'Run migration 076_retail_wholesale_bridge.sql before viewing Wholesale transfers.'
+        : error.message);
+      return;
+    }
+    setPendingWholesaleTransfers(Array.isArray(data) ? data : []);
+    if (openPanel) setShowWholesaleAdmin(true);
+  }
+
+  async function retryWholesaleTransfer(transferId) {
+    setWholesaleBusy(true); setMessage('');
+    const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
+      body: { action: 'retry', transfer_id: transferId }
+    });
+    if (error || !data?.success) setMessage(data?.error || error?.message || 'Wholesale transfer retry failed.');
+    else setMessage(`Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}.`);
+    await loadPendingWholesaleTransfers(false);
+    productSearchCacheRef.current.clear();
+    await loadProducts({ force: true });
+    setWholesaleBusy(false);
   }
 
   function addBill() {
@@ -1894,7 +1951,13 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     ));
     if (existing) {
       const nextQty = Number(existing.qty || 0) + qty;
-      updateItem(existing.id, { qty: nextQty, availableQty, trackInventory });
+      updateItem(existing.id, {
+        qty: nextQty,
+        availableQty,
+        trackInventory,
+        wholesaleProductId: product.wholesale_product_id || existing.wholesaleProductId || '',
+        isWholesaleLinked: product.is_wholesale_linked === true || existing.isWholesaleLinked === true
+      });
       updateActiveBill({ selectedItemId: existing.id });
       if (!allowNegativeStock && trackInventory && cleanRequestedQty > remainingQty) setMessage(`${product.item_code || product.name}: quantity limited to available stock (${availableQty}).`);
       return true;
@@ -1913,6 +1976,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       returnCondition: 'sellable',
       availableQty,
       trackInventory,
+      wholesaleProductId: product.wholesale_product_id || '',
+      wholesaleAvailableQty: product.wholesale_available_qty,
+      isWholesaleLinked: product.is_wholesale_linked === true,
       lineTotal: unitPrice * qty
     });
     updateActiveBill({ items: [...activeBill.items, item], selectedItemId: item.id });
@@ -2476,6 +2542,22 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       cheque_bank_name: line.chequeBankName || null
     }));
 
+    const positiveProductIds = [...new Set(itemsPayload.filter((item) => item.product_id && Number(item.qty || 0) > 0).map((item) => item.product_id))];
+    const { data: wholesaleLinks, error: wholesaleLinkError } = positiveProductIds.length
+      ? await supabase.from('retail_wholesale_product_links').select('retail_product_id, wholesale_product_id, is_enabled').in('retail_product_id', positiveProductIds).eq('is_enabled', true)
+      : { data: [], error: null };
+    const hasWholesaleItems = (wholesaleLinks || []).length > 0 || activeBill.items.some((item) => item.isWholesaleLinked && Number(item.qty || 0) > 0);
+    if (wholesaleLinkError && hasWholesaleItems) {
+      setSaving(false);
+      setMessage('Run migration 076_retail_wholesale_bridge.sql before selling Wholesale Catalog items.');
+      return;
+    }
+    if (hasWholesaleItems && (isUnconfirmed || isConfirmingUnconfirmed || isEditingInvoice || activeBill.sourceReservationId)) {
+      setSaving(false);
+      setMessage('Wholesale Catalog items must be completed as a new posted sale. They cannot be saved for review, edited through the normal invoice correction flow, or converted from a reservation.');
+      return;
+    }
+
     const rpcName = isUnconfirmed
       ? 'save_unconfirmed_sale_v63'
       : isConfirmingUnconfirmed
@@ -2488,7 +2570,27 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       : isConfirmingUnconfirmed
       ? { p_source_document_id: activeBill.sourceDocumentId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
       : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
-    let { data, error } = await supabase.rpc(rpcName, rpcArgs);
+    let data;
+    let error;
+    if (hasWholesaleItems) {
+      const bridgeResult = await supabase.functions.invoke('retail-wholesale-bridge', {
+        body: {
+          action: 'checkout',
+          transfer_id: activeBill.id,
+          payload: { header: payload, items: itemsPayload, payments: paymentPayload }
+        }
+      });
+      error = bridgeResult.error;
+      if (!error && bridgeResult.data?.success) data = bridgeResult.data.invoice;
+      else if (!error) error = { message: bridgeResult.data?.error || 'Wholesale transfer could not be completed.' };
+      if (error) {
+        setSaving(false);
+        setMessage(`${error.message}${bridgeResult.data?.pending ? ' The transfer is saved for retry; an administrator can open Pending Wholesale transfers on the POS.' : ''}`);
+        return;
+      }
+    } else {
+      ({ data, error } = await supabase.rpc(rpcName, rpcArgs));
+    }
     if (error && /save_pos_invoice_v74|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|schema cache|could not find the function/i.test(error.message || '')) {
       setSaving(false);
       setMessage(isEditingInvoice
@@ -2686,7 +2788,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               >
                 <div className="bill-card-main">
                   <strong>{item.item_code}</strong>
-                  <span>{item.name}</span>
+                  <span>{item.name}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}</span>
                   <b>{money(item.lineTotal)}</b>
                 </div>
                 <div className="bill-card-controls compact-controls">
@@ -2762,6 +2864,14 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             ))}
           </div>
 
+          {(can('manage_products') || isAdmin) && (posCategoryId === 'root' || currentCategory?.path?.startsWith('Wholesale Catalog')) && (
+            <div className="wholesale-pos-tools">
+              <div><strong>Wholesale Catalog</strong><small>Live availability; Retail selling prices stay unchanged.</small></div>
+              <button type="button" className="secondary-button" disabled={wholesaleBusy} onClick={refreshWholesaleCatalog}>{wholesaleBusy ? 'Refreshing…' : '↻ Refresh'}</button>
+              {isAdmin && <button type="button" className="secondary-button" disabled={wholesaleBusy} onClick={() => loadPendingWholesaleTransfers(true)}>Pending transfers</button>}
+            </div>
+          )}
+
           {!search.trim() && (posCategoryId === 'root' || categoryChildren.length > 0) && (
             <div className="pos-category-tiles">
               {posCategoryId !== 'root' && (
@@ -2794,6 +2904,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 >
                   <span className="pos-product-name">{product.name}</span>
                   <strong className="pos-product-price">{money(product.selling_price)}</strong>
+                  {product.is_wholesale_linked && <em className="wholesale-product-badge">Wholesale JIT · authoritative cost at sale</em>}
                   {appSettings.show_pos_stock_badges !== false && <small className={`pos-product-stock ${!trackInventory ? 'non-stock' : availableQty <= 0 ? 'empty' : availableQty <= 2 ? 'low' : ''}`}>
                     {!trackInventory ? 'Non-stock · Always available' : availableQty > 0 ? `Available: ${availableQty}` : availableQty < 0 ? `Stock: ${availableQty}` : 'No stock'}
                   </small>}
@@ -3006,6 +3117,28 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <label>Bank name (optional)<input value={chequeDraft.cheque_bank_name} onChange={(event) => setChequeDraft({ ...chequeDraft, cheque_bank_name: event.target.value })} placeholder="Bank written on cheque" /></label>
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setPendingChequePayment(null)}>Cancel</button><button className="primary-button">Add Cheque Payment</button></div>
         </form>
+      </div>}
+
+      {showWholesaleAdmin && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowWholesaleAdmin(false); }}>
+        <div className="modal-card wholesale-pending-modal">
+          <div className="section-title-row">
+            <div><h3>Pending Wholesale transfers</h3><p>Safe retries reuse the original idempotency key. If Wholesale already posted, only the Retail step is retried.</p></div>
+            <button type="button" className="secondary-button" onClick={() => setShowWholesaleAdmin(false)}>Close</button>
+          </div>
+          {pendingWholesaleTransfers.length === 0 ? <div className="muted-box">No pending Wholesale integrations.</div> : (
+            <div className="table-wrap"><table><thead><tr><th>Retail sale</th><th>Status</th><th>Next step</th><th>Wholesale invoice</th><th>Operator</th><th>Error</th><th /></tr></thead><tbody>
+              {pendingWholesaleTransfers.map((transfer) => <tr key={transfer.id}>
+                <td><strong>{transfer.retail_sale_reference}</strong><small>{fmtDate(transfer.updated_at)}</small></td>
+                <td><span className={`wholesale-status ${transfer.status}`}>{String(transfer.status || '').replaceAll('_',' ')}</span></td>
+                <td>{String(transfer.next_step || '').replaceAll('_',' ')}</td>
+                <td>{transfer.wholesale_document_no || 'Not posted yet'}</td>
+                <td>{transfer.requested_by || '-'}</td>
+                <td className="wholesale-error-cell">{transfer.last_error || '-'}</td>
+                <td><button type="button" className="primary-button" disabled={wholesaleBusy} onClick={() => retryWholesaleTransfer(transfer.id)}>Retry</button></td>
+              </tr>)}
+            </tbody></table></div>
+          )}
+        </div>
       </div>}
     </section>
   );

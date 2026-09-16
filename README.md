@@ -113,6 +113,23 @@ Run `supabase/sql/074_inventory_conditions_reservations_consignment_dashboard.sq
 
 Run `supabase/sql/075_edit_party_payments_documents_ui.sql` after migration 074. Customer and supplier payment documents can then be corrected from **Documents → Edit** when an amount, direction, payment account, note, or cheque detail was entered incorrectly. The correction reverses the old party-balance effect and reapplies the corrected payment while keeping payment-account balances, operational cashflow rules, daily-register totals, cheque records, staff audit and double-entry accounting synchronized.
 
+## Wholesale → Retail POS bridge
+
+Run `supabase/sql/076_retail_wholesale_bridge.sql` after migration 075. It adds the separate **Wholesale Catalog** POS folder, Wholesale UUID-to-Retail product links, server-authoritative availability/cost handling, and a durable transfer outbox. A mixed Retail bill can contain normal Retail stock and Wholesale Catalog items. At checkout the Retail Edge Function refreshes availability, posts one idempotent Wholesale credit sale, creates a linked Retail credit purchase from **Gatronix Wholesale**, and posts the normal customer invoice in one Retail transaction. The Retail selling price is never overwritten by catalog refresh or automatic receiving.
+
+Configure the same strong shared secret that was installed in the Wholesale project, but store it only as a Retail Supabase Edge Function secret:
+
+```text
+npx supabase login
+npx supabase link --project-ref yugacztwnailrrgfcnje
+npx supabase secrets set RETAIL_BRIDGE_SHARED_SECRET=YOUR_SHARED_SECRET
+npx supabase functions deploy retail-wholesale-bridge
+```
+
+Do not use `--no-verify-jwt` for the Retail coordinator: the Retail React app invokes it with the current signed-in session. Never add the bridge secret or either service-role key to `.env`, a `VITE_*` variable, Cloudflare frontend settings, React code, or browser storage.
+
+After deployment, an administrator or staff member with Product-management permission can open POS and choose **Wholesale Catalog → Refresh**. A Retail selling price can then be edited normally and later refreshes preserve it. If Wholesale posts successfully but the Retail transaction fails, the POS keeps the same idempotency key; an administrator can open **Pending transfers** beside the Wholesale Catalog controls and safely retry only the unfinished step.
+
 The reset requires the exact phrase `RESET SHOP DATA` and creates a manual safety backup before it clears products, stock, customers, suppliers, documents, cashflow, warranties, online orders, accounting activity and saved assistant conversations. It preserves staff/admin accounts, PINs, trusted devices, permissions, company/application/printing settings, payment methods, online-store settings and assistant supplier knowledge. At least one active administrator must remain.
 
 Uploaded storefront image files are retained in Supabase Storage so the safety backup can restore their product links. Remove orphaned files separately only after the reset has been checked and the safety backup is no longer needed.
