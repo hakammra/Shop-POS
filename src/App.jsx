@@ -285,6 +285,19 @@ function safeReadJson(key, fallback) {
   }
 }
 
+function resetEmptyPosDraftCustomers() {
+  const saved = safeReadJson(POS_DRAFTS_KEY, null);
+  if (!Array.isArray(saved?.bills) || !saved.bills.length) return;
+  let changed = false;
+  const bills = saved.bills.map((bill) => {
+    if (Array.isArray(bill.items) && bill.items.length > 0) return bill;
+    if (!bill.customerId && !bill.customerName && bill.useExistingCustomerCredit !== true) return bill;
+    changed = true;
+    return { ...bill, customerId: '', customerName: '', useExistingCustomerCredit: false };
+  });
+  if (changed) window.localStorage.setItem(POS_DRAFTS_KEY, JSON.stringify({ ...saved, bills }));
+}
+
 function documentDraftKey(tabId) {
   return `computer_shop_document_draft_${tabId}`;
 }
@@ -580,6 +593,7 @@ function PosApplication() {
       return;
     }
     setSecurityState(data || {});
+    if (!activeStaff && data?.active_staff) resetEmptyPosDraftCustomers();
     setActiveStaff(data?.active_staff || null);
   }
 
@@ -751,6 +765,7 @@ function PosApplication() {
         deviceToken={deviceToken}
         onRefresh={loadSecurityState}
         onUnlocked={(staff) => {
+          resetEmptyPosDraftCustomers();
           setActiveStaff(staff);
           setSecurityState((current) => ({ ...(current || {}), active_staff: staff }));
         }}
@@ -1457,6 +1472,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [isResizingPos, setIsResizingPos] = useState(false);
   const [mobilePosPanel, setMobilePosPanel] = useState('products');
   const [wholesaleBusy, setWholesaleBusy] = useState(false);
+  const [wholesaleProductCount, setWholesaleProductCount] = useState(0);
   const [showWholesaleAdmin, setShowWholesaleAdmin] = useState(false);
   const [pendingWholesaleTransfers, setPendingWholesaleTransfers] = useState([]);
 
@@ -1501,15 +1517,19 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const amountToSettleCurrentBill = Math.max(Math.abs(roundMoney(total)) - balanceUsedForCurrentBill, 0);
 
   const categoryChildren = useMemo(() => {
-    if (posCategoryId === 'assemblies') return [];
+    if (posCategoryId === 'assemblies' || posCategoryId === 'wholesale-catalog') return [];
     return categories
-      .filter((cat) => (posCategoryId === 'root' ? !cat.parent_id : cat.parent_id === posCategoryId))
+      .filter((cat) => {
+        if (posCategoryId !== 'root') return cat.parent_id === posCategoryId;
+        return !cat.parent_id && (cat.path || cat.name || '').trim().toLowerCase() !== 'wholesale catalog';
+      })
       .sort((a, b) => categoryDisplayName(a).localeCompare(categoryDisplayName(b)));
   }, [categories, posCategoryId]);
 
   const currentCategory = categories.find((cat) => cat.id === posCategoryId);
   const breadcrumb = useMemo(() => {
     if (posCategoryId === 'assemblies') return [{ id: 'root', name: 'Products' }, { id: 'assemblies', name: 'PC Assemblies' }];
+    if (posCategoryId === 'wholesale-catalog') return [{ id: 'root', name: 'Products' }, { id: 'wholesale-catalog', name: 'Wholesale Catalog' }];
     if (posCategoryId === 'root') return [{ id: 'root', name: 'Products' }];
     const names = (currentCategory?.path || currentCategory?.name || '').split('/').filter(Boolean);
     const crumbs = [{ id: 'root', name: 'Products' }];
@@ -1525,6 +1545,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   useEffect(() => {
     loadCategories();
     loadPosAssemblies();
+    loadWholesaleProductCount();
     loadCustomers();
     loadPaymentMethods();
     fetchCompanySettings().then(setCompanySettings).catch(() => {});
@@ -1538,6 +1559,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   });
   useRealtimeRefresh(['retail_wholesale_product_links'], () => {
     productSearchCacheRef.current.clear();
+    loadWholesaleProductCount();
     loadProducts({ force: true });
   });
   useRealtimeRefresh(['documents', 'document_items', 'customers', 'cashflow_entries'], () => {
@@ -1729,9 +1751,12 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
       if (clean) {
         query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
-      } else if (posCategoryId === 'uncategorized') {
+      }
+      if (posCategoryId === 'wholesale-catalog') {
+        query = query.eq('is_wholesale_linked', true).eq('wholesale_link_enabled', true);
+      } else if (!clean && posCategoryId === 'uncategorized') {
         query = query.is('category_id', null);
-      } else {
+      } else if (!clean) {
         query = query.eq('category_id', posCategoryId);
       }
       return query;
@@ -1774,6 +1799,14 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     setPaymentMethods((data || []).filter((method) => !method.name.toLowerCase().includes('store credit')));
   }
 
+  async function loadWholesaleProductCount() {
+    const { count, error } = await supabase
+      .from('retail_wholesale_product_links')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_enabled', true);
+    if (!error) setWholesaleProductCount(count || 0);
+  }
+
   async function refreshWholesaleCatalog() {
     if (!can('manage_products')) { setMessage('Product-management permission required.'); return; }
     setWholesaleBusy(true); setMessage('');
@@ -1785,6 +1818,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     } else {
       productSearchCacheRef.current.clear();
       await loadCategories();
+      await loadWholesaleProductCount();
       await loadProducts({ force: true });
       setMessage(`Wholesale Catalog refreshed: ${data.catalog?.products || 0} products.`);
     }
@@ -2864,7 +2898,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             ))}
           </div>
 
-          {(can('manage_products') || isAdmin) && (posCategoryId === 'root' || currentCategory?.path?.startsWith('Wholesale Catalog')) && (
+          {(can('manage_products') || isAdmin) && (posCategoryId === 'root' || posCategoryId === 'wholesale-catalog' || currentCategory?.path?.startsWith('Wholesale Catalog')) && (
             <div className="wholesale-pos-tools">
               <div><strong>Wholesale Catalog</strong><small>Live availability; Retail selling prices stay unchanged.</small></div>
               <button type="button" className="secondary-button" disabled={wholesaleBusy} onClick={refreshWholesaleCatalog}>{wholesaleBusy ? 'Refreshing…' : '↻ Refresh'}</button>
@@ -2883,6 +2917,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                   <small>{category.path}</small>
                 </button>
               ))}
+              {posCategoryId === 'root' && <button className="pos-category-tile wholesale-category-tile" onClick={() => { setSearch(''); setPosCategoryId('wholesale-catalog'); }}><strong>Wholesale Catalog</strong><small>Synced stock · {wholesaleProductCount} products</small></button>}
               {posCategoryId === 'root' && <button className="pos-category-tile assembly-category-tile" onClick={() => { setSearch(''); setPosCategoryId('assemblies'); }}><strong>PC Assemblies</strong><small>Complete builds · {assemblies.length} templates</small></button>}
             </div>
           )}
@@ -2897,7 +2932,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               return (
                 <button
                   key={product.product_id}
-                  className={`product-result product-tile ${unavailable ? 'no-stock-tile' : ''} ${!trackInventory ? 'non-stock-tile' : ''}`}
+                  className={`product-result product-tile ${product.is_wholesale_linked ? 'wholesale-product-tile' : ''} ${unavailable ? 'no-stock-tile' : ''} ${!trackInventory ? 'non-stock-tile' : ''}`}
                   disabled={unavailable}
                   onClick={() => openPosProductPicker(product)}
                   title={`${product.name} · ${money(product.selling_price)} · ${trackInventory ? (availableQty > 0 ? `Available ${availableQty}` : 'No stock') : 'Non-stock item'}`}
@@ -2912,7 +2947,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               );
             })}
             {products.length === 0 && visiblePosAssemblies.length === 0 && search.trim() && <div className="muted-box">No matching products or assemblies.</div>}
-            {products.length === 0 && posCategoryId !== 'assemblies' && !search.trim() && categoryChildren.length === 0 && <div className="muted-box">No products inside this category.</div>}
+            {products.length === 0 && posCategoryId !== 'assemblies' && !search.trim() && categoryChildren.length === 0 && <div className="muted-box">{posCategoryId === 'wholesale-catalog' ? 'No enabled Wholesale Catalog products. Refresh the catalog and try again.' : 'No products inside this category.'}</div>}
             {posCategoryId === 'assemblies' && !visiblePosAssemblies.length && <div className="muted-box">No active PC assemblies. Create one from Products → PC Assemblies.</div>}
           </div>
         </div>
@@ -7876,7 +7911,8 @@ function markupPercent(cost, price) {
 function priceFromMarkup(cost, markup) {
   const c = numberValue(cost);
   const m = numberValue(markup);
-  return c + (c * m / 100);
+  const calculated = c + (c * m / 100);
+  return calculated > 0 ? Math.ceil((calculated - 0.0000001) / 50) * 50 : 0;
 }
 
 function formatPercent(value) {

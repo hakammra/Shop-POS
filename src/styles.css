@@ -2730,6 +2730,19 @@ tr.selected-row td {
 }
 .assembly-list-table { max-height: 520px; }
 .assembly-category-tile { border-color: rgba(40, 169, 230, .7) !important; background: rgba(40, 169, 230, .12) !important; }
+.wholesale-category-tile {
+  border-color: rgba(46, 190, 170, .62) !important;
+  background: linear-gradient(145deg, rgba(35, 128, 116, .18), rgba(36, 78, 76, .1)) !important;
+}
+.wholesale-category-tile:hover { border-color: rgba(82, 225, 204, .9) !important; background: rgba(38, 137, 123, .22) !important; }
+.pos-product-tiles .product-tile.wholesale-product-tile {
+  border-color: rgba(46, 190, 170, .48);
+  background: linear-gradient(145deg, rgba(40, 91, 85, .32), #2d3030);
+}
+.pos-product-tiles .product-tile.wholesale-product-tile:hover:not(:disabled) {
+  border-color: rgba(82, 225, 204, .9);
+  background: linear-gradient(145deg, rgba(42, 112, 102, .42), #333837);
+}
 .pos-assembly-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
