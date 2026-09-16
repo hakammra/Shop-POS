@@ -1526,6 +1526,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       .sort((a, b) => categoryDisplayName(a).localeCompare(categoryDisplayName(b)));
   }, [categories, posCategoryId]);
 
+  const wholesaleRootCategory = useMemo(() => categories.find((cat) => (
+    !cat.parent_id && (cat.path || cat.name || '').trim().toLowerCase() === 'wholesale catalog'
+  )) || null, [categories]);
   const currentCategory = categories.find((cat) => cat.id === posCategoryId);
   const breadcrumb = useMemo(() => {
     if (posCategoryId === 'assemblies') return [{ id: 'root', name: 'Products' }, { id: 'assemblies', name: 'PC Assemblies' }];
@@ -2898,9 +2901,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             ))}
           </div>
 
-          {(can('manage_products') || isAdmin) && (posCategoryId === 'root' || posCategoryId === 'wholesale-catalog' || currentCategory?.path?.startsWith('Wholesale Catalog')) && (
-            <div className="wholesale-pos-tools">
-              <div><strong>Wholesale Catalog</strong><small>Live availability; Retail selling prices stay unchanged.</small></div>
+          {(can('manage_products') || isAdmin) && (posCategoryId === 'wholesale-catalog' || currentCategory?.path?.startsWith('Wholesale Catalog')) && (
+            <div className="wholesale-pos-tools compact-wholesale-tools">
+              <div><strong>Wholesale tools</strong><small>Live availability</small></div>
               <button type="button" className="secondary-button" disabled={wholesaleBusy} onClick={refreshWholesaleCatalog}>{wholesaleBusy ? 'Refreshing…' : '↻ Refresh'}</button>
               {isAdmin && <button type="button" className="secondary-button" disabled={wholesaleBusy} onClick={() => loadPendingWholesaleTransfers(true)}>Pending transfers</button>}
             </div>
@@ -2917,7 +2920,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                   <small>{category.path}</small>
                 </button>
               ))}
-              {posCategoryId === 'root' && <button className="pos-category-tile wholesale-category-tile" onClick={() => { setSearch(''); setPosCategoryId('wholesale-catalog'); }}><strong>Wholesale Catalog</strong><small>Synced stock · {wholesaleProductCount} products</small></button>}
+              {posCategoryId === 'root' && <button className="pos-category-tile wholesale-category-tile" onClick={() => { setSearch(''); setPosCategoryId(wholesaleRootCategory?.id || 'wholesale-catalog'); }}><strong>Wholesale Catalog</strong><small>Synced stock · {wholesaleProductCount} products</small></button>}
               {posCategoryId === 'root' && <button className="pos-category-tile assembly-category-tile" onClick={() => { setSearch(''); setPosCategoryId('assemblies'); }}><strong>PC Assemblies</strong><small>Complete builds · {assemblies.length} templates</small></button>}
             </div>
           )}

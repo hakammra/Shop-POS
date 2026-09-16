@@ -1556,6 +1556,17 @@ tr.selected-row td {
 .wholesale-pos-tools > div { display: grid; gap: 2px; margin-right: auto; }
 .wholesale-pos-tools small { color: var(--muted); }
 .wholesale-pos-tools button { min-height: 36px; padding: 7px 11px; }
+.compact-wholesale-tools {
+  justify-self: end;
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 5px 6px 5px 9px;
+}
+.compact-wholesale-tools > div { line-height: 1.05; }
+.compact-wholesale-tools > div strong { font-size: 12px; }
+.compact-wholesale-tools > div small { font-size: 9px; }
+.compact-wholesale-tools button { min-height: 30px; padding: 5px 8px; font-size: 11px; }
 .pos-product-tiles {
   max-height: 460px;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
