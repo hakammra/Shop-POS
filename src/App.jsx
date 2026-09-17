@@ -8308,7 +8308,25 @@ function ProductsPage({ assistantTarget = null } = {}) {
     setError('');
     const nextForm = emptyProductForm(selectedCategoryId);
     const { data, error: codeError } = await supabase.rpc('next_product_code');
-    if (!codeError && data) nextForm.item_code = data;
+    if (!codeError && data) {
+      nextForm.item_code = String(data);
+    } else {
+      const { data: codeRows, error: fallbackError } = await supabase
+        .from('products')
+        .select('item_code')
+        .limit(10000);
+      if (fallbackError) {
+        setError(`Could not assign the next item code: ${fallbackError.message}`);
+      } else {
+        const highestCode = (codeRows || []).reduce((highest, row) => {
+          const numericCode = String(row.item_code || '').replace(/\D/g, '');
+          if (!numericCode) return highest;
+          const parsedCode = Number(numericCode);
+          return Number.isSafeInteger(parsedCode) ? Math.max(highest, parsedCode) : highest;
+        }, 0);
+        nextForm.item_code = String(highestCode + 1);
+      }
+    }
     setForm(nextForm);
     setShowForm(true);
   }
@@ -8625,14 +8643,14 @@ function ProductsPage({ assistantTarget = null } = {}) {
                 <button className="secondary-button" onClick={() => setShowForm(false)}>Close</button>
               </div>
               <form className="product-form-grid" onSubmit={saveProduct}>
-                <label>Name<input value={form.name} onFocus={selectAllText} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
+                <label className="product-name-field">Name<input value={form.name} onFocus={selectAllText} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
                 <label>Category
                   <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
                     <option value="">No category</option>
                     {categories.map((cat) => <option key={cat.id} value={cat.id}>{categoryDisplayName(cat)}</option>)}
                   </select>
                 </label>
-                <label>SKU / Code<input value={form.item_code} onFocus={selectAllText} onChange={(e) => setForm({ ...form, item_code: e.target.value })} required /></label>
+                <label>Item code · automatic<input value={form.item_code} readOnly={!editingProduct} title={!editingProduct ? 'Automatically assigned from the highest existing item code' : 'Existing item code'} onFocus={selectAllText} onChange={(e) => setForm({ ...form, item_code: e.target.value })} required /></label>
                 <label>Barcode optional<input value={form.barcode} onFocus={selectAllText} onChange={(e) => setForm({ ...form, barcode: e.target.value })} /></label>
                 <label>Cost
                   <input type="number" step="0.01" value={form.avg_cost} onFocus={selectAllText} onChange={(e) => {

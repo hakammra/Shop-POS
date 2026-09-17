@@ -761,6 +761,8 @@ tr:hover td { background: #303030; }
   grid-template-columns: repeat(4, minmax(160px, 1fr));
   gap: 12px;
 }
+.product-form-grid .product-name-field { grid-column: 1 / -1; }
+.product-form-grid .product-name-field input { font-size: 15px; }
 .product-form-grid .form-note {
   grid-column: span 3;
   color: var(--muted);
