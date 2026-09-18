@@ -105,6 +105,103 @@ label input, label select, label textarea { margin-top: 6px; }
   font-weight: 700;
 }
 
+/* v78: ordered payments, clearer product origins, and denser POS controls */
+.product-origin-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  margin: 3px 0 0 6px;
+  padding: 2px 7px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.product-origin-badge.compact { padding: 1px 5px; font-size: 9px; }
+.product-origin-badge.wholesale { border-color: rgba(74, 213, 193, .55); background: rgba(38, 137, 123, .17); color: #8ce6d9; }
+.product-origin-badge.consignment { border-color: rgba(224, 174, 66, .62); background: rgba(151, 105, 14, .18); color: #ffd77d; }
+.consignment-category-tile {
+  border-color: rgba(224, 174, 66, .62) !important;
+  background: linear-gradient(145deg, rgba(151, 105, 14, .18), rgba(70, 58, 31, .1)) !important;
+}
+.consignment-category-tile:hover { border-color: rgba(255, 207, 103, .9) !important; background: rgba(151, 105, 14, .24) !important; }
+.pos-product-tiles .product-tile.consignment-product-result,
+.cod-product-results button.consignment-product-result,
+.assembly-component-results button.consignment-product-result,
+.condition-product-picker button.consignment-product-result,
+.adjustment-product-list button.consignment-product-result,
+.tree-product-item.consignment-product-result {
+  border-color: rgba(224, 174, 66, .5);
+  background: linear-gradient(145deg, rgba(115, 84, 24, .22), #2d2d2d);
+}
+.tree-product-item.wholesale-product-result,
+.cod-product-results button.wholesale-product-result,
+.assembly-component-results button.wholesale-product-result,
+.condition-product-picker button.wholesale-product-result,
+.adjustment-product-list button.wholesale-product-result {
+  border-color: rgba(74, 213, 193, .46);
+  background: linear-gradient(145deg, rgba(38, 137, 123, .17), #292d2c);
+}
+.pos-bill-card.consignment-cart-line { border-left: 3px solid #d6a83f; }
+.pos-product-tiles .product-tile.no-stock-tile,
+.pos-product-tiles .product-tile.no-stock-tile:hover {
+  border-color: #454b4e !important;
+  background: #292b2c !important;
+  opacity: .44;
+  filter: saturate(.45);
+}
+.pos-product-tiles .product-tile.no-stock-tile small,
+.pos-product-tiles .product-tile.no-stock-tile em { color: #a4adb1 !important; border-color: #596166; background: transparent; }
+
+.quick-supplier-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.quick-supplier-grid label { display: grid; gap: 5px; }
+.quick-supplier-grid .wide-field { grid-column: 1 / -1; }
+.payment-layout-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.payment-layout-heading h3, .payment-layout-heading p { margin: 0; }
+.payment-layout-heading p { margin-top: 3px; color: var(--muted); }
+.payment-order-buttons { display: flex; gap: 4px; }
+.payment-order-buttons .small-button { min-width: 32px; padding: 5px 8px; }
+.payment-quick-check { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px; }
+
+@media (min-width: 1101px) {
+  .pos-command-bar { grid-template-columns: minmax(350px, .8fr) minmax(520px, 1.2fr); }
+  .sale-command-group .pos-action { flex-basis: 105px; }
+  .payment-command-group .pos-command-buttons { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); }
+  .payment-command-group .pos-action,
+  .payment-command-group .payment-main-action { min-width: 0; width: 100%; }
+  .pos-page-v16 .pos-bill-card.compact { padding: 10px; }
+  .pos-page-v16 .bill-card-main { grid-template-columns: 78px minmax(0, 1fr) 126px; gap: 9px; margin-bottom: 9px; font-size: 15px; }
+  .pos-page-v16 .bill-card-main span { font-size: 15px; }
+  .pos-page-v16 .bill-card-main b { font-size: 16px; }
+  .pos-page-v16 .bill-card-controls { gap: 7px; }
+  .pos-page-v16 .bill-card-controls label { font-size: 12px; }
+  .pos-page-v16 .bill-card-controls input,
+  .pos-page-v16 .bill-card-controls select { min-height: 36px; padding: 7px 8px; font-size: 14px; }
+}
+
+@media (max-width: 760px) {
+  .documents-screen .document-quick-filters {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    justify-content: start;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+  }
+  .quick-supplier-grid { grid-template-columns: 1fr; }
+  .quick-supplier-grid .wide-field { grid-column: auto; }
+  .payment-layout-heading { align-items: stretch; flex-direction: column; }
+}
+
 /* v74: inventory condition, reservation, consignment, and responsive profit dashboard */
 .status-pill.consignment-stock { border-color: #a47a39; background: #4a371d; color: #ffd58d; }
 .reservation-advance-panel { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(130px, .35fr) minmax(210px, .55fr); align-items: end; gap: 12px; margin-top: 12px; border-left: 3px solid #dcae43; }
@@ -1629,14 +1726,14 @@ tr.selected-row td {
   white-space: nowrap;
 }
 .pos-product-stock.low {
-  border-color: rgba(255, 193, 7, .32);
-  background: rgba(255, 193, 7, .10);
-  color: #ffd071 !important;
+  border-color: rgba(239, 83, 80, .48);
+  background: rgba(177, 42, 42, .16);
+  color: #ff9d9b !important;
 }
 .pos-product-stock.empty {
-  border-color: rgba(255, 193, 7, .28);
-  background: rgba(255, 193, 7, .10);
-  color: #ffc766 !important;
+  border-color: rgba(154, 164, 170, .24);
+  background: rgba(112, 122, 128, .08);
+  color: #9ea8ad !important;
 }
 .pos-product-tiles .product-tile:disabled { cursor: not-allowed; }
 
@@ -6315,4 +6412,21 @@ body.pos-resizing {
 @media (max-width: 430px) {
   .dashboard-primary-stats.dashboard-financial-stats { grid-template-columns: 1fr; }
   .dashboard-financial-stats .dashboard-metric { min-height: 96px; }
+}
+
+/* Keep v78 POS sizing after the older viewport-specific POS rules. */
+@media (min-width: 1101px) {
+  .pos-page-v16 .pos-command-bar { grid-template-columns: minmax(350px, .8fr) minmax(520px, 1.2fr); }
+  .pos-page-v16 .sale-command-group .pos-action { flex-basis: 105px; }
+  .pos-page-v16 .payment-command-group .pos-command-buttons { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); }
+  .pos-page-v16 .payment-command-group .pos-action,
+  .pos-page-v16 .payment-command-group .payment-main-action { min-width: 0; width: 100%; }
+  .pos-page-v16 .pos-bill-card.compact { padding: 10px; }
+  .pos-page-v16 .bill-card-main { grid-template-columns: 78px minmax(0, 1fr) 126px; gap: 9px; margin-bottom: 9px; font-size: 15px; }
+  .pos-page-v16 .bill-card-main span { font-size: 15px; }
+  .pos-page-v16 .bill-card-main b { font-size: 16px; }
+  .pos-page-v16 .bill-card-controls { gap: 7px; }
+  .pos-page-v16 .bill-card-controls label { font-size: 12px; }
+  .pos-page-v16 .bill-card-controls input,
+  .pos-page-v16 .bill-card-controls select { min-height: 36px; padding: 7px 8px; font-size: 14px; }
 }

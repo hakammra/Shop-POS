@@ -336,8 +336,30 @@ const DEFAULT_APP_SETTINGS = {
   confirm_pos_sale: false,
   minimum_profit_percent: 5,
   default_payment_method_id: '',
+  pos_quick_payment_method_ids: [],
   updated_at: null
 };
+
+function sortPaymentMethods(rows = []) {
+  return [...rows].sort((a, b) => {
+    const orderDifference = numberValue(a.display_order, 1000) - numberValue(b.display_order, 1000);
+    return orderDifference || String(a.name || '').localeCompare(String(b.name || ''));
+  });
+}
+
+function productOriginClass(product = {}) {
+  return [
+    product.is_wholesale_linked === true ? 'wholesale-product-result' : '',
+    product.inventory_ownership === 'consignment' ? 'consignment-product-result' : ''
+  ].filter(Boolean).join(' ');
+}
+
+function ProductOriginBadges({ product, compact = false }) {
+  return <>
+    {product?.is_wholesale_linked === true && <em className={`product-origin-badge wholesale ${compact ? 'compact' : ''}`}>Wholesale</em>}
+    {product?.inventory_ownership === 'consignment' && <em className={`product-origin-badge consignment ${compact ? 'compact' : ''}`}>Consignment</em>}
+  </>;
+}
 
 function companyLogoUrl(settings) {
   if (!settings?.logo_path) return APP_LOGO_URL;
@@ -354,7 +376,12 @@ async function fetchCompanySettings() {
 async function fetchAppSettings() {
   const { data, error } = await supabase.rpc('get_app_settings_v41');
   if (error) throw error;
-  return { ...DEFAULT_APP_SETTINGS, ...(data || {}), default_payment_method_id: data?.default_payment_method_id || '' };
+  return {
+    ...DEFAULT_APP_SETTINGS,
+    ...(data || {}),
+    default_payment_method_id: data?.default_payment_method_id || '',
+    pos_quick_payment_method_ids: Array.isArray(data?.pos_quick_payment_method_ids) ? data.pos_quick_payment_method_ids : []
+  };
 }
 
 function fmtDate(value) {
@@ -766,8 +793,9 @@ function PosApplication() {
         onRefresh={loadSecurityState}
         onUnlocked={(staff) => {
           resetEmptyPosDraftCustomers();
-          setActiveStaff(staff);
-          setSecurityState((current) => ({ ...(current || {}), active_staff: staff }));
+          // Reload business data after every PIN login. POS drafts are persisted
+          // in localStorage and are restored automatically after this refresh.
+          window.location.reload();
         }}
         onLogout={() => supabase.auth.signOut({ scope: 'local' })}
       />
@@ -1473,20 +1501,22 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [mobilePosPanel, setMobilePosPanel] = useState('products');
   const [wholesaleBusy, setWholesaleBusy] = useState(false);
   const [wholesaleProductCount, setWholesaleProductCount] = useState(0);
+  const [consignmentProductCount, setConsignmentProductCount] = useState(0);
   const [showWholesaleAdmin, setShowWholesaleAdmin] = useState(false);
   const [pendingWholesaleTransfers, setPendingWholesaleTransfers] = useState([]);
+  const wholesaleRefreshAtRef = useRef(Number(window.localStorage.getItem('shop_pos_wholesale_catalog_refreshed_at') || 0));
 
   const activeBill = bills.find((bill) => bill.id === activeBillId) || bills[0] || emptyBill();
   const selectedCustomer = customers.find((row) => row.id === activeBill.customerId);
-  const visiblePaymentMethods = paymentMethods
+  const visiblePaymentMethods = sortPaymentMethods(paymentMethods
     .filter((method) => (
       !method.name.toLowerCase().includes('store credit')
       && (selectedCustomer || method.is_paid_method !== false)
-    ))
+    )))
     .sort((a, b) => {
       if (a.id === appSettings.default_payment_method_id) return -1;
       if (b.id === appSettings.default_payment_method_id) return 1;
-      return a.name.localeCompare(b.name);
+      return 0;
     });
   const storedCustomerOutstanding = selectedCustomer ? numberValue(selectedCustomer.due_balance) - numberValue(selectedCustomer.store_credit_balance) : 0;
   const currentOutstanding = selectedCustomer
@@ -1517,7 +1547,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const amountToSettleCurrentBill = Math.max(Math.abs(roundMoney(total)) - balanceUsedForCurrentBill, 0);
 
   const categoryChildren = useMemo(() => {
-    if (posCategoryId === 'assemblies' || posCategoryId === 'wholesale-catalog') return [];
+    if (['assemblies', 'wholesale-catalog', 'consignment-catalog'].includes(posCategoryId)) return [];
     return categories
       .filter((cat) => {
         if (posCategoryId !== 'root') return cat.parent_id === posCategoryId;
@@ -1533,6 +1563,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const breadcrumb = useMemo(() => {
     if (posCategoryId === 'assemblies') return [{ id: 'root', name: 'Products' }, { id: 'assemblies', name: 'PC Assemblies' }];
     if (posCategoryId === 'wholesale-catalog') return [{ id: 'root', name: 'Products' }, { id: 'wholesale-catalog', name: 'Wholesale Catalog' }];
+    if (posCategoryId === 'consignment-catalog') return [{ id: 'root', name: 'Products' }, { id: 'consignment-catalog', name: 'Consignment Items' }];
     if (posCategoryId === 'root') return [{ id: 'root', name: 'Products' }];
     const names = (currentCategory?.path || currentCategory?.name || '').split('/').filter(Boolean);
     const crumbs = [{ id: 'root', name: 'Products' }];
@@ -1549,9 +1580,11 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     loadCategories();
     loadPosAssemblies();
     loadWholesaleProductCount();
+    loadConsignmentProductCount();
     loadCustomers();
     loadPaymentMethods();
     fetchCompanySettings().then(setCompanySettings).catch(() => {});
+    refreshWholesaleCatalog({ silent: true, onlyIfStale: true });
   }, []);
 
   useRealtimeRefresh(['products', 'stock_balances', 'stock_movements', 'categories', 'product_assemblies', 'product_assembly_items'], () => {
@@ -1559,6 +1592,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     productSearchCacheRef.current.clear();
     loadProducts({ force: true });
     loadPosAssemblies();
+    loadConsignmentProductCount();
   });
   useRealtimeRefresh(['retail_wholesale_product_links'], () => {
     productSearchCacheRef.current.clear();
@@ -1757,6 +1791,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       }
       if (posCategoryId === 'wholesale-catalog') {
         query = query.eq('is_wholesale_linked', true).eq('wholesale_link_enabled', true);
+      } else if (posCategoryId === 'consignment-catalog') {
+        query = query.eq('inventory_ownership', 'consignment');
       } else if (!clean && posCategoryId === 'uncategorized') {
         query = query.is('category_id', null);
       } else if (!clean) {
@@ -1799,7 +1835,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage(error.message);
       return;
     }
-    setPaymentMethods((data || []).filter((method) => !method.name.toLowerCase().includes('store credit')));
+    setPaymentMethods(sortPaymentMethods((data || []).filter((method) => !method.name.toLowerCase().includes('store credit'))));
   }
 
   async function loadWholesaleProductCount() {
@@ -1810,20 +1846,33 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     if (!error) setWholesaleProductCount(count || 0);
   }
 
-  async function refreshWholesaleCatalog() {
-    if (!can('manage_products')) { setMessage('Product-management permission required.'); return; }
-    setWholesaleBusy(true); setMessage('');
+  async function loadConsignmentProductCount() {
+    const { count, error } = await supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_active', true)
+      .eq('inventory_ownership', 'consignment');
+    if (!error) setConsignmentProductCount(count || 0);
+  }
+
+  async function refreshWholesaleCatalog({ silent = false, onlyIfStale = false } = {}) {
+    if (wholesaleBusy || (!can('pos_sales') && !can('manage_products'))) return;
+    if (onlyIfStale && Date.now() - wholesaleRefreshAtRef.current < 5 * 60 * 1000) return;
+    setWholesaleBusy(true);
+    if (!silent) setMessage('');
     const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
       body: { action: 'refresh_catalog' }
     });
     if (error || !data?.success) {
-      setMessage(data?.error || error?.message || 'Wholesale catalog refresh failed.');
+      if (!silent) setMessage(data?.error || error?.message || 'Wholesale catalog refresh failed.');
     } else {
+      wholesaleRefreshAtRef.current = Date.now();
+      window.localStorage.setItem('shop_pos_wholesale_catalog_refreshed_at', String(wholesaleRefreshAtRef.current));
       productSearchCacheRef.current.clear();
       await loadCategories();
       await loadWholesaleProductCount();
       await loadProducts({ force: true });
-      setMessage(`Wholesale Catalog refreshed: ${data.catalog?.products || 0} products.`);
+      if (!silent) setMessage(`Wholesale Catalog refreshed: ${data.catalog?.products || 0} products.`);
     }
     setWholesaleBusy(false);
   }
@@ -1993,7 +2042,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         availableQty,
         trackInventory,
         wholesaleProductId: product.wholesale_product_id || existing.wholesaleProductId || '',
-        isWholesaleLinked: product.is_wholesale_linked === true || existing.isWholesaleLinked === true
+        isWholesaleLinked: product.is_wholesale_linked === true || existing.isWholesaleLinked === true,
+        inventoryOwnership: product.inventory_ownership || existing.inventoryOwnership || 'owned'
       });
       updateActiveBill({ selectedItemId: existing.id });
       if (!allowNegativeStock && trackInventory && cleanRequestedQty > remainingQty) setMessage(`${product.item_code || product.name}: quantity limited to available stock (${availableQty}).`);
@@ -2016,6 +2066,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       wholesaleProductId: product.wholesale_product_id || '',
       wholesaleAvailableQty: product.wholesale_available_qty,
       isWholesaleLinked: product.is_wholesale_linked === true,
+      inventoryOwnership: product.inventory_ownership || 'owned',
       lineTotal: unitPrice * qty
     });
     updateActiveBill({ items: [...activeBill.items, item], selectedItemId: item.id });
@@ -2534,9 +2585,19 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     const refundOut = linesForSave.filter((line) => line.direction === 'out' && line.isPaidMethod !== false).reduce((sum, line) => sum + Number(line.amount || 0), 0);
     const creditUsed = linesForSave.some((line) => line.isPaidMethod === false);
     const resultingOutstanding = currentOutstanding + total - paidIn + refundOut;
-    const requiresCustomer = total < 0 || creditUsed || Math.abs(resultingOutstanding) > 0.005 || Math.abs(currentOutstanding) > 0.005;
+    // A walk-in return is safe when the exact refund is paid out now. A named
+    // profile is still mandatory whenever a balance or credit would remain.
+    const fullySettledWalkInRefund = total < 0
+      && !creditUsed
+      && Math.abs(refundOut - Math.abs(total)) <= 0.005
+      && paidIn <= 0.005
+      && Math.abs(resultingOutstanding) <= 0.005;
+    const requiresCustomer = creditUsed
+      || Math.abs(resultingOutstanding) > 0.005
+      || Math.abs(currentOutstanding) > 0.005
+      || (total < 0 && !fullySettledWalkInRefund);
     if (requiresCustomer && !activeBill.customerId) {
-      setMessage('Select a customer first. Outstanding balance, credit, overpayment, and negative bills must be saved under a customer name.');
+      setMessage('Select a customer first when a refund or sale leaves credit, overpayment, or any outstanding balance. A fully paid walk-in refund can be saved without a profile.');
       setShowCustomerPanel(true);
       return;
     }
@@ -2694,7 +2755,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const primaryBankMethod = visiblePaymentMethods.find((method) => method.name.trim().toLowerCase() === 'bank 1')
     || visiblePaymentMethods.find((method) => method.name.trim().toLowerCase() === 'bank')
     || visiblePaymentMethods.find((method) => method.name.toLowerCase().includes('bank'));
-  const quickMethods = [paymentMethodByName('Cash'), primaryBankMethod, paymentMethodByName('Credit')]
+  const configuredQuickMethodIds = Array.isArray(appSettings.pos_quick_payment_method_ids) ? appSettings.pos_quick_payment_method_ids : [];
+  const quickMethods = (configuredQuickMethodIds.length
+    ? configuredQuickMethodIds.map((id) => visiblePaymentMethods.find((method) => method.id === id))
+    : [paymentMethodByName('Cash'), primaryBankMethod, paymentMethodByName('Credit')])
     .filter((method, index, rows) => method && rows.findIndex((row) => row?.id === method.id) === index);
   const currentTarget = currentBillTarget();
   const remainingCurrent = Math.max(currentTarget.amount - paymentLineTotal(), 0);
@@ -2713,10 +2777,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         <div className="pos-command-group sale-command-group">
           <span className="pos-command-label">Sale</span>
           <div className="pos-command-buttons">
-            <button className="pos-action" onClick={() => document.querySelector('.pos-search-input')?.focus()}>⌕<span>Search</span></button>
             <button className="pos-action" disabled={!can('manage_parties')} title={!can('manage_parties') ? 'Permission required to add customers' : ''} onClick={() => setShowCustomerPanel(!showCustomerPanel)}>♙<span>Customer</span></button>
-            <button className="pos-action" disabled={!can('apply_discounts')} title={!can('apply_discounts') ? 'Permission required' : ''} onClick={() => updateActiveBill({ cartDiscountType: activeBill.cartDiscountType === 'amount' ? 'percent' : 'amount' })}>%<span>Discount</span></button>
-            <button className="pos-action" onClick={addBill}>＋<span>New Sale</span></button>
             <button className="pos-action return-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
             <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
             <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save for Review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : activeBill.editInvoiceId ? 'Save Changes' : 'Save Sale'}</span></button>
@@ -2820,12 +2881,12 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               <div key={item.id} className={item.assemblyGroupId ? 'pos-assembly-line-wrap' : ''}>
                 {item.assemblyGroupId && activeBill.items[index - 1]?.assemblyGroupId !== item.assemblyGroupId && <div className="pos-assembly-group-header"><span>{'\uD83D\uDDA5\uFE0F'}</span><div><strong>{item.assemblyCode} · {item.assemblyName}</strong><small>Assembly components</small></div></div>}
                 <div
-                className={`pos-bill-card compact ${item.isReturn ? 'return-row' : ''} ${activeBill.selectedItemId === item.id ? 'selected' : ''}`}
+                className={`pos-bill-card compact ${item.isReturn ? 'return-row' : ''} ${item.inventoryOwnership === 'consignment' ? 'consignment-cart-line' : ''} ${activeBill.selectedItemId === item.id ? 'selected' : ''}`}
                 onClick={() => updateActiveBill({ selectedItemId: item.id })}
               >
                 <div className="bill-card-main">
                   <strong>{item.item_code}</strong>
-                  <span>{item.name}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}</span>
+                  <span>{item.name}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
                   <b>{money(item.lineTotal)}</b>
                 </div>
                 <div className="bill-card-controls compact-controls">
@@ -2873,7 +2934,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <SummaryLine label="Subtotal" value={money(subtotal)} />
             <SummaryLine label="Discount" value={money(cartDiscount)} />
             <SummaryLine label="Document total" value={money(total)} strong />
-            {total < 0 && <div className="negative-total">Negative total: select a customer. Refund by cash/bank or leave unpaid to keep negative outstanding balance.</div>}
+            {total < 0 && <div className="negative-total">Refund by cash/bank. A customer is only required if any refund balance or credit remains.</div>}
           </div>
         </div>
 
@@ -2920,7 +2981,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                   <small>{category.path}</small>
                 </button>
               ))}
-              {posCategoryId === 'root' && <button className="pos-category-tile wholesale-category-tile" onClick={() => { setSearch(''); setPosCategoryId(wholesaleRootCategory?.id || 'wholesale-catalog'); }}><strong>Wholesale Catalog</strong><small>Synced stock · {wholesaleProductCount} products</small></button>}
+              {posCategoryId === 'root' && <button className="pos-category-tile wholesale-category-tile" onClick={() => { setSearch(''); setPosCategoryId(wholesaleRootCategory?.id || 'wholesale-catalog'); refreshWholesaleCatalog({ silent: true, onlyIfStale: true }); }}><strong>Wholesale Catalog</strong><small>Synced stock · {wholesaleProductCount} products</small></button>}
+              {posCategoryId === 'root' && <button className="pos-category-tile consignment-category-tile" onClick={() => { setSearch(''); setPosCategoryId('consignment-catalog'); }}><strong>Consignment Items</strong><small>Owned by others · {consignmentProductCount} products</small></button>}
               {posCategoryId === 'root' && <button className="pos-category-tile assembly-category-tile" onClick={() => { setSearch(''); setPosCategoryId('assemblies'); }}><strong>PC Assemblies</strong><small>Complete builds · {assemblies.length} templates</small></button>}
             </div>
           )}
@@ -2935,7 +2997,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               return (
                 <button
                   key={product.product_id}
-                  className={`product-result product-tile ${product.is_wholesale_linked ? 'wholesale-product-tile' : ''} ${unavailable ? 'no-stock-tile' : ''} ${!trackInventory ? 'non-stock-tile' : ''}`}
+                  className={`product-result product-tile ${product.is_wholesale_linked ? 'wholesale-product-tile' : ''} ${productOriginClass(product)} ${unavailable ? 'no-stock-tile' : ''} ${!trackInventory ? 'non-stock-tile' : ''}`}
                   disabled={unavailable}
                   onClick={() => openPosProductPicker(product)}
                   title={`${product.name} · ${money(product.selling_price)} · ${trackInventory ? (availableQty > 0 ? `Available ${availableQty}` : 'No stock') : 'Non-stock item'}`}
@@ -2943,6 +3005,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                   <span className="pos-product-name">{product.name}</span>
                   <strong className="pos-product-price">{money(product.selling_price)}</strong>
                   {product.is_wholesale_linked && <em className="wholesale-product-badge">Wholesale JIT · authoritative cost at sale</em>}
+                  {product.inventory_ownership === 'consignment' && <em className="product-origin-badge consignment">Consignment stock</em>}
                   {appSettings.show_pos_stock_badges !== false && <small className={`pos-product-stock ${!trackInventory ? 'non-stock' : availableQty <= 0 ? 'empty' : availableQty <= 2 ? 'low' : ''}`}>
                     {!trackInventory ? 'Non-stock · Always available' : availableQty > 0 ? `Available: ${availableQty}` : availableQty < 0 ? `Stock: ${availableQty}` : 'No stock'}
                   </small>}
@@ -2950,7 +3013,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               );
             })}
             {products.length === 0 && visiblePosAssemblies.length === 0 && search.trim() && <div className="muted-box">No matching products or assemblies.</div>}
-            {products.length === 0 && posCategoryId !== 'assemblies' && !search.trim() && categoryChildren.length === 0 && <div className="muted-box">{posCategoryId === 'wholesale-catalog' ? 'No enabled Wholesale Catalog products. Refresh the catalog and try again.' : 'No products inside this category.'}</div>}
+            {products.length === 0 && posCategoryId !== 'assemblies' && !search.trim() && categoryChildren.length === 0 && <div className="muted-box">{posCategoryId === 'wholesale-catalog' ? 'No enabled Wholesale Catalog products. Refresh the catalog and try again.' : posCategoryId === 'consignment-catalog' ? 'No active consignment products.' : 'No products inside this category.'}</div>}
             {posCategoryId === 'assemblies' && !visiblePosAssemblies.length && <div className="muted-box">No active PC assemblies. Create one from Products → PC Assemblies.</div>}
           </div>
         </div>
@@ -4476,7 +4539,7 @@ function PartyPaymentEditForm({ document, onClose, onSaved }) {
       setLoading(true);
       setError('');
       const [methodRes, flowRes, chequeRes] = await Promise.all([
-        supabase.from('payment_methods').select('id, name, is_active, is_paid_method, requires_cheque_details, affects_cashflow, account_kind').eq('is_paid_method', true).order('name'),
+        supabase.from('payment_methods').select('*').eq('is_paid_method', true).order('name'),
         supabase.from('cashflow_entries').select('id, entry_type, amount, payment_method_id, account_name').eq('document_id', document.id).in('entry_type', ['cash_in', 'cash_out']).order('created_at', { ascending: true }).limit(2),
         supabase.from('cheque_payments').select('source_line_id, cheque_number, cheque_date, bank_name, status').eq('document_id', document.id).order('created_at', { ascending: true }).limit(1).maybeSingle()
       ]);
@@ -4490,13 +4553,13 @@ function PartyPaymentEditForm({ document, onClose, onSaved }) {
       const flows = flowRes.data || [];
       if (flows.length !== 1) {
         setError('This payment does not have exactly one linked payment-account movement, so it cannot be edited safely. Run SQL 071 if this is an older payment, then refresh.');
-        setPaymentMethods(methodRes.data || []);
+        setPaymentMethods(sortPaymentMethods(methodRes.data || []));
         setLoading(false);
         return;
       }
       const flow = flows[0];
       const cheque = chequeRes.data;
-      setPaymentMethods(methodRes.data || []);
+      setPaymentMethods(sortPaymentMethods(methodRes.data || []));
       setForm({
         amount: String(numberValue(flow.amount || document.paid_amount || document.total_amount)),
         method_id: flow.payment_method_id || document.payment_method_id || '',
@@ -4577,6 +4640,8 @@ function DocumentHeaderEditor({ document, onClose, onSaved, embedded = false }) 
   const [suppliers, setSuppliers] = useState([]);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [supplierMenuOpen, setSupplierMenuOpen] = useState(false);
+  const [showQuickSupplier, setShowQuickSupplier] = useState(false);
+  const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', email: '', address: '' });
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [form, setForm] = useState({
     document_no: document.document_no || '',
@@ -4594,12 +4659,12 @@ function DocumentHeaderEditor({ document, onClose, onSaved, embedded = false }) 
   useEffect(() => {
     Promise.all([
       supabase.from('suppliers').select('id, name').order('name', { ascending: true }).limit(500),
-      supabase.from('payment_methods').select('id, name').eq('is_active', true).order('name')
+      supabase.from('payment_methods').select('*').eq('is_active', true).order('name')
     ]).then(([supplierRes, paymentRes]) => {
       if (supplierRes.error) setError(supplierRes.error.message);
       else setSuppliers(supplierRes.data || []);
       if (paymentRes.error) setError(paymentRes.error.message);
-      else setPaymentMethods(paymentRes.data || []);
+      else setPaymentMethods(sortPaymentMethods(paymentRes.data || []));
     });
   }, []);
 
@@ -4918,7 +4983,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     }
 
     if (paymentRes.error) setError(paymentRes.error.message);
-    else setPaymentMethods(paymentRes.data || []);
+    else setPaymentMethods(sortPaymentMethods(paymentRes.data || []));
   }
 
   async function ensureCustomerProfileFromParty(party) {
@@ -4963,19 +5028,18 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
   }
 
   async function quickAddSupplier() {
-    const name = window.prompt('Supplier/profile name');
-    if (!name?.trim()) return;
-    const cleanName = name.trim();
+    const cleanName = quickSupplier.name.trim();
+    if (!cleanName) return;
     const { data: customer, error: customerError } = await supabase
       .from('customers')
-      .insert({ name: cleanName, is_customer: false, is_supplier: true })
+      .insert({ name: cleanName, phone: quickSupplier.phone.trim() || null, email: quickSupplier.email.trim() || null, address: quickSupplier.address.trim() || null, is_customer: false, is_supplier: true })
       .select('id, name, phone, address')
       .single();
     if (customerError) {
       setError(customerError.message);
       return;
     }
-    const { data, error: supplierError } = await supabase.from('suppliers').insert({ name: cleanName }).select('id, name, phone, address').single();
+    const { data, error: supplierError } = await supabase.from('suppliers').insert({ name: cleanName, phone: quickSupplier.phone.trim() || null, email: quickSupplier.email.trim() || null, address: quickSupplier.address.trim() || null }).select('id, name, phone, address').single();
     if (supplierError) setError(supplierError.message);
     else {
       const choice = { ...data, source: 'supplier', supplier_id: data.id, customer_id: customer.id, label: data.name };
@@ -4983,6 +5047,9 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       setSupplierId(data.id);
       setPartyCustomerId(customer.id);
       setSupplierSearch(data.name || '');
+      setSupplierMenuOpen(false);
+      setShowQuickSupplier(false);
+      setQuickSupplier({ name: '', phone: '', email: '', address: '' });
     }
   }
 
@@ -4996,26 +5063,23 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
   }
 
   async function loadCategoryProducts() {
-    let query = supabase
-      .from('product_stock_view')
-      .select('*')
-      .eq('is_active', true)
-      .eq('track_inventory', true)
-      .order('item_code', { ascending: true })
-      .limit(1200);
-
     const clean = productSearch.trim();
-    if (clean) {
-      const seed = productSearchSeed(clean);
-      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
-    } else if (selectedCategoryId === 'uncategorized') {
-      query = query.is('category_id', null);
-    } else {
-      const ids = categoryDescendantIds(categories, selectedCategoryId);
-      if (ids.length) query = query.in('category_id', ids);
+    const buildQuery = (source) => {
+      let query = supabase.from(source).select('*').eq('is_active', true).eq('track_inventory', true).order('item_code', { ascending: true }).limit(1200);
+      if (clean) {
+        const seed = productSearchSeed(clean);
+        query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+      } else if (selectedCategoryId === 'uncategorized') query = query.is('category_id', null);
+      else {
+        const ids = categoryDescendantIds(categories, selectedCategoryId);
+        if (ids.length) query = query.in('category_id', ids);
+      }
+      return query;
+    };
+    let { data, error: productsError } = await buildQuery('pos_product_catalog_v76');
+    if (productsError && /pos_product_catalog_v76|schema cache|does not exist/i.test(productsError.message || '')) {
+      ({ data, error: productsError } = await buildQuery('product_stock_view'));
     }
-
-    const { data, error: productsError } = await query;
     if (productsError) setError(productsError.message);
     else setCategoryProducts(rankProductSearchResults(data || [], clean));
   }
@@ -5225,7 +5289,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
             <div className="supplier-combo-field">
               <div className="inline-field">
                 <input value={supplierSearch} onFocus={() => setSupplierMenuOpen(true)} onChange={(e) => { setSupplierSearch(e.target.value); setSupplierId(''); setPartyCustomerId(''); setSupplierMenuOpen(true); }} placeholder="Type supplier/customer name or phone" />
-                <button type="button" className="small-button" onClick={quickAddSupplier}>New</button>
+                <button type="button" className="small-button" onClick={() => { setSupplierMenuOpen(false); setShowQuickSupplier(true); }}>New</button>
               </div>
               {supplierMenuOpen && (
                 <div className="supplier-suggestion-menu">
@@ -5381,6 +5445,21 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
                 <button type="button" className="secondary-button" onClick={() => setPaymentLines([])}>Clear payments</button>
                 <button type="button" className="primary-button" onClick={() => setShowPaymentPanel(false)}>Done</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {showQuickSupplier && (
+          <div className="modal-backdrop">
+            <div className="modal-card compact-modal quick-supplier-modal">
+              <div className="section-title-row"><div><h3>New Supplier</h3><p>Add useful contact details now; the same profile can be edited later.</p></div><button type="button" className="secondary-button" onClick={() => setShowQuickSupplier(false)}>Close</button></div>
+              <div className="quick-supplier-grid">
+                <label>Name<input autoFocus value={quickSupplier.name} onChange={(event) => setQuickSupplier({ ...quickSupplier, name: event.target.value })} required /></label>
+                <label>Phone<input inputMode="tel" value={quickSupplier.phone} onChange={(event) => setQuickSupplier({ ...quickSupplier, phone: event.target.value })} /></label>
+                <label>Email<input type="email" value={quickSupplier.email} onChange={(event) => setQuickSupplier({ ...quickSupplier, email: event.target.value })} /></label>
+                <label className="wide-field">Address<textarea value={quickSupplier.address} onChange={(event) => setQuickSupplier({ ...quickSupplier, address: event.target.value })} /></label>
+              </div>
+              <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowQuickSupplier(false)}>Cancel</button><button type="button" className="primary-button" disabled={!quickSupplier.name.trim()} onClick={quickAddSupplier}>Add Supplier</button></div>
             </div>
           </div>
         )}
@@ -5867,7 +5946,7 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
   async function loadReservationPaymentMethods() {
     const { data, error: methodError } = await supabase
       .from('payment_methods')
-      .select('id, name, affects_cashflow, requires_cheque_details')
+      .select('*')
       .eq('is_active', true)
       .eq('is_paid_method', true)
       .order('name');
@@ -5875,8 +5954,9 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
       setError(methodError.message);
       return;
     }
-    setPaymentMethods(data || []);
-    setAdvancePaymentMethodId((current) => current || data?.[0]?.id || '');
+    const ordered = sortPaymentMethods(data || []);
+    setPaymentMethods(ordered);
+    setAdvancePaymentMethodId((current) => current || ordered?.[0]?.id || '');
   }
 
   async function loadCategoriesForQuotation() {
@@ -5889,25 +5969,23 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
   }
 
   async function loadCategoryProductsForQuotation() {
-    let query = supabase
-      .from('product_stock_view')
-      .select('*')
-      .eq('is_active', true)
-      .order('item_code', { ascending: true })
-      .limit(1200);
-
     const clean = productSearch.trim();
-    if (clean) {
-      const seed = productSearchSeed(clean);
-      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
-    } else if (selectedCategoryId === 'uncategorized') {
-      query = query.is('category_id', null);
-    } else {
-      const ids = categoryDescendantIds(categories, selectedCategoryId);
-      if (ids.length) query = query.in('category_id', ids);
+    const buildQuery = (source) => {
+      let query = supabase.from(source).select('*').eq('is_active', true).order('item_code', { ascending: true }).limit(1200);
+      if (clean) {
+        const seed = productSearchSeed(clean);
+        query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+      } else if (selectedCategoryId === 'uncategorized') query = query.is('category_id', null);
+      else {
+        const ids = categoryDescendantIds(categories, selectedCategoryId);
+        if (ids.length) query = query.in('category_id', ids);
+      }
+      return query;
+    };
+    let { data, error: productsError } = await buildQuery('pos_product_catalog_v76');
+    if (productsError && /pos_product_catalog_v76|schema cache|does not exist/i.test(productsError.message || '')) {
+      ({ data, error: productsError } = await buildQuery('product_stock_view'));
     }
-
-    const { data, error: productsError } = await query;
     if (productsError) setError(productsError.message);
     else setCategoryProducts(rankProductSearchResults(data || [], clean));
   }
@@ -7347,21 +7425,28 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
 
   async function loadPrepaidPaymentMethods() {
     const { data, error: methodError } = await supabase.from('payment_methods')
-      .select('id, name, requires_cheque_details')
+      .select('*')
       .eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name');
     if (methodError) { setError(methodError.message); return; }
-    setPaymentMethods(data || []);
-    if (data?.length) setPrepaidPaymentMethodId((current) => current || data[0].id);
+    const ordered = sortPaymentMethods(data || []);
+    setPaymentMethods(ordered);
+    if (ordered.length) setPrepaidPaymentMethodId((current) => current || ordered[0].id);
   }
 
   async function loadCodProducts() {
     const clean = productSearch.trim().replace(/,/g, ' ');
-    let query = supabase.from('product_stock_view').select('*').eq('is_active', true).order('item_code').limit(clean ? 500 : 60);
-    if (clean) {
-      const seed = productSearchSeed(clean);
-      query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+    const buildQuery = (source) => {
+      let query = supabase.from(source).select('*').eq('is_active', true).order('item_code').limit(clean ? 500 : 60);
+      if (clean) {
+        const seed = productSearchSeed(clean);
+        query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`);
+      }
+      return query;
+    };
+    let { data, error: productError } = await buildQuery('pos_product_catalog_v76');
+    if (productError && /pos_product_catalog_v76|schema cache|does not exist/i.test(productError.message || '')) {
+      ({ data, error: productError } = await buildQuery('product_stock_view'));
     }
-    const { data, error: productError } = await query;
     if (productError) setError(productError.message);
     else setProducts(rankProductSearchResults(data || [], clean));
   }
@@ -7530,7 +7615,7 @@ function CodOrderForm({ document = null, tabId = '', onClose, onSaved, onNumberR
         {!prepaidItemsLocked && <div className="cod-product-picker panel-card">
           <input value={productSearch} onChange={(e) => setProductSearch(e.target.value)} placeholder="Search product code, name, or barcode" />
           <div className="cod-product-results">
-            {products.map((product) => { const trackInventory = product.track_inventory !== false; return <button type="button" key={product.product_id} className={!trackInventory ? 'non-stock-result' : ''} disabled={trackInventory && numberValue(product.available_qty) <= 0} onClick={() => addCodProduct(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>{money(product.selling_price)} | {trackInventory ? `Available: ${numberValue(product.available_qty)}` : 'Non-stock · Always available'}</small></button>; })}
+            {products.map((product) => { const trackInventory = product.track_inventory !== false; return <button type="button" key={product.product_id} className={`${!trackInventory ? 'non-stock-result' : ''} ${productOriginClass(product)}`} disabled={trackInventory && numberValue(product.available_qty) <= 0} onClick={() => addCodProduct(product)}><strong>{product.item_code}</strong><span>{product.name}</span><ProductOriginBadges product={product} compact /><small>{money(product.selling_price)} | {trackInventory ? `Available: ${numberValue(product.available_qty)}` : 'Non-stock · Always available'}</small></button>; })}
           </div>
         </div>}
         {prepaidItemsLocked && <div className="notice">This prepaid delivery already has a linked sales invoice. You can correct its address and courier details here; use the invoice/return workflow for product or payment corrections.</div>}
@@ -7591,12 +7676,13 @@ function CodOrdersPage() {
   async function loadCodLookups() {
     const [staffRes, paymentRes] = await Promise.all([
       supabase.from('staff_directory_v38').select('id, full_name, is_active').order('full_name'),
-      supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name')
+      supabase.from('payment_methods').select('*').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name')
     ]);
     if (!staffRes.error) setStaff(staffRes.data || []);
     if (!paymentRes.error) {
-      setPaymentMethods(paymentRes.data || []);
-      if (paymentRes.data?.[0]) setAction((current) => ({ ...current, paymentMethodId: current.paymentMethodId || paymentRes.data[0].id }));
+      const ordered = sortPaymentMethods(paymentRes.data || []);
+      setPaymentMethods(ordered);
+      if (ordered[0]) setAction((current) => ({ ...current, paymentMethodId: current.paymentMethodId || ordered[0].id }));
     }
   }
 
@@ -8208,7 +8294,7 @@ function AssembliesManager() {
     {showForm && <form className="panel-card assembly-form" onSubmit={saveAssembly}>
       <div className="section-title-row assembly-form-title"><div><h3>{editingAssembly ? `Edit ${editingAssembly.name}` : 'New PC Assembly'}</h3><p>Choose component products. The assembly itself does not carry stock.</p></div><button type="button" className="secondary-button" onClick={() => setShowForm(false)}>Close</button></div>
       <div className="purchase-form-grid assembly-header-grid"><label>Assembly code<input value={form.assembly_code} placeholder="Assigned on save" readOnly /></label><label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Gaming PC Ryzen 5" required /></label><label>Barcode optional<input value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} /></label><label>Discount type<select value={form.discount_type} onChange={(e) => setForm({ ...form, discount_type: e.target.value })}><option value="percent">Percentage</option><option value="amount">Amount</option></select></label><label>Discount {form.discount_type === 'percent' ? '%' : 'amount'}<input type="number" min="0" max={form.discount_type === 'percent' ? 100 : undefined} step="0.01" value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} /></label><label>Status<select value={form.is_active ? 'active' : 'inactive'} onChange={(e) => setForm({ ...form, is_active: e.target.value === 'active' })}><option value="active">Active</option><option value="inactive">Inactive</option></select></label></div>
-      <div className="assembly-component-picker"><h4>Add components</h4><input value={componentSearch} onChange={(e) => setComponentSearch(e.target.value)} placeholder="Search product code, name or barcode" /><div className="assembly-component-results">{componentMatches.map((product) => <button type="button" key={product.product_id} disabled={form.items.some((item) => item.product_id === product.product_id)} onClick={() => addAssemblyComponent(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>{money(product.selling_price)} · Available {numberValue(product.available_qty)}</small></button>)}{cleanComponentSearch && !componentMatches.length && <div className="muted-box">No matching products.</div>}</div></div>
+      <div className="assembly-component-picker"><h4>Add components</h4><input value={componentSearch} onChange={(e) => setComponentSearch(e.target.value)} placeholder="Search product code, name or barcode" /><div className="assembly-component-results">{componentMatches.map((product) => <button type="button" key={product.product_id} className={productOriginClass(product)} disabled={form.items.some((item) => item.product_id === product.product_id)} onClick={() => addAssemblyComponent(product)}><strong>{product.item_code}</strong><span>{product.name}</span><ProductOriginBadges product={product} compact /><small>{money(product.selling_price)} · Available {numberValue(product.available_qty)}</small></button>)}{cleanComponentSearch && !componentMatches.length && <div className="muted-box">No matching products.</div>}</div></div>
       <div className="table-wrap assembly-lines"><table><thead><tr><th>Code</th><th>Component</th><th>Required qty</th><th>Available</th><th>Unit price</th><th>Cost</th><th></th></tr></thead><tbody>{form.items.map((item) => <tr key={item.product_id}><td>{item.item_code}</td><td>{item.name}</td><td><input type="number" min="0.001" step="0.001" value={item.qty} onChange={(e) => updateAssemblyComponent(item.product_id, { qty: e.target.value })} /></td><td>{numberValue(item.available_qty)}</td><td>{money(item.selling_price)}</td><td>{money(item.avg_cost)}</td><td><button type="button" className="small-button danger" onClick={() => removeAssemblyComponent(item.product_id)}>Remove</button></td></tr>)}{!form.items.length && <EmptyRow colSpan={7} text="Search above and add the PC components." />}</tbody></table></div>
       <div className="assembly-price-summary"><SummaryLine label="Component selling total" value={money(componentPrice)} /><SummaryLine label="Assembly discount" value={money(assemblyDiscount)} /><SummaryLine label="Component cost" value={money(componentCost)} /><SummaryLine label="Final assembly price" value={money(finalPrice)} strong /><button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Save Assembly'}</button></div>
     </form>}
@@ -8711,9 +8797,9 @@ function ProductsPage({ assistantTarget = null } = {}) {
               </thead>
               <tbody>
                 {products.map((product) => (
-                  <tr key={product.product_id} data-product-id={product.product_id} onClick={() => setSelectedProduct(product)} className={selectedProduct?.product_id === product.product_id ? 'selected-row' : ''}>
+                  <tr key={product.product_id} data-product-id={product.product_id} onClick={() => setSelectedProduct(product)} className={`${selectedProduct?.product_id === product.product_id ? 'selected-row' : ''} ${productOriginClass(product)}`}>
                     <td><strong>{product.item_code}</strong></td>
-                    <td>{product.name}</td>
+                    <td>{product.name}<ProductOriginBadges product={product} compact /></td>
                     <td>{product.category_path || product.category_name || '-'}</td>
                     <td>{product.barcode || '-'}</td>
                     <td>{money(product.avg_cost)}</td>
@@ -8803,10 +8889,11 @@ function DocumentProductTree({ categories, products, selectedCategoryId, setSele
 
   function renderProduct(product) {
     return (
-      <button type="button" key={product.product_id} className="tree-product-item" onClick={() => onProductClick(product)}>
+      <button type="button" key={product.product_id} className={`tree-product-item ${productOriginClass(product)}`} onClick={() => onProductClick(product)}>
         <span>◆</span>
         <strong>{product.item_code}</strong>
         <em>{product.name}</em>
+        <ProductOriginBadges product={product} compact />
       </button>
     );
   }
@@ -9116,7 +9203,7 @@ function StockConditionTransferForm({ onClose, onSaved }) {
   useEffect(() => {
     const timeout = setTimeout(async () => {
       const clean = search.trim().replace(/,/g, ' ');
-      let query = supabase.from('product_stock_view').select('product_id,item_code,name,barcode,brand_name,category_name,avg_cost,sellable_qty,reserved_qty,damaged_qty,checking_qty,available_qty,track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(clean ? 500 : 80);
+      let query = supabase.from('product_stock_view').select('product_id,item_code,name,barcode,brand_name,category_name,avg_cost,sellable_qty,reserved_qty,damaged_qty,checking_qty,available_qty,track_inventory,inventory_ownership,is_wholesale_linked').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(clean ? 500 : 80);
       if (clean) { const seed = productSearchSeed(clean); query = query.or(`item_code.ilike.%${seed}%,name.ilike.%${seed}%,barcode.ilike.%${seed}%,brand_name.ilike.%${seed}%,category_name.ilike.%${seed}%`); }
       const { data, error: productError } = await query;
       if (productError) setError(productError.message); else setProducts(rankProductSearchResults(data || [], clean));
@@ -9152,7 +9239,7 @@ function StockConditionTransferForm({ onClose, onSaved }) {
     {error && <div className="error-box">{error}</div>}
     <form onSubmit={saveTransfer}>
       <div className="condition-transfer-layout">
-        <div className="panel-card condition-product-picker"><label>Find product<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Code, name, or barcode" /></label><div>{products.map((product) => <button type="button" key={product.product_id} className={selected?.product_id === product.product_id ? 'selected' : ''} onClick={() => setSelected(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>Sellable {numberValue(product.sellable_qty)} · Damaged {numberValue(product.damaged_qty)} · Checking {numberValue(product.checking_qty)}</small></button>)}</div></div>
+        <div className="panel-card condition-product-picker"><label>Find product<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Code, name, or barcode" /></label><div>{products.map((product) => <button type="button" key={product.product_id} className={`${selected?.product_id === product.product_id ? 'selected' : ''} ${productOriginClass(product)}`} onClick={() => setSelected(product)}><strong>{product.item_code}</strong><span>{product.name}</span><ProductOriginBadges product={product} compact /><small>Sellable {numberValue(product.sellable_qty)} · Damaged {numberValue(product.damaged_qty)} · Checking {numberValue(product.checking_qty)}</small></button>)}</div></div>
         <div className="panel-card condition-transfer-fields">
           <div className="condition-selected-product">{selected ? <><span>{selected.item_code}</span><strong>{selected.name}</strong><small>{numberValue(selected.reserved_qty)} reserved · {movableQty} movable from {fromBucket}</small></> : <span>Select a product from the list</span>}</div>
           <div className="condition-arrow-grid"><label>From<select value={fromBucket} onChange={(event) => { const value = event.target.value; setFromBucket(value); if (value === toBucket) setToBucket(value === 'sellable' ? 'damaged' : 'sellable'); }}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></label><span>→</span><label>To<select value={toBucket} onChange={(event) => setToBucket(event.target.value)}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></label></div>
@@ -9247,7 +9334,7 @@ function StockAdjustmentForm({ onClose, onSaved }) {
 
   useEffect(() => {
     const timeout = setTimeout(async () => {
-      let query = supabase.from('product_stock_view').select('product_id, item_code, name, barcode, brand_name, category_name, avg_cost, sellable_qty, reserved_qty, damaged_qty, checking_qty, available_qty, track_inventory').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(search.trim() ? 500 : 80);
+      let query = supabase.from('product_stock_view').select('product_id, item_code, name, barcode, brand_name, category_name, avg_cost, sellable_qty, reserved_qty, damaged_qty, checking_qty, available_qty, track_inventory, inventory_ownership, is_wholesale_linked').eq('is_active', true).eq('track_inventory', true).order('item_code').limit(search.trim() ? 500 : 80);
       const clean = search.trim().replace(/,/g, ' ');
       if (clean) {
         const seed = productSearchSeed(clean);
@@ -9317,7 +9404,7 @@ function StockAdjustmentForm({ onClose, onSaved }) {
       {error && <div className="error-box">{error}</div>}
       <div className="panel-card inventory-adjustment-header"><label>Document number<input value="Assigned on save" readOnly /></label><label>Date<input type="date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} /></label><label className="wide-field">Reason <InfoTip text="Explain why the physical count is being corrected. This note stays with the audit document." /><input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Example: physical stock count correction" required /></label></div>
       <div className="inventory-adjustment-layout">
-        <div className="panel-card adjustment-product-picker"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products by code, name, or barcode" /><div className="adjustment-product-list">{products.map((product) => <button type="button" key={product.product_id} onClick={() => addLine(product)}><strong>{product.item_code}</strong><span>{product.name}</span><small>Available {numberValue(product.available_qty)}{numberValue(product.reserved_qty) > 0 ? ` · Reserved ${numberValue(product.reserved_qty)}` : ''}</small></button>)}</div></div>
+        <div className="panel-card adjustment-product-picker"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products by code, name, or barcode" /><div className="adjustment-product-list">{products.map((product) => <button type="button" key={product.product_id} className={productOriginClass(product)} onClick={() => addLine(product)}><strong>{product.item_code}</strong><span>{product.name}</span><ProductOriginBadges product={product} compact /><small>Available {numberValue(product.available_qty)}{numberValue(product.reserved_qty) > 0 ? ` · Reserved ${numberValue(product.reserved_qty)}` : ''}</small></button>)}</div></div>
         <div className="panel-card table-wrap"><table><thead><tr><th>Code</th><th>Item</th><th>Stock bucket <InfoTip text="Sellable changes normal shop stock. Damaged and Checking change their separate non-sellable quantities. Reserved units cannot be removed here." /></th><th>Current</th><th>Quantity change <InfoTip text="Use a positive number to add stock or a negative number to remove stock. Existing average cost is used internally and is never changed." /></th><th></th></tr></thead><tbody>
           {lines.map((line) => <tr key={line.id}><td><strong>{line.item_code}</strong></td><td>{line.description}<small className="adjustment-cost-note">Valued at existing average cost {money(line.avg_cost)}</small></td><td><select value={line.bucket} onChange={(e) => updateLine(line.id, { bucket: e.target.value })}><option value="sellable">Sellable</option><option value="damaged">Damaged</option><option value="checking">Checking</option></select></td><td><strong>{adjustmentBucketQuantity(line)}</strong>{line.bucket === 'sellable' && numberValue(line.reserved_qty) > 0 && <small className="adjustment-reserved-note">{numberValue(line.reserved_qty)} reserved</small>}</td><td><input className="table-number-input" type="number" step="1" min={-adjustmentMaximumReduction(line)} value={line.qty} onChange={(e) => updateLine(line.id, { qty: e.target.value })} /></td><td><button type="button" className="small-button danger" onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))}>Remove</button></td></tr>)}
           {!lines.length && <EmptyRow colSpan={6} text="Select products from the list to build the adjustment." />}
@@ -9558,7 +9645,7 @@ function StockPage({ onOpenDocuments }) {
                   return (
                     <tr key={row.product_id} className={isLow ? 'low-stock-row' : ''}>
                       <td><strong>{row.item_code}</strong></td>
-                      <td>{row.name}</td>
+                      <td>{row.name}<ProductOriginBadges product={row} compact /></td>
                       <td><span className={row.inventory_ownership === 'consignment' ? 'status-pill consignment-stock' : 'status-pill tracked-stock'}>{row.inventory_ownership === 'consignment' ? `Consignment · ${row.consignment_owner_name || 'owner'}` : 'Shop owned'}</span></td>
                       <td>{numberValue(row.sellable_qty)}</td>
                       <td>{numberValue(row.reserved_qty)}</td>
@@ -9935,8 +10022,9 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
       .order('name');
     if (methodError) setError(methodError.message);
     else {
-      setPaymentMethods(data || []);
-      if ((data || []).length && !paymentForm.method_id) setPaymentForm((f) => ({ ...f, method_id: data[0].id }));
+      const ordered = sortPaymentMethods(data || []);
+      setPaymentMethods(ordered);
+      if (ordered.length && !paymentForm.method_id) setPaymentForm((f) => ({ ...f, method_id: ordered[0].id }));
     }
   }
 
@@ -10505,15 +10593,16 @@ function CashflowPage() {
   async function loadPaymentMethods() {
     const { data, error: methodError } = await supabase
       .from('payment_methods')
-      .select('id, name, is_paid_method, affects_cashflow, is_active, account_kind')
+      .select('*')
       .eq('is_active', true)
       .eq('affects_cashflow', true)
       .order('name');
     if (methodError) setError(methodError.message);
     else {
-      setPaymentMethods(data || []);
-      if ((data || []).length) setManualForm((form) => ({ ...form, payment_method_id: form.payment_method_id || data[0].id }));
-      const transferable = (data || []).filter((method) => ['cash', 'bank'].includes(method.account_kind));
+      const ordered = sortPaymentMethods(data || []);
+      setPaymentMethods(ordered);
+      if (ordered.length) setManualForm((form) => ({ ...form, payment_method_id: form.payment_method_id || ordered[0].id }));
+      const transferable = ordered.filter((method) => ['cash', 'bank'].includes(method.account_kind));
       setTransferForm((form) => ({
         ...form,
         from_payment_method_id: transferable.some((method) => method.id === form.from_payment_method_id) ? form.from_payment_method_id : transferable[0]?.id || '',
@@ -10942,14 +11031,14 @@ function WarrantyPage() {
     const [recordRes, claimRes, productRes] = await Promise.all([
       supabase.from('warranty_register_view').select('*').order('created_at', { ascending: false }).limit(2000),
       supabase.from('warranty_claims_view').select('*').order('created_at', { ascending: false }).limit(2000),
-      supabase.from('products').select('id, item_code, name, warranty_months, serial_required, is_active').eq('is_active', true).order('item_code').limit(2500)
+      supabase.from('product_stock_view').select('product_id, item_code, name, warranty_months, serial_required, is_active, inventory_ownership, is_wholesale_linked').eq('is_active', true).order('item_code').limit(2500)
     ]);
     const loadError = recordRes.error || claimRes.error || productRes.error;
     if (loadError) setError(`${loadError.message}. Run migration 034_warranty_register_and_claims.sql if it has not been applied.`);
     else {
       setRecords(recordRes.data || []);
       setClaims(claimRes.data || []);
-      setProducts(productRes.data || []);
+      setProducts((productRes.data || []).map((row) => ({ ...row, id: row.product_id })));
       setSelectedClaimId((current) => current && (claimRes.data || []).some((row) => row.id === current) ? current : (claimRes.data || [])[0]?.id || '');
     }
     setLoading(false);
@@ -11092,7 +11181,7 @@ function WarrantyPage() {
             <label>Status<select value={claimUpdate.status} onChange={(event) => setClaimUpdate({ ...claimUpdate, status: event.target.value })}>{WARRANTY_CLAIM_STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}</select></label>
             <label>Resolution / customer-facing note<textarea value={claimUpdate.resolution} onChange={(event) => setClaimUpdate({ ...claimUpdate, resolution: event.target.value })} /></label>
             <label>Internal notes<textarea value={claimUpdate.notes} onChange={(event) => setClaimUpdate({ ...claimUpdate, notes: event.target.value })} /></label>
-            {claimUpdate.status === 'replaced' && <div className="warranty-replacement-box"><strong>Replacement item</strong><p>The new unit keeps the original expiry date: {fmtDate(selectedClaim.original_warranty_end)}.</p><label>Replacement product<select value={claimUpdate.replacementProductId} onChange={(event) => setClaimUpdate({ ...claimUpdate, replacementProductId: event.target.value })}><option value="">Select product</option>{products.map((product) => <option key={product.id} value={product.id}>{product.item_code} · {product.name}</option>)}</select></label><label>Replacement serial number<input value={claimUpdate.replacementSerialNumber} onChange={(event) => setClaimUpdate({ ...claimUpdate, replacementSerialNumber: event.target.value })} placeholder="Scan or type new serial" /></label></div>}
+            {claimUpdate.status === 'replaced' && <div className="warranty-replacement-box"><strong>Replacement item</strong><p>The new unit keeps the original expiry date: {fmtDate(selectedClaim.original_warranty_end)}.</p><label>Replacement product<select value={claimUpdate.replacementProductId} onChange={(event) => setClaimUpdate({ ...claimUpdate, replacementProductId: event.target.value })}><option value="">Select product</option>{products.map((product) => <option key={product.id} value={product.id}>{product.item_code} · {product.name}{product.is_wholesale_linked ? ' · Wholesale' : product.inventory_ownership === 'consignment' ? ' · Consignment' : ''}</option>)}</select></label><label>Replacement serial number<input value={claimUpdate.replacementSerialNumber} onChange={(event) => setClaimUpdate({ ...claimUpdate, replacementSerialNumber: event.target.value })} placeholder="Scan or type new serial" /></label></div>}
             <button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Update Claim'}</button>
           </form>
           <div className="warranty-timeline"><h4>Claim history</h4>{events.map((event) => <div key={event.id}><span /><p><strong>{String(event.status).replaceAll('_', ' ')}</strong><small>{new Date(event.created_at).toLocaleString('en-LK')}</small>{event.note && <em>{event.note}</em>}</p></div>)}{!events.length && <small>No history entries.</small>}</div>
@@ -11227,14 +11316,14 @@ function ReportsPage() {
     const [customerRes, supplierRes, paymentRes, companyRes] = await Promise.all([
       supabase.from('customers').select('id, name, phone, address, due_balance, store_credit_balance').order('name').limit(2000),
       supabase.from('suppliers').select('id, name, phone, address, payable_balance').order('name').limit(2000),
-      supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow, is_active').order('name'),
+      supabase.from('payment_methods').select('*').order('name'),
       fetchCompanySettings().then((data) => ({ data, error: null })).catch((companyError) => ({ data: null, error: companyError }))
     ]);
     const lookupError = customerRes.error || supplierRes.error || paymentRes.error || companyRes.error;
     if (lookupError) setError(lookupError.message);
     if (!customerRes.error) setCustomers(customerRes.data || []);
     if (!supplierRes.error) setSuppliers(supplierRes.data || []);
-    if (!paymentRes.error) setPaymentMethods(paymentRes.data || []);
+    if (!paymentRes.error) setPaymentMethods(sortPaymentMethods(paymentRes.data || []));
     if (!companyRes.error && companyRes.data) setCompanySettings(companyRes.data);
   }
 
@@ -11627,13 +11716,14 @@ function AccountingPage({ activeStaff } = {}) {
 
   async function loadAccountingLookups() {
     const [paymentRes, companyRes] = await Promise.all([
-      supabase.from('payment_methods').select('id, name, is_paid_method, affects_cashflow, is_active').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name'),
+      supabase.from('payment_methods').select('*').eq('is_active', true).eq('is_paid_method', true).eq('affects_cashflow', true).order('name'),
       fetchCompanySettings().then((data) => ({ data, error: null })).catch((lookupError) => ({ data: null, error: lookupError }))
     ]);
     if (paymentRes.error || companyRes.error) setError((paymentRes.error || companyRes.error).message);
     if (!paymentRes.error) {
-      setPaymentMethods(paymentRes.data || []);
-      setCashEntry((current) => ({ ...current, payment_method_id: current.payment_method_id || paymentRes.data?.[0]?.id || '' }));
+      const ordered = sortPaymentMethods(paymentRes.data || []);
+      setPaymentMethods(ordered);
+      setCashEntry((current) => ({ ...current, payment_method_id: current.payment_method_id || ordered?.[0]?.id || '' }));
     }
     if (!companyRes.error && companyRes.data) setCompanySettings(companyRes.data);
   }
@@ -11884,8 +11974,8 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
   useRealtimeRefresh(['payment_methods'], loadSettingsPaymentMethods);
 
   async function loadSettingsPaymentMethods() {
-    const { data, error: loadError } = await supabase.from('payment_methods').select('id, name, is_active, is_paid_method').eq('is_active', true).order('name');
-    if (loadError) setError(loadError.message); else setPaymentMethods(data || []);
+    const { data, error: loadError } = await supabase.from('payment_methods').select('*').eq('is_active', true).order('name');
+    if (loadError) setError(loadError.message); else setPaymentMethods(sortPaymentMethods(data || []));
   }
 
   async function saveSettings(event) {
@@ -11907,7 +11997,7 @@ function SettingsPage({ activeStaff, appSettings = DEFAULT_APP_SETTINGS, autoLoc
       setError(`${saveError.message}. Run migration 041_admin_app_settings.sql if it has not been applied.`);
       return;
     }
-    const saved = { ...DEFAULT_APP_SETTINGS, ...(data || {}), default_payment_method_id: data?.default_payment_method_id || '' };
+    const saved = { ...DEFAULT_APP_SETTINGS, ...(data || {}), default_payment_method_id: data?.default_payment_method_id || '', pos_quick_payment_method_ids: Array.isArray(data?.pos_quick_payment_method_ids) ? data.pos_quick_payment_method_ids : [] };
     setForm({ ...saved, auto_lock_minutes: autoLock });
     onSettingsSaved?.(saved);
     onAutoLockChanged?.(autoLock);
@@ -12191,19 +12281,72 @@ function AssistantSettingsPage() {
 
 function PaymentTypesPage() {
   const [rows, setRows] = useState([]);
+  const [quickIds, setQuickIds] = useState([]);
   const [form, setForm] = useState({ name: '', is_paid_method: true, affects_cashflow: true, account_kind: 'other', requires_cheque_details: false });
   const [editingId, setEditingId] = useState('');
+  const [layoutSaving, setLayoutSaving] = useState(false);
+  const [layoutDirty, setLayoutDirty] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   useEffect(() => { loadRows(); }, []);
   useRealtimeRefresh(['payment_methods'], loadRows);
+  useRealtimeRefresh(['app_settings'], loadRows);
 
   async function loadRows() {
     setError('');
-    const { data, error: rowError } = await supabase.from('payment_methods').select('*').order('name');
-    if (rowError) setError(rowError.message);
-    else setRows(data || []);
+    const [methodResult, settingsResult] = await Promise.all([
+      supabase.from('payment_methods').select('*').order('name'),
+      fetchAppSettings().then((data) => ({ data, error: null })).catch((loadError) => ({ data: null, error: loadError }))
+    ]);
+    if (methodResult.error || settingsResult.error) setError((methodResult.error || settingsResult.error).message);
+    else {
+      setRows(sortPaymentMethods(methodResult.data || []));
+      setQuickIds(Array.isArray(settingsResult.data?.pos_quick_payment_method_ids) ? settingsResult.data.pos_quick_payment_method_ids : []);
+      setLayoutDirty(false);
+    }
+  }
+
+  function movePaymentMethod(index, direction) {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= rows.length) return;
+    setRows((current) => {
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+    setLayoutDirty(true);
+  }
+
+  function toggleQuickMethod(row) {
+    setError('');
+    setQuickIds((current) => {
+      if (current.includes(row.id)) {
+        setLayoutDirty(true);
+        return current.filter((id) => id !== row.id);
+      }
+      if (current.length >= 4) {
+        setError('Choose up to four POS quick-payment buttons. The main Payment button is always shown separately.');
+        return current;
+      }
+      setLayoutDirty(true);
+      return [...current, row.id];
+    });
+  }
+
+  async function savePaymentLayout() {
+    setLayoutSaving(true); setError(''); setMessage('');
+    const { error: saveError } = await supabase.rpc('admin_save_payment_layout_v78', {
+      p_order: rows.map((row, index) => ({ id: row.id, display_order: (index + 1) * 10 })),
+      p_quick_ids: rows.filter((row) => quickIds.includes(row.id)).map((row) => row.id)
+    });
+    setLayoutSaving(false);
+    if (saveError) {
+      setError(`${saveError.message}. Run migration 078_pos_payment_layout_walkin_refunds.sql in Supabase.`);
+      return;
+    }
+    setMessage('Payment order and POS quick buttons saved for every device.');
+    await loadRows();
   }
 
   function resetPaymentForm() {
@@ -12290,12 +12433,15 @@ function PaymentTypesPage() {
         </form>
       </div>
       <div className="panel-card table-wrap">
+        <div className="payment-layout-heading"><div><h3>Payment order & POS buttons</h3><p>Move methods into the order used throughout the app. Select up to four methods for the POS header.</p></div><button type="button" className="primary-button" disabled={!layoutDirty || layoutSaving} onClick={savePaymentLayout}>{layoutSaving ? 'Saving...' : 'Save Layout'}</button></div>
         <table>
-          <thead><tr><th>Name</th><th>Paid/Unpaid</th><th>Account Type</th><th>Cheque details</th><th>Affects Cashflow</th><th>Active</th><th>Action</th><th aria-label="Edit"></th></tr></thead>
+          <thead><tr><th>Name</th><th>Order</th><th>POS quick</th><th>Paid/Unpaid</th><th>Account Type</th><th>Cheque details</th><th>Affects Cashflow</th><th>Active</th><th>Action</th><th aria-label="Edit"></th></tr></thead>
           <tbody>
-            {rows.map((row) => (
+            {rows.map((row, index) => (
               <tr key={row.id}>
                 <td>{row.name}</td>
+                <td><div className="payment-order-buttons"><button type="button" className="small-button" disabled={index === 0} title="Move up" onClick={() => movePaymentMethod(index, -1)}>↑</button><button type="button" className="small-button" disabled={index === rows.length - 1} title="Move down" onClick={() => movePaymentMethod(index, 1)}>↓</button></div></td>
+                <td><label className="payment-quick-check"><input type="checkbox" disabled={!row.is_active || row.name.toLowerCase().includes('store credit')} checked={quickIds.includes(row.id)} onChange={() => toggleQuickMethod(row)} /><span>Show</span></label></td>
                 <td>{row.is_paid_method === false ? 'Unpaid / Credit' : 'Paid'}</td>
                 <td>{row.account_kind === 'cash' ? 'Cash drawer' : row.account_kind === 'bank' ? 'Bank account' : 'Other'}</td>
                 <td>{row.requires_cheque_details ? 'Required' : '-'}</td>
@@ -12305,7 +12451,7 @@ function PaymentTypesPage() {
                 <td><button type="button" className="small-button payment-edit-icon" aria-label={`Edit ${row.name}`} title={`Edit ${row.name}`} onClick={() => editPayment(row)}><NavigationIcon name="edit" /></button></td>
               </tr>
             ))}
-            {rows.length === 0 && <EmptyRow colSpan={8} text="No payment types." />}
+            {rows.length === 0 && <EmptyRow colSpan={10} text="No payment types." />}
           </tbody>
         </table>
       </div>
