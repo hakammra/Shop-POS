@@ -12,7 +12,25 @@ function json(body: Record<string, unknown>, status = 200) {
 }
 
 function messageOf(error: unknown) {
-  return error instanceof Error ? error.message : String(error || 'Wholesale integration failed.');
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  if (typeof error === 'number' || typeof error === 'boolean') return String(error);
+  if (error && typeof error === 'object') {
+    const detail = error as Record<string, unknown>;
+    for (const candidate of [detail.message, detail.error_description, detail.error, detail.details, detail.hint, detail.context]) {
+      if (candidate && candidate !== error) {
+        const message = messageOf(candidate);
+        if (message && message !== 'Wholesale integration failed.') return message;
+      }
+    }
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== '{}') return serialized;
+    } catch {
+      // Use the stable fallback below for circular or non-serializable errors.
+    }
+  }
+  return 'Wholesale integration failed.';
 }
 
 function requiredEnvironment() {
@@ -36,7 +54,7 @@ async function callWholesale(bridgeSecret: string, init?: RequestInit) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.success !== true) {
-    throw new Error(String(payload?.error || payload?.message || `Wholesale bridge returned ${response.status}.`));
+    throw new Error(messageOf(payload?.error || payload?.message || `Wholesale bridge returned ${response.status}.`));
   }
   return payload;
 }

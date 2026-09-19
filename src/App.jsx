@@ -110,7 +110,7 @@ function staffCan(staff, permission) {
 const DOCUMENT_TYPES = [
   { value: '', label: 'All document types' },
   { value: 'invoice', label: 'Sales Invoice' },
-  { value: 'unconfirmed_sale', label: 'Unconfirmed Sale' },
+  { value: 'unconfirmed_sale', label: 'Draft Sale' },
   { value: 'refund', label: 'Refund' },
   { value: 'quotation', label: 'Quotation' },
   { value: 'reservation', label: 'Reservation Order' },
@@ -308,6 +308,27 @@ function money(value) {
 
 function roundMoney(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function readableError(value, fallback = 'Something went wrong.') {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value === 'string') return value.trim() === '[object Object]' ? fallback : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const candidates = [value.message, value.error_description, value.error, value.details, value.hint, value.context];
+    for (const candidate of candidates) {
+      const text = readableError(candidate, '');
+      if (text) return text;
+    }
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized && serialized !== '{}') return serialized;
+    } catch {
+      // Fall through to the stable fallback below.
+    }
+  }
+  const text = String(value);
+  return text === '[object Object]' ? fallback : text;
 }
 
 const DEFAULT_COMPANY_SETTINGS = {
@@ -1452,7 +1473,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const allowNegativeStock = appSettings.allow_negative_pos_stock === true;
   const savedBills = safeReadJson(POS_DRAFTS_KEY, null);
   const initialBills = Array.isArray(savedBills?.bills) && savedBills.bills.length
-    ? savedBills.bills.map((bill) => ({ ...bill, unconfirmedMode: false }))
+    ? savedBills.bills.map((bill) => ({ ...bill, unconfirmedMode: Boolean(bill.editUnconfirmedId) }))
     : [emptyBill()];
   const [bills, setBills] = useState(initialBills);
   const [activeBillId, setActiveBillId] = useState(savedBills?.activeBillId || initialBills[0]?.id);
@@ -1504,6 +1525,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   const [consignmentProductCount, setConsignmentProductCount] = useState(0);
   const [showWholesaleAdmin, setShowWholesaleAdmin] = useState(false);
   const [pendingWholesaleTransfers, setPendingWholesaleTransfers] = useState([]);
+  const [showSavedDrafts, setShowSavedDrafts] = useState(false);
+  const [savedDrafts, setSavedDrafts] = useState([]);
+  const [savedDraftsBusy, setSavedDraftsBusy] = useState(false);
   const wholesaleRefreshAtRef = useRef(Number(window.localStorage.getItem('shop_pos_wholesale_catalog_refreshed_at') || 0));
 
   const activeBill = bills.find((bill) => bill.id === activeBillId) || bills[0] || emptyBill();
@@ -1602,6 +1626,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   useRealtimeRefresh(['documents', 'document_items', 'customers', 'cashflow_entries'], () => {
     loadCustomers();
     if (showReturnLookup) loadReturnInvoiceOptions();
+    if (showSavedDrafts) loadSavedDrafts(false);
   });
   useRealtimeRefresh(['payment_methods'], loadPaymentMethods);
   useRealtimeRefresh(['company_settings'], () => fetchCompanySettings().then(setCompanySettings).catch(() => {}));
@@ -1674,7 +1699,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setBills((current) => [...current, quoteBill]);
       setActiveBillId(quoteBill.id);
       setMessage(isUnconfirmedEdit
-        ? `Loaded ${quote.sourceDocumentNo || ''} for internal review and editing.`
+        ? `Loaded draft ${quote.sourceDocumentNo || ''} for editing.`
         : isInvoiceEdit
           ? `Loaded ${quote.sourceDocumentNo || ''} for correction. Saving will safely replace its posted effects.`
         : isUnconfirmedConvert
@@ -1864,7 +1889,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       body: { action: 'refresh_catalog' }
     });
     if (error || !data?.success) {
-      if (!silent) setMessage(data?.error || error?.message || 'Wholesale catalog refresh failed.');
+      if (!silent) setMessage(readableError(data?.error || error, 'Wholesale catalog refresh failed.'));
     } else {
       wholesaleRefreshAtRef.current = Date.now();
       window.localStorage.setItem('shop_pos_wholesale_catalog_refreshed_at', String(wholesaleRefreshAtRef.current));
@@ -1894,12 +1919,96 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
       body: { action: 'retry', transfer_id: transferId }
     });
-    if (error || !data?.success) setMessage(data?.error || error?.message || 'Wholesale transfer retry failed.');
+    if (error || !data?.success) setMessage(readableError(data?.error || error, 'Wholesale transfer retry failed.'));
     else setMessage(`Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}.`);
     await loadPendingWholesaleTransfers(false);
     productSearchCacheRef.current.clear();
     await loadProducts({ force: true });
     setWholesaleBusy(false);
+  }
+
+  async function loadSavedDrafts(openPanel = true) {
+    setSavedDraftsBusy(true);
+    if (openPanel) setShowSavedDrafts(true);
+    const { data, error } = await supabase
+      .from('documents')
+      .select('id, document_no, customer_id, total_amount, paid_amount, balance_amount, document_date, created_at, notes, unconfirmed_payments, unconfirmed_header, created_by_staff_id')
+      .eq('document_type', 'unconfirmed_sale')
+      .eq('status', 'unconfirmed')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) setMessage(readableError(error, 'Draft sales could not be loaded.'));
+    else setSavedDrafts(data || []);
+    setSavedDraftsBusy(false);
+  }
+
+  async function openSavedDraft(draft, mode = 'unconfirmed_edit') {
+    setSavedDraftsBusy(true);
+    setMessage('');
+    const { data: draftItems, error } = await supabase
+      .from('document_items')
+      .select('*')
+      .eq('document_id', draft.id)
+      .order('created_at');
+    if (error || !draftItems?.length) {
+      setMessage(error ? readableError(error, 'This draft could not be opened.') : 'This draft has no items.');
+      setSavedDraftsBusy(false);
+      return;
+    }
+    const existingBill = bills.find((bill) => bill.sourceDocumentId === draft.id || bill.editUnconfirmedId === draft.id);
+    const customer = customers.find((row) => row.id === draft.customer_id);
+    const header = draft.unconfirmed_header || {};
+    const isEdit = mode === 'unconfirmed_edit';
+    const draftBill = {
+      ...emptyBill(`Draft ${draft.document_no}`),
+      id: existingBill?.id || createClientId(),
+      customerId: draft.customer_id || '',
+      customerName: customer?.name || '',
+      items: draftItems.map((item) => recalcItem({
+        id: createClientId(),
+        product_id: item.product_id,
+        item_code: item.item_code,
+        name: item.description || item.item_code || 'Draft item',
+        qty: Number(item.qty || 0),
+        unitPrice: Number(item.unit_price || 0),
+        unitCost: Number(item.unit_cost || 0),
+        discountType: item.discount_type || 'none',
+        discountValue: Number(item.discount_value || 0),
+        isReturn: false,
+        trackInventory: true,
+        lineTotal: Number(item.line_total || 0)
+      })),
+      cartDiscountType: header.cart_discount_type || 'amount',
+      cartDiscountValue: Number(header.cart_discount_value || 0),
+      paymentLines: (draft.unconfirmed_payments || []).map((line) => ({
+        id: createClientId(),
+        paymentMethodId: line.paymentMethodId || line.payment_method_id || '',
+        paymentMethodName: line.paymentMethodName || line.payment_method_name || 'Payment',
+        isPaidMethod: line.isPaidMethod ?? line.is_paid_method ?? true,
+        amount: Number(line.amount || 0),
+        direction: line.direction || 'in',
+        chequeNumber: line.chequeNumber || line.cheque_number || '',
+        chequeDate: line.chequeDate || line.cheque_date || '',
+        chequeBankName: line.chequeBankName || line.cheque_bank_name || ''
+      })),
+      notes: draft.notes || '',
+      sourceDocumentId: draft.id,
+      sourceDocumentNo: draft.document_no,
+      sourceDocumentType: 'unconfirmed_sale',
+      editUnconfirmedId: isEdit ? draft.id : '',
+      documentNo: isEdit ? draft.document_no : '',
+      unconfirmedMode: isEdit
+    };
+    draftBill.selectedItemId = draftBill.items[0]?.id || '';
+    setBills((current) => existingBill
+      ? current.map((bill) => bill.id === existingBill.id ? draftBill : bill)
+      : [...current, draftBill]);
+    setActiveBillId(draftBill.id);
+    setShowSavedDrafts(false);
+    setSavedDraftsBusy(false);
+    setMessage(isEdit
+      ? `Draft ${draft.document_no} opened. Changes can be saved back to the shared draft.`
+      : `Draft ${draft.document_no} opened for final review and posting.`);
   }
 
   function addBill() {
@@ -2313,7 +2422,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }
     const remaining = bills
       .filter((bill) => bill.id !== activeBill.id)
-      .map((bill) => resetUnconfirmedModes ? { ...bill, unconfirmedMode: false } : bill);
+      .map((bill) => resetUnconfirmedModes ? { ...bill, unconfirmedMode: Boolean(bill.editUnconfirmedId) } : bill);
     setBills(remaining);
     setActiveBillId(remaining[0].id);
   }
@@ -2550,7 +2659,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
     if (activeBill.sourceReservationId && isUnconfirmed) {
-      setMessage('A Reservation Order must be converted directly to a posted sale so its original reservation can be released safely. Turn off Save for review and save again.');
+      setMessage('A Reservation Order must be converted directly to a posted sale so its original reservation can be released safely. Turn off Save as draft and save again.');
       return;
     }
     const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
@@ -2596,12 +2705,12 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       || Math.abs(resultingOutstanding) > 0.005
       || Math.abs(currentOutstanding) > 0.005
       || (total < 0 && !fullySettledWalkInRefund);
-    if (requiresCustomer && !activeBill.customerId) {
+    if (!isUnconfirmed && requiresCustomer && !activeBill.customerId) {
       setMessage('Select a customer first when a refund or sale leaves credit, overpayment, or any outstanding balance. A fully paid walk-in refund can be saved without a profile.');
       setShowCustomerPanel(true);
       return;
     }
-    if ((appSettings.confirm_pos_sale || isEditingInvoice) && !window.confirm(`${isUnconfirmed ? 'Save this sale for internal confirmation' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : isEditingInvoice ? `Replace ${activeBill.documentNo} and reapply all stock, payment and balance effects` : 'Save this invoice'} for ${money(total)}?`)) return;
+    if ((appSettings.confirm_pos_sale || isEditingInvoice) && !window.confirm(`${isUnconfirmed ? 'Save this shared draft' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : isEditingInvoice ? `Replace ${activeBill.documentNo} and reapply all stock, payment and balance effects` : 'Save this invoice'} for ${money(total)}?`)) return;
 
     setSaving(true);
     const payload = {
@@ -2680,10 +2789,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       });
       error = bridgeResult.error;
       if (!error && bridgeResult.data?.success) data = bridgeResult.data.invoice;
-      else if (!error) error = { message: bridgeResult.data?.error || 'Wholesale transfer could not be completed.' };
+      else if (!error) error = bridgeResult.data?.error || { message: 'Wholesale transfer could not be completed.' };
       if (error) {
         setSaving(false);
-        setMessage(`${error.message}${bridgeResult.data?.pending ? ' The transfer is saved for retry; an administrator can open Pending Wholesale transfers on the POS.' : ''}`);
+        setMessage(`${readableError(error, 'Wholesale transfer could not be completed.')}${bridgeResult.data?.pending ? ' The transfer is saved for retry; an administrator can open Pending Wholesale transfers on the POS.' : ''}`);
         return;
       }
     } else {
@@ -2738,7 +2847,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     }
     setSavedInvoiceReceipt({ document: savedDocument, items: savedItems, flows: savedFlows });
     setSaving(false);
-    setMessage(`${isUnconfirmed ? 'Sale saved for internal confirmation' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : isEditingInvoice ? 'Invoice corrected and all effects reapplied' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : activeBill.sourceReservationNo ? ` from reservation ${activeBill.sourceReservationNo}` : ''}.`);
+    setMessage(`${isUnconfirmed ? 'Shared draft saved' : isConfirmingUnconfirmed ? 'Sale confirmed and posted' : isEditingInvoice ? 'Invoice corrected and all effects reapplied' : 'Invoice saved'}: ${data?.document_no || activeBill.documentNo}${activeBill.sourceQuoteNo ? ` from quotation ${activeBill.sourceQuoteNo}` : activeBill.sourceReservationNo ? ` from reservation ${activeBill.sourceReservationNo}` : ''}.`);
     await loadCustomers();
     await loadPosAssemblies();
     productSearchCacheRef.current.clear();
@@ -2780,7 +2889,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <button className="pos-action" disabled={!can('manage_parties')} title={!can('manage_parties') ? 'Permission required to add customers' : ''} onClick={() => setShowCustomerPanel(!showCustomerPanel)}>♙<span>Customer</span></button>
             <button className="pos-action return-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
             <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
-            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save for Review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : activeBill.editInvoiceId ? 'Save Changes' : 'Save Sale'}</span></button>
+            <button className="pos-action pos-drafts-action" onClick={() => loadSavedDrafts(true)} disabled={savedDraftsBusy}>▤<span>Drafts</span></button>
+            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save Draft' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : activeBill.editInvoiceId ? 'Save Changes' : 'Save Sale'}</span></button>
           </div>
         </div>
         <div className="pos-command-group payment-command-group">
@@ -2806,7 +2916,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <button className="tab add-tab" onClick={addBill}>+ New Bill</button>
         </div>
         <div className="pos-bill-row-actions">
-          <label className={`pos-unconfirmed-toggle ${activeBill.unconfirmedMode ? 'active' : ''}`} title="Save for internal review and reserve these items without posting payment.">
+          <label className={`pos-unconfirmed-toggle ${activeBill.unconfirmedMode ? 'active' : ''}`} title="Save as a shared draft. Items are reserved, but stock, cashflow and customer balances are not posted until confirmation.">
             <input
               type="checkbox"
               checked={activeBill.unconfirmedMode === true}
@@ -2814,7 +2924,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               onChange={(event) => updateActiveBill({ unconfirmedMode: event.target.checked })}
             />
             <span className="pos-unconfirmed-icon" aria-hidden="true">◇</span>
-            <span className="pos-unconfirmed-label">{activeBill.editUnconfirmedId ? 'Internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming saved sale' : 'Save for review'}</span>
+            <span className="pos-unconfirmed-label">{activeBill.editUnconfirmedId ? 'Editing draft' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming draft' : 'Save as draft'}</span>
           </label>
           <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
         </div>
@@ -3023,9 +3133,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         <div className="pos-save-success-card">
           <div className="pos-save-success-icon">✓</div>
           <div className="pos-save-success-copy">
-            <span>{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? 'Sale saved for internal review' : 'Invoice saved successfully'}</span>
+            <span>{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? 'Shared draft saved' : 'Invoice saved successfully'}</span>
             <h3>{savedInvoiceReceipt.document.document_no}</h3>
-            <p>{money(savedInvoiceReceipt.document.total_amount)} has been saved to Documents{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? ' with its items reserved and payment still unposted' : ''}. Choose what you want to do next.</p>
+            <p>{money(savedInvoiceReceipt.document.total_amount)} has been saved to Documents{savedInvoiceReceipt.document.document_type === 'unconfirmed_sale' ? ' as a shared draft, with its items reserved and payment still unposted' : ''}. Choose what you want to do next.</p>
           </div>
           <div className="pos-save-success-actions">
             <button className="primary-button" onClick={() => printAccountingDocument(savedInvoiceReceipt.document, savedInvoiceReceipt.items, savedInvoiceReceipt.flows, companySettings)}>Print A5 Invoice</button>
@@ -3204,7 +3314,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
               <div className="payment-popup-footer payment-screen-footer">
                 <button className="secondary-button" onClick={() => setPaymentDraft([])}>Clear payment lines</button>
-                <button className="primary-button green-button" onClick={() => { updateActiveBill({ paymentLines: paymentDraft }); setShowPaymentPanel(false); saveInvoice(paymentDraft); }}>{activeBill.unconfirmedMode ? 'Save for internal review' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm and save sale' : activeBill.editInvoiceId ? 'Save corrected invoice' : 'Save invoice'}</button>
+                <button className="primary-button green-button" onClick={() => { updateActiveBill({ paymentLines: paymentDraft }); setShowPaymentPanel(false); saveInvoice(paymentDraft); }}>{activeBill.unconfirmedMode ? 'Save shared draft' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm and save sale' : activeBill.editInvoiceId ? 'Save corrected invoice' : 'Save invoice'}</button>
               </div>
             </div>
           </div>
@@ -3218,6 +3328,24 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <label>Bank name (optional)<input value={chequeDraft.cheque_bank_name} onChange={(event) => setChequeDraft({ ...chequeDraft, cheque_bank_name: event.target.value })} placeholder="Bank written on cheque" /></label>
           <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setPendingChequePayment(null)}>Cancel</button><button className="primary-button">Add Cheque Payment</button></div>
         </form>
+      </div>}
+
+      {showSavedDrafts && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSavedDrafts(false); }}>
+        <div className="modal-card pos-drafts-modal">
+          <div className="section-title-row">
+            <div><h3>Shared sale drafts</h3><p>Drafts are available to every permitted POS user. They reserve stock but do not post stock, cashflow, payments, or customer balances until confirmed.</p></div>
+            <div className="pos-drafts-heading-actions"><button type="button" className="secondary-button" disabled={savedDraftsBusy} onClick={() => loadSavedDrafts(false)}>Refresh</button><button type="button" className="secondary-button" onClick={() => setShowSavedDrafts(false)}>Close</button></div>
+          </div>
+          {savedDraftsBusy && !savedDrafts.length ? <div className="muted-box">Loading drafts...</div> : savedDrafts.length ? <div className="pos-drafts-list">
+            {savedDrafts.map((draft) => {
+              const draftCustomer = customers.find((row) => row.id === draft.customer_id);
+              return <article className="pos-draft-card" key={draft.id}>
+                <div><strong>{draft.document_no}</strong><span>{draftCustomer?.name || 'Walk-in customer'}</span><small>{fmtDate(draft.document_date || draft.created_at)} · {money(draft.total_amount)}{numberValue(draft.paid_amount) > 0 ? ` · planned payments ${money(draft.paid_amount)}` : ' · no payment selected'}</small></div>
+                <div className="pos-draft-card-actions"><button type="button" className="primary-button" disabled={savedDraftsBusy} onClick={() => openSavedDraft(draft, 'unconfirmed_edit')}>Open Draft</button>{isAdmin && <button type="button" className="secondary-button" disabled={savedDraftsBusy} onClick={() => openSavedDraft(draft, 'unconfirmed_convert')}>Review &amp; Confirm</button>}</div>
+              </article>;
+            })}
+          </div> : <div className="muted-box">No shared drafts are waiting.</div>}
+        </div>
       </div>}
 
       {showWholesaleAdmin && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowWholesaleAdmin(false); }}>
@@ -3252,7 +3380,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
   const [rangePreset, setRangePreset] = useState('today');
   const [customStart, setCustomStart] = useState(localDate(new Date(today.getFullYear(), today.getMonth(), 1)));
   const [customEnd, setCustomEnd] = useState(localDate(today));
-  const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0, salesCashReceived: 0, sales: 0, cogs: 0, grossProfit: 0, invoices: 0, purchaseValue: 0, transitValue: 0, pendingCheques: 0, outstanding: 0, lowStock: [], pendingCod: 0, onlineNew: 0, recentDocuments: [], profitRows: [] });
+  const [stats, setStats] = useState({ products: 0, customers: 0, suppliers: 0, documents: 0, cashIn: 0, cashOut: 0, salesCashReceived: 0, sales: 0, cogs: 0, grossProfit: 0, invoices: 0, refundDocuments: 0, returnsRevenue: 0, returnsCost: 0, returnsProfitImpact: 0, purchaseValue: 0, transitValue: 0, pendingCheques: 0, outstanding: 0, lowStock: [], pendingCod: 0, onlineNew: 0, recentDocuments: [], profitRows: [] });
   const [error, setError] = useState('');
 
   const selectedRange = useMemo(() => {
@@ -3275,10 +3403,12 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
     const fromIso = selectedRange.start ? `${selectedRange.start}T00:00:00` : '';
     const toIso = selectedRange.end ? `${selectedRange.end}T23:59:59.999` : '';
     let cashQuery = supabase.from('cashflow_entries').select('entry_type, amount, payment_methods(affects_cashflow), documents(document_type)');
-    let rangeDocsQuery = supabase.from('documents').select('id, document_no, document_type, total_amount, status, document_date, created_at').in('document_type', ['invoice', 'purchase', 'stock_in_transit']).neq('status', 'cancelled');
+    let rangeDocsQuery = supabase.from('documents').select('id, document_no, document_type, total_amount, status, document_date, created_at').in('document_type', ['invoice', 'refund', 'purchase', 'stock_in_transit']).neq('status', 'cancelled');
     let chequeQuery = supabase.from('cheque_payments').select('id, status, amount, cheque_date').in('status', ['received', 'issued', 'deposited']);
-    if (fromIso) { cashQuery = cashQuery.gte('created_at', fromIso); rangeDocsQuery = rangeDocsQuery.gte('document_date', fromIso); }
-    if (toIso) { cashQuery = cashQuery.lte('created_at', toIso); rangeDocsQuery = rangeDocsQuery.lte('document_date', toIso); }
+    if (fromIso) cashQuery = cashQuery.gte('created_at', fromIso);
+    if (toIso) cashQuery = cashQuery.lte('created_at', toIso);
+    if (selectedRange.start) rangeDocsQuery = rangeDocsQuery.gte('document_date', selectedRange.start);
+    if (selectedRange.end) rangeDocsQuery = rangeDocsQuery.lte('document_date', selectedRange.end);
     if (selectedRange.start) chequeQuery = chequeQuery.gte('cheque_date', selectedRange.start);
     if (selectedRange.end) chequeQuery = chequeQuery.lte('cheque_date', selectedRange.end);
 
@@ -3297,20 +3427,24 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
     const firstError = productsRes.error || customersRes.error || suppliersRes.error || docsRes.error || cashRes.error || rangeDocsRes.error || chequeRes.error || outstandingRes.error || stockRes.error || codRes.error || recentRes.error;
     if (firstError) { setError(firstError.message); return; }
 
-    const invoices = (rangeDocsRes.data || []).filter((row) => row.document_type === 'invoice');
-    const invoiceIds = invoices.map((row) => row.id);
-    const itemRes = invoiceIds.length ? await supabase.from('document_items').select('id,document_id,item_code,description,qty,unit_cost,line_total').in('document_id', invoiceIds) : { data: [], error: null };
+    const salesDocuments = (rangeDocsRes.data || []).filter((row) => ['invoice', 'refund'].includes(row.document_type) && !['cancelled', 'void', 'voided'].includes(String(row.status || '').toLowerCase()));
+    const salesDocumentIds = salesDocuments.map((row) => row.id);
+    const itemRes = salesDocumentIds.length ? await supabase.from('document_items').select('id,document_id,item_code,description,qty,unit_cost,line_total').in('document_id', salesDocumentIds) : { data: [], error: null };
     if (itemRes.error) { setError(itemRes.error.message); return; }
     const itemsByDocument = new Map();
     (itemRes.data || []).forEach((item) => itemsByDocument.set(item.document_id, [...(itemsByDocument.get(item.document_id) || []), item]));
-    const profitRows = invoices.map((invoice) => {
+    const profitRows = salesDocuments.map((invoice) => {
       const lines = itemsByDocument.get(invoice.id) || [];
       const revenue = numberValue(invoice.total_amount);
       const cogs = lines.reduce((sum, line) => sum + numberValue(line.qty) * numberValue(line.unit_cost), 0);
-      return { ...invoice, revenue, cogs, grossProfit: revenue - cogs, lines };
+      const hasReturn = lines.some((line) => numberValue(line.qty) < 0 || numberValue(line.line_total) < 0);
+      return { ...invoice, revenue, cogs, grossProfit: revenue - cogs, lines, hasReturn };
     }).sort((left, right) => new Date(right.document_date || right.created_at) - new Date(left.document_date || left.created_at));
     const sales = profitRows.reduce((sum, row) => sum + row.revenue, 0);
     const cogs = profitRows.reduce((sum, row) => sum + row.cogs, 0);
+    const returnLines = (itemRes.data || []).filter((line) => numberValue(line.qty) < 0 || numberValue(line.line_total) < 0);
+    const returnsRevenue = returnLines.reduce((sum, line) => sum + Math.abs(numberValue(line.line_total)), 0);
+    const returnsCost = returnLines.reduce((sum, line) => sum + Math.abs(numberValue(line.qty)) * numberValue(line.unit_cost), 0);
     const flowRows = (cashRes.data || []).filter((row) => row.payment_methods?.affects_cashflow !== false);
     const lowStock = (stockRes.data || []).filter((row) => numberValue(row.available_qty) <= numberValue(row.min_stock_level)).sort((a, b) => numberValue(a.available_qty) - numberValue(b.available_qty)).slice(0, 6);
     setStats({
@@ -3318,7 +3452,9 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       cashIn: flowRows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0),
       cashOut: flowRows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0),
       salesCashReceived: flowRows.filter((row) => row.entry_type === 'cash_in' && row.documents?.document_type === 'invoice').reduce((sum, row) => sum + numberValue(row.amount), 0),
-      sales, cogs, grossProfit: sales - cogs, invoices: invoices.length,
+      sales, cogs, grossProfit: sales - cogs, invoices: salesDocuments.length,
+      refundDocuments: profitRows.filter((row) => row.hasReturn).length,
+      returnsRevenue, returnsCost, returnsProfitImpact: returnsRevenue - returnsCost,
       purchaseValue: (rangeDocsRes.data || []).filter((row) => row.document_type === 'purchase').reduce((sum, row) => sum + numberValue(row.total_amount), 0),
       transitValue: (rangeDocsRes.data || []).filter((row) => row.document_type === 'stock_in_transit' && row.status !== 'converted').reduce((sum, row) => sum + numberValue(row.total_amount), 0),
       pendingCheques: (chequeRes.data || []).length,
@@ -3336,9 +3472,9 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
     <div className="dashboard-range-bar"><div className="dashboard-range-presets">{[['today','Today'],['yesterday','Yesterday'],['this_month','This Month'],['last_month','Last Month'],['this_year','This Year'],['last_year','Last Year'],['all_time','Since Start'],['custom','Custom']].map(([key,label]) => <button type="button" key={key} className={rangePreset === key ? 'active' : ''} onClick={() => setRangePreset(key)}>{label}</button>)}</div>{rangePreset === 'custom' && <div className="dashboard-custom-range"><label>From<input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} /></label><label>To<input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} /></label></div>}</div>
 
     <div className="dashboard-primary-stats dashboard-financial-stats">
-      <article className="dashboard-metric sales"><span>Sales</span><strong>{money(stats.sales)}</strong><small>{stats.invoices} invoice{stats.invoices === 1 ? '' : 's'} · {money(stats.salesCashReceived)} cash/bank received</small><i>↗</i></article>
-      <article className="dashboard-metric cogs"><span>Cost of goods sold</span><strong>{money(stats.cogs)}</strong><small>Exact quantity × cost saved at sale</small><i>−</i></article>
-      <article className={`dashboard-metric profit ${stats.grossProfit < 0 ? 'negative' : ''}`}><span>Gross profit</span><strong>{money(stats.grossProfit)}</strong><small>{margin.toFixed(1)}% gross margin</small><i>=</i></article>
+      <article className="dashboard-metric sales"><span>Net sales</span><strong>{money(stats.sales)}</strong><small>{stats.invoices} sale/refund document{stats.invoices === 1 ? '' : 's'} · {money(stats.salesCashReceived)} cash/bank received</small><i>↗</i></article>
+      <article className="dashboard-metric cogs"><span>Net cost of goods sold</span><strong>{money(stats.cogs)}</strong><small>Sales cost minus returned-item cost</small><i>−</i></article>
+      <article className={`dashboard-metric profit ${stats.grossProfit < 0 ? 'negative' : ''}`}><span>Gross profit</span><strong>{money(stats.grossProfit)}</strong><small>{margin.toFixed(1)}% margin · return profit impact {signedMoney(-stats.returnsProfitImpact)}</small><i>=</i></article>
       <article className="dashboard-metric cash"><span>Realized cash + bank</span><strong>{signedMoney(stats.cashIn - stats.cashOut)}</strong><small>{money(stats.cashIn)} in · {money(stats.cashOut)} out</small><i>⇅</i></article>
       <article className="dashboard-metric purchases"><span>Purchase value</span><strong>{money(stats.purchaseValue)}</strong><small>Received purchases in this range</small><i>↓</i></article>
       <article className="dashboard-metric transit"><span>Stock in transit</span><strong>{money(stats.transitValue)}</strong><small>Open transit documents in this range</small><i>⌛</i></article>
@@ -3347,7 +3483,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       <article className="dashboard-metric orders"><span>Orders needing work</span><strong>{stats.pendingCod + stats.onlineNew}</strong><small>{stats.pendingCod} delivery · {stats.onlineNew} new online</small><i>◎</i></article>
     </div>
 
-    <article className="panel-card dashboard-profit-panel"><div className="dashboard-panel-title"><div><span>Profit calculation</span><h3>{selectedRange.label}</h3></div><div className="dashboard-profit-equation"><span><small>Sales</small><strong>{money(stats.sales)}</strong></span><b>−</b><span><small>COGS</small><strong>{money(stats.cogs)}</strong></span><b>=</b><span><small>Gross profit</small><strong className={stats.grossProfit >= 0 ? 'positive-balance' : 'negative-balance'}>{money(stats.grossProfit)}</strong></span></div></div><div className="table-wrap dashboard-profit-table"><table><thead><tr><th>Invoice</th><th>Date</th><th>Sales</th><th>COGS</th><th>Gross Profit</th><th>Margin</th></tr></thead><tbody>{stats.profitRows.map((row) => <tr key={row.id}><td><strong>{row.document_no}</strong><small className="table-subtext">{row.lines.length} item line{row.lines.length === 1 ? '' : 's'}</small></td><td>{fmtDate(row.document_date || row.created_at)}</td><td>{money(row.revenue)}</td><td>{money(row.cogs)}</td><td className={row.grossProfit >= 0 ? 'positive-balance' : 'negative-balance'}>{money(row.grossProfit)}</td><td>{row.revenue ? `${(row.grossProfit / row.revenue * 100).toFixed(1)}%` : '0.0%'}</td></tr>)}{!stats.profitRows.length && <EmptyRow colSpan={6} text={`No sales for ${selectedRange.label.toLowerCase()}.`} />}</tbody></table></div></article>
+    <article className="panel-card dashboard-profit-panel"><div className="dashboard-panel-title"><div><span>Profit calculation</span><h3>{selectedRange.label}</h3><small className="dashboard-return-impact">{stats.refundDocuments} return document{stats.refundDocuments === 1 ? '' : 's'} in this period · {money(stats.returnsRevenue)} returned sales · {money(stats.returnsCost)} returned cost</small></div><div className="dashboard-profit-equation"><span><small>Net sales</small><strong>{money(stats.sales)}</strong></span><b>−</b><span><small>Net COGS</small><strong>{money(stats.cogs)}</strong></span><b>=</b><span><small>Gross profit</small><strong className={stats.grossProfit >= 0 ? 'positive-balance' : 'negative-balance'}>{money(stats.grossProfit)}</strong></span></div></div><div className="table-wrap dashboard-profit-table"><table><thead><tr><th>Invoice</th><th>Date</th><th>Net Sales</th><th>Net COGS</th><th>Gross Profit</th><th>Margin</th></tr></thead><tbody>{stats.profitRows.map((row) => <tr key={row.id} className={row.hasReturn ? 'dashboard-refund-row' : ''}><td><strong>{row.document_no}</strong><small className="table-subtext">{row.hasReturn ? 'Return recorded in this period' : `${row.lines.length} item line${row.lines.length === 1 ? '' : 's'}`}</small></td><td>{fmtDate(row.document_date || row.created_at)}</td><td>{money(row.revenue)}</td><td>{money(row.cogs)}</td><td className={row.grossProfit >= 0 ? 'positive-balance' : 'negative-balance'}>{money(row.grossProfit)}</td><td>{row.revenue ? `${(row.grossProfit / row.revenue * 100).toFixed(1)}%` : '0.0%'}</td></tr>)}{!stats.profitRows.length && <EmptyRow colSpan={6} text={`No sales or refunds for ${selectedRange.label.toLowerCase()}.`} />}</tbody></table></div></article>
 
     <div className="dashboard-content-grid"><article className="panel-card dashboard-activity"><div className="dashboard-panel-title"><div><span>Latest activity</span><h3>Recent documents</h3></div><button type="button" onClick={() => onNavigate?.('documents')}>View all</button></div><div className="dashboard-document-list">{stats.recentDocuments.map((document) => <div key={document.id}><span className={`dashboard-doc-icon ${document.document_type}`}>{document.document_type === 'invoice' ? 'S' : document.document_type === 'purchase' ? 'P' : document.document_type === 'cod_order' ? 'C' : 'D'}</span><div><strong>{document.document_no}</strong><small>{documentTypeLabel(document.document_type)} · {fmtDate(document.created_at)}</small></div><span className="dashboard-doc-status">{String(document.status || '').replaceAll('_', ' ')}</span><b>{money(document.total_amount)}</b></div>)}{!stats.recentDocuments.length && <div className="muted-box">No documents yet.</div>}</div></article><article className="panel-card dashboard-stock-watch"><div className="dashboard-panel-title"><div><span>Inventory watch</span><h3>Low stock</h3></div><button type="button" onClick={() => onNavigate?.('stock')}>Open stock</button></div><div className="dashboard-stock-list">{stats.lowStock.map((product) => <div key={product.product_id}><span><strong>{product.name}</strong><small>{product.item_code}</small></span><b className={numberValue(product.available_qty) <= 0 ? 'empty' : ''}>{numberValue(product.available_qty)} available</b></div>)}{!stats.lowStock.length && <div className="dashboard-all-good"><span>✓</span><strong>Stock levels look healthy</strong><small>No products are at or below their minimum level.</small></div>}</div></article></div>
     <div className="dashboard-mini-stats"><div><span>Products</span><strong>{stats.products}</strong></div><div><span>Customers</span><strong>{stats.customers}</strong></div><div><span>Suppliers</span><strong>{stats.suppliers}</strong></div><div><span>All documents</span><strong>{stats.documents}</strong></div></div>
@@ -3963,7 +4099,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     const { data: saleItems, error: itemError } = await supabase.from('document_items').select('*').eq('document_id', selected.id).order('created_at');
     setBusyAction(false);
     if (itemError) { setError(itemError.message); return; }
-    if (!saleItems?.length) { setError('This saved sale has no items.'); return; }
+    if (!saleItems?.length) { setError('This draft has no items.'); return; }
     window.localStorage.setItem(QUOTE_TO_POS_KEY, JSON.stringify({
       mode,
       sourceDocumentId: selected.id,
@@ -3977,7 +4113,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       cartDiscountValue: Number(selected.unconfirmed_header?.cart_discount_value || 0),
       items: saleItems
     }));
-    setMessage(mode === 'unconfirmed_convert' ? `${selected.document_no} loaded into POS for admin confirmation.` : `${selected.document_no} loaded into POS for editing.`);
+    setMessage(mode === 'unconfirmed_convert' ? `Draft ${selected.document_no} loaded into POS for admin confirmation.` : `Draft ${selected.document_no} loaded into POS for editing.`);
     onOpenPOS?.();
   }
 
@@ -4140,8 +4276,24 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       await loadDocuments();
       return;
     }
+    if (selected.document_type === 'stock_adjustment') {
+      if (!window.confirm(`Delete stock adjustment ${selected.document_no}? Its quantity changes will be reversed. Product cost, selling price and cashflow will remain unchanged.`)) return;
+      setBusyAction(true);
+      setError('');
+      setMessage('');
+      const { data, error: deleteError } = await supabase.rpc('delete_stock_adjustment_v79', { p_document_id: selected.id });
+      if (deleteError) {
+        const migrationMissing = /delete_stock_adjustment_v79|schema cache|could not find the function/i.test(deleteError.message || '');
+        setError(`${deleteError.message}${migrationMissing ? '. Run migration 079_walkin_refunds_stock_adjustment_delete.sql in Supabase, then refresh.' : ''}`);
+      } else {
+        setMessage(`${data?.document_no || selected.document_no} deleted and its stock quantities reversed.`);
+      }
+      setBusyAction(false);
+      await loadDocuments();
+      return;
+    }
     if (!['purchase', 'stock_in_transit'].includes(selected.document_type)) {
-      setError('Delete with stock reversal is currently enabled for Purchase and Stock in Transit documents only.');
+      setError('Deletion with automatic reversal is not available for this document type.');
       return;
     }
     if (!window.confirm(`Delete ${selected.document_no}? This will reverse its stock/cashflow effect before deleting.`)) return;
@@ -4165,7 +4317,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   const canEditSelected = selected && ['invoice', 'unconfirmed_sale', 'purchase', 'stock_in_transit', 'quotation', 'cod_order', 'customer_payment', 'supplier_payment'].includes(selected.document_type) && canManageDocumentType(selected.document_type);
   const canDeleteSelected = selected?.document_type === 'invoice'
     ? can('delete_sales_documents')
-    : ['unconfirmed_sale', 'purchase', 'stock_in_transit'].includes(selected?.document_type) && can('delete_documents');
+    : ['unconfirmed_sale', 'purchase', 'stock_in_transit', 'stock_adjustment'].includes(selected?.document_type) && can('delete_documents');
   const activeDocumentTab = documentTabs.find((tab) => tab.id === activeDocumentTabId) || documentTabs[0];
 
   function closeDocumentTab(tabId) {
@@ -9641,9 +9793,10 @@ function StockPage({ onOpenDocuments }) {
               </thead>
               <tbody>
                 {rows.map((row) => {
-                  const isLow = numberValue(row.sellable_qty) > 0 && numberValue(row.sellable_qty) <= numberValue(row.min_stock_level, 1);
+                  const isOut = numberValue(row.sellable_qty) <= 0;
+                  const isLow = !isOut && numberValue(row.sellable_qty) <= numberValue(row.min_stock_level, 1);
                   return (
-                    <tr key={row.product_id} className={isLow ? 'low-stock-row' : ''}>
+                    <tr key={row.product_id} className={isOut ? 'out-of-stock-row' : isLow ? 'low-stock-row' : ''}>
                       <td><strong>{row.item_code}</strong></td>
                       <td>{row.name}<ProductOriginBadges product={row} compact /></td>
                       <td><span className={row.inventory_ownership === 'consignment' ? 'status-pill consignment-stock' : 'status-pill tracked-stock'}>{row.inventory_ownership === 'consignment' ? `Consignment · ${row.consignment_owner_name || 'owner'}` : 'Shop owned'}</span></td>
@@ -11333,8 +11486,8 @@ function ReportsPage() {
     const [documentRes, cashflowRes, movementRes] = await Promise.all([
       supabase.from('documents')
         .select('id, document_no, document_type, status, customer_id, supplier_id, total_amount, paid_amount, balance_amount, document_date, created_at, notes, external_document_no, linked_document_id, job_no, job_status, recipient_name, delivery_phone, delivery_service, tracking_number, delivery_payment_mode, cod_collect_amount')
-        .gte('document_date', periodBounds.start)
-        .lt('document_date', periodBounds.endExclusive)
+        .gte('document_date', period.from)
+        .lte('document_date', period.to)
         .order('document_date', { ascending: false })
         .limit(2000),
       supabase.from('cashflow_entries')
@@ -11372,7 +11525,9 @@ function ReportsPage() {
   const customerMap = useMemo(() => new Map(customers.map((row) => [row.id, row])), [customers]);
   const supplierMap = useMemo(() => new Map(suppliers.map((row) => [row.id, row])), [suppliers]);
   const documentMap = useMemo(() => new Map(documents.map((row) => [row.id, row])), [documents]);
-  const salesDocuments = documents.filter((row) => row.document_type === 'invoice' && (!customerId || row.customer_id === customerId));
+  const salesDocuments = documents.filter((row) => ['invoice', 'refund'].includes(row.document_type)
+    && !['cancelled', 'void', 'voided'].includes(String(row.status || '').toLowerCase())
+    && (!customerId || row.customer_id === customerId));
   const salesDocumentIds = new Set(salesDocuments.map((row) => row.id));
   const salesItems = items.filter((row) => salesDocumentIds.has(row.document_id));
   const purchaseDocuments = documents.filter((row) => row.document_type === 'purchase' && (!supplierId || row.supplier_id === supplierId));
@@ -11381,11 +11536,15 @@ function ReportsPage() {
   const salesRevenue = salesItems.reduce((sum, row) => sum + numberValue(row.line_total), 0);
   const salesCost = salesItems.reduce((sum, row) => sum + numberValue(row.qty) * numberValue(row.unit_cost), 0);
   const salesProfit = salesRevenue - salesCost;
+  const returnItems = salesItems.filter((row) => numberValue(row.qty) < 0 || numberValue(row.line_total) < 0);
+  const returnedSales = returnItems.reduce((sum, row) => sum + Math.abs(numberValue(row.line_total)), 0);
+  const returnedCost = returnItems.reduce((sum, row) => sum + Math.abs(numberValue(row.qty)) * numberValue(row.unit_cost), 0);
+  const returnedProfitImpact = returnedSales - returnedCost;
   const productPerformance = reportGroup(salesItems, (row) => row.product_id || `${row.item_code}|${row.description}`, (row, key) => ({ id: key, item_code: row.item_code || '-', description: row.description || '-', qty: 0, sales: 0, cost: 0 }), (current, row) => { current.qty += numberValue(row.qty); current.sales += numberValue(row.line_total); current.cost += numberValue(row.qty) * numberValue(row.unit_cost); }).sort((a, b) => b.sales - a.sales);
   const purchasedProducts = reportGroup(purchaseItems, (row) => row.product_id || `${row.item_code}|${row.description}`, (row, key) => ({ id: key, item_code: row.item_code || '-', description: row.description || '-', qty: 0, value: 0 }), (current, row) => { current.qty += numberValue(row.qty); current.value += numberValue(row.line_total) || numberValue(row.qty) * numberValue(row.unit_cost); }).sort((a, b) => b.value - a.value);
   const invoicePaymentFlows = cashflows.filter((flow) => {
     const doc = documentMap.get(flow.document_id);
-    if (doc?.document_type !== 'invoice') return false;
+    if (!['invoice', 'refund'].includes(doc?.document_type)) return false;
     if (customerId && doc.customer_id !== customerId) return false;
     if (paymentMethodId && flow.payment_method_id !== paymentMethodId) return false;
     return true;
@@ -11424,7 +11583,7 @@ function ReportsPage() {
       { key: 'total', label: 'Total', render: (row) => reportAmount(row.total_amount), className: 'report-number' }
     ];
     if (activeReport === 'profit_margin') return {
-      title: 'Profit & Margin', printTitle: 'PROFIT', description: 'Net item sales after discounts compared with the recorded item cost.', totals: [],
+      title: 'Profit & Margin', printTitle: 'PROFIT', description: 'Net sales and cost for documents recorded in this period. Returns reduce this period’s sales, cost and gross profit; they do not rewrite the original sale month.', totals: [['Net Sales', money(salesRevenue)], ['Returned Sales', money(returnedSales)], ['Return Profit Impact', signedMoney(-returnedProfitImpact)], ['Gross Profit', money(salesProfit)]],
       columns: [
         { key: 'item_code', label: 'Code' },
         { key: 'description', label: 'Product' },
@@ -11456,7 +11615,7 @@ function ReportsPage() {
     if (activeReport === 'sales_customers') return { title: 'Sales by Customers', description: 'Invoice totals and balances grouped by customer.', totals: [['Sales', money(salesCustomerRows.reduce((sum, row) => sum + row.total, 0))], ['Outstanding', money(salesCustomerRows.reduce((sum, row) => sum + row.balance, 0))]], columns: [{ key: 'customer', label: 'Customer' }, { key: 'invoices', label: 'Invoices' }, { key: 'total', label: 'Sales', render: (row) => money(row.total) }, { key: 'paid', label: 'Paid', render: (row) => money(row.paid) }, { key: 'balance', label: 'Outstanding', render: (row) => money(row.balance) }], rows: salesCustomerRows };
     if (activeReport === 'invoice_list') {
       const rows = salesDocuments.map((row, index) => ({ ...row, report_index: index + 1 }));
-      return { title: 'Invoice List', printTitle: 'INVOICE LIST', description: 'All sales invoices in the selected period.', totals: [], columns: commonInvoiceColumns, footer: { payment_method: 'Total', total: reportAmount(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0)) }, rows };
+      return { title: 'Invoice List', printTitle: 'INVOICE LIST', description: 'All sales and return documents recorded in the selected period.', totals: [], columns: commonInvoiceColumns, footer: { payment_method: 'Net Total', total: reportAmount(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0)) }, rows };
     }
     if (activeReport === 'unpaid_sales') { const rows = salesDocuments.filter((row) => numberValue(row.balance_amount) > 0).map((row, index) => ({ ...row, report_index: index + 1 })); return { title: 'Unpaid Sales', description: 'Sales invoices with an amount still due.', totals: [['Invoices', rows.length], ['Outstanding', money(rows.reduce((sum, row) => sum + numberValue(row.balance_amount), 0))]], columns: commonInvoiceColumns, rows }; }
     if (activeReport === 'purchased_products') {

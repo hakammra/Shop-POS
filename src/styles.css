@@ -875,6 +875,21 @@ tr:hover td { background: #303030; }
 .low-stock-row td {
   background: #382f18;
 }
+.out-of-stock-row td {
+  background: #3a2023;
+  color: #ffd8d8;
+}
+.out-of-stock-row td:first-child {
+  border-left: 3px solid #e45a5f;
+}
+.out-of-stock-row td:nth-child(4),
+.out-of-stock-row td:nth-child(6) {
+  color: #ff8f93;
+  font-weight: 800;
+}
+.dashboard-return-impact { display: block; margin-top: 5px; color: #d5ad63; font-weight: 700; }
+.dashboard-refund-row td { background: rgba(151, 76, 45, .13); }
+.dashboard-refund-row td:first-child { border-left: 3px solid #d38a55; }
 .status-pill {
   display: inline-block;
   padding: 3px 8px;
@@ -2173,6 +2188,32 @@ tr.selected-row td {
   padding: 3px 7px;
 }
 .wholesale-inline-badge { margin-left: 7px; vertical-align: middle; }
+.pos-drafts-modal {
+  width: min(860px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px);
+  overflow: auto;
+}
+.pos-drafts-modal .section-title-row { align-items: flex-start; }
+.pos-drafts-modal .section-title-row h3,
+.pos-drafts-modal .section-title-row p { margin: 0; }
+.pos-drafts-modal .section-title-row p { max-width: 650px; margin-top: 4px; color: var(--muted); line-height: 1.4; }
+.pos-drafts-heading-actions,
+.pos-draft-card-actions { display: flex; flex: 0 0 auto; gap: 7px; }
+.pos-drafts-list { display: grid; gap: 8px; margin-top: 14px; }
+.pos-draft-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid #b9923e;
+  background: rgba(255,255,255,.025);
+}
+.pos-draft-card > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.pos-draft-card strong { color: #e4c77d; font-size: 15px; }
+.pos-draft-card span { font-weight: 700; overflow-wrap: anywhere; }
+.pos-draft-card small { color: var(--muted); }
 .wholesale-pending-modal { width: min(1120px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; }
 .wholesale-pending-modal .section-title-row h3,
 .wholesale-pending-modal .section-title-row p { margin: 0; }
@@ -2183,6 +2224,11 @@ tr.selected-row td {
 .wholesale-status.wholesale_posted { border-color: var(--primary); color: #9edfff; }
 .wholesale-error-cell { max-width: 300px; white-space: normal; color: #efb0b0; }
 @media (max-width: 900px) {
+  .pos-drafts-modal { width: 100%; max-height: 94dvh; }
+  .pos-drafts-modal .section-title-row,
+  .pos-draft-card { align-items: stretch; flex-direction: column; }
+  .pos-drafts-heading-actions button,
+  .pos-draft-card-actions button { flex: 1 1 0; }
   .wholesale-pos-tools { flex-wrap: wrap; align-items: stretch; }
   .wholesale-pos-tools > div { width: 100%; margin: 0; }
   .wholesale-pos-tools button { flex: 1 1 130px; }
