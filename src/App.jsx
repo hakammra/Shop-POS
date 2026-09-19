@@ -2759,9 +2759,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage('Run migration 076_retail_wholesale_bridge.sql before selling Wholesale Catalog items.');
       return;
     }
-    if (hasWholesaleItems && (isUnconfirmed || isConfirmingUnconfirmed || isEditingInvoice || activeBill.sourceReservationId)) {
+    if (hasWholesaleItems && (isUnconfirmed || isConfirmingUnconfirmed || activeBill.sourceReservationId)) {
       setSaving(false);
-      setMessage('Wholesale Catalog items must be completed as a new posted sale. They cannot be saved for review, edited through the normal invoice correction flow, or converted from a reservation.');
+      setMessage('Wholesale Catalog items must be completed as a posted sale. They cannot be saved as a draft or converted from a reservation.');
       return;
     }
 
@@ -2770,7 +2770,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       : isConfirmingUnconfirmed
         ? 'confirm_unconfirmed_sale_v63'
         : isEditingInvoice
-          ? 'replace_pos_invoice_v67'
+          ? 'replace_retail_wholesale_invoice_v81'
         : 'save_pos_invoice_v74';
     const rpcArgs = isEditingInvoice
       ? { p_document_id: activeBill.editInvoiceId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
@@ -2779,7 +2779,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
     let data;
     let error;
-    if (hasWholesaleItems) {
+    if (hasWholesaleItems && !isEditingInvoice) {
       const bridgeResult = await supabase.functions.invoke('retail-wholesale-bridge', {
         body: {
           action: 'checkout',
@@ -2798,10 +2798,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     } else {
       ({ data, error } = await supabase.rpc(rpcName, rpcArgs));
     }
-    if (error && /save_pos_invoice_v74|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|schema cache|could not find the function/i.test(error.message || '')) {
+    if (error && /save_pos_invoice_v74|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|replace_retail_wholesale_invoice_v81|schema cache|could not find the function/i.test(error.message || '')) {
       setSaving(false);
       setMessage(isEditingInvoice
-        ? 'Run migration 067_sales_invoice_corrections.sql in Supabase before editing finalized sales.'
+        ? 'Run migrations 067_sales_invoice_corrections.sql and 081_wholesale_sale_edit_and_cancellation.sql in Retail Supabase before editing finalized sales.'
         : isUnconfirmed || isConfirmingUnconfirmed
         ? 'Run migration 063_party_delete_review_reservations.sql in Supabase before using review sales.'
         : 'Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase before saving new sales.');
@@ -4246,16 +4246,41 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
     }
     if (selected.document_type === 'invoice') {
       if (!can('delete_sales_documents')) { setError('Delete finalized sales documents permission required.'); return; }
-      if (!window.confirm(`Permanently delete sales invoice ${selected.document_no}? Its stock, customer balance, payments, cheques, cashflow and accounting effects will be reversed.`)) return;
       setBusyAction(true);
       setError('');
       setMessage('');
-      const { data, error: deleteError } = await supabase.rpc('delete_pos_invoice_v68', { p_document_id: selected.id });
-      if (deleteError) {
-        const migrationMissing = /delete_pos_invoice_v68|schema cache|could not find the function/i.test(deleteError.message || '');
-        setError(`${deleteError.message}${migrationMissing ? '. Run migration 068_sales_invoice_deletion.sql in Supabase, then refresh.' : ''}`);
+      const { data: wholesaleInfo, error: wholesaleInfoError } = await supabase.rpc('get_retail_wholesale_invoice_v81', { p_document_id: selected.id });
+      const wholesaleLookupMissing = wholesaleInfoError && /get_retail_wholesale_invoice_v81|schema cache|could not find the function/i.test(wholesaleInfoError.message || '');
+      if (wholesaleInfoError && !wholesaleLookupMissing) {
+        setError(wholesaleInfoError.message);
+        setBusyAction(false);
+        return;
+      }
+      const isWholesaleInvoice = wholesaleInfo?.is_wholesale === true;
+      const warning = isWholesaleInvoice
+        ? `Permanently delete Wholesale-linked invoice ${selected.document_no}? This will cancel ${wholesaleInfo.wholesale_document_no || 'the linked Wholesale invoice'} and reverse Wholesale stock/receivable plus the Retail sale, automatic purchase, stock, balances, payments and cashflow.`
+        : `Permanently delete sales invoice ${selected.document_no}? Its stock, customer balance, payments, cheques, cashflow and accounting effects will be reversed.`;
+      if (!window.confirm(warning)) { setBusyAction(false); return; }
+      let data;
+      let deleteError;
+      if (isWholesaleInvoice) {
+        const bridgeResult = await supabase.functions.invoke('retail-wholesale-bridge', {
+          body: { action: 'cancel', retail_invoice_document_id: selected.id }
+        });
+        data = bridgeResult.data;
+        deleteError = bridgeResult.error || (!bridgeResult.data?.success ? bridgeResult.data?.error || 'Wholesale cancellation failed.' : null);
       } else {
-        setMessage(`${data?.document_no || selected.document_no} deleted and all posted effects reversed.`);
+        ({ data, error: deleteError } = await supabase.rpc('delete_pos_invoice_v68', { p_document_id: selected.id }));
+      }
+      if (deleteError) {
+        const deleteMessage = readableError(deleteError, 'Invoice deletion failed.');
+        const migrationMissing = /delete_pos_invoice_v68|finalize_retail_wholesale_cancellation_v81|prepare_retail_wholesale_cancellation_v81|schema cache|could not find the function/i.test(deleteMessage);
+        const oldWholesaleGuard = /completed Wholesale transfer|cannot be deleted independently/i.test(deleteMessage);
+        setError(`${deleteMessage}${migrationMissing || oldWholesaleGuard || wholesaleLookupMissing ? '. Run migration 081_wholesale_sale_edit_and_cancellation.sql in Retail Supabase and migration 017_retail_bridge_cancellation.sql in Wholesale Supabase, then deploy both bridge functions.' : ''}`);
+      } else {
+        setMessage(isWholesaleInvoice
+          ? `${data?.document_no || selected.document_no} cancelled across Retail and Wholesale; all linked effects were reversed.`
+          : `${data?.document_no || selected.document_no} deleted and all posted effects reversed.`);
       }
       setBusyAction(false);
       await loadDocuments();

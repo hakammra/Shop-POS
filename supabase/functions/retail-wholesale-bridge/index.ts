@@ -122,6 +122,45 @@ async function continueTransfer(userClient: any, admin: any, bridgeSecret: strin
   return data;
 }
 
+async function continueCancellation(userClient: any, admin: any, bridgeSecret: string, transferId: string) {
+  let transfer = await loadTransfer(admin, transferId);
+  await admin.from('retail_wholesale_transfers').update({
+    attempt_count: Number(transfer.attempt_count || 0) + 1,
+    last_error: null,
+    updated_at: new Date().toISOString()
+  }).eq('id', transferId);
+
+  if (transfer.status === 'cancelled') {
+    return { cancelled: true, already_cancelled: true, document_no: transfer.retail_sale_reference };
+  }
+
+  if (transfer.status !== 'wholesale_cancelled') {
+    const wholesaleCancellation = await callWholesale(bridgeSecret, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'cancel_sale',
+        idempotency_key: transfer.idempotency_key,
+        retail_sale_reference: transfer.retail_sale_reference,
+        wholesale_document_id: transfer.wholesale_document_id
+      })
+    });
+    const { error: storeError } = await admin.from('retail_wholesale_transfers').update({
+      status: 'wholesale_cancelled',
+      next_step: 'retail_cancel',
+      wholesale_cancellation_response: wholesaleCancellation,
+      last_error: null,
+      updated_at: new Date().toISOString()
+    }).eq('id', transferId);
+    if (storeError) throw storeError;
+    transfer = await loadTransfer(admin, transferId);
+  }
+
+  const { data, error } = await userClient.rpc('finalize_retail_wholesale_cancellation_v81', { p_transfer_id: transfer.id });
+  if (error) throw error;
+  await refreshCatalog(admin, bridgeSecret);
+  return data;
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return json({ success: false, error: 'Method not allowed.' }, 405);
@@ -129,6 +168,7 @@ Deno.serve(async (request) => {
   let transferId = '';
   let admin: any = null;
   let pendingTransfer = false;
+  let requestedAction = 'checkout';
   try {
     const { supabaseUrl, anonKey, serviceRoleKey, bridgeSecret } = requiredEnvironment();
     const authorization = request.headers.get('Authorization') || '';
@@ -144,6 +184,7 @@ Deno.serve(async (request) => {
 
     const body = await request.json().catch(() => ({}));
     const action = String(body?.action || 'checkout');
+    requestedAction = action;
 
     if (action === 'refresh_catalog') {
       const { error: authorizationError } = await userClient.rpc('authorize_retail_wholesale_catalog_v76');
@@ -157,7 +198,24 @@ Deno.serve(async (request) => {
       if (authorizationError) throw authorizationError;
       transferId = String(body?.transfer_id || '');
       if (!transferId) throw new Error('Transfer ID is required.');
-      const result = await continueTransfer(userClient, admin, bridgeSecret, transferId);
+      const transfer = await loadTransfer(admin, transferId);
+      const result = ['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step)
+        ? await continueCancellation(userClient, admin, bridgeSecret, transferId)
+        : await continueTransfer(userClient, admin, bridgeSecret, transferId);
+      return json({ success: true, ...result });
+    }
+
+    if (action === 'cancel') {
+      const retailInvoiceId = String(body?.retail_invoice_document_id || '');
+      if (!retailInvoiceId) throw new Error('Retail invoice ID is required.');
+      const { data: prepared, error: prepareError } = await userClient.rpc('prepare_retail_wholesale_cancellation_v81', {
+        p_document_id: retailInvoiceId
+      });
+      if (prepareError) throw prepareError;
+      transferId = String(prepared?.transfer_id || '');
+      if (!transferId) throw new Error('Wholesale transfer could not be identified for this invoice.');
+      pendingTransfer = true;
+      const result = await continueCancellation(userClient, admin, bridgeSecret, transferId);
       return json({ success: true, ...result });
     }
 
@@ -181,7 +239,15 @@ Deno.serve(async (request) => {
       try {
         const transfer = await loadTransfer(admin, transferId);
         pendingTransfer = true;
-        if (transfer.status !== 'retail_posted') {
+        const cancellationFlow = requestedAction === 'cancel' || ['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step);
+        if (cancellationFlow && transfer.status !== 'cancelled') {
+          await admin.from('retail_wholesale_transfers').update({
+            status: transfer.status === 'wholesale_cancelled' ? 'wholesale_cancelled' : 'failed',
+            next_step: transfer.status === 'wholesale_cancelled' ? 'retail_cancel' : 'wholesale_cancel',
+            last_error: errorMessage.slice(0, 2000),
+            updated_at: new Date().toISOString()
+          }).eq('id', transferId);
+        } else if (transfer.status !== 'retail_posted') {
           await admin.from('retail_wholesale_transfers').update({
             status: 'failed',
             next_step: transfer.wholesale_response ? 'retail_post' : 'wholesale_post',
