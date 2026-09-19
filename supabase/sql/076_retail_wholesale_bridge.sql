@@ -357,7 +357,7 @@ begin
   if operator_id is null then raise exception 'POS is locked. Enter a staff PIN first'; end if;
   if not public.has_pos_permission_v38('pos_sales') then raise exception 'POS sales permission required'; end if;
   if jsonb_array_length(coalesce(p_payload->'items','[]'::jsonb))=0 then raise exception 'Add at least one item'; end if;
-  fingerprint:=encode(digest(coalesce(p_payload,'{}'::jsonb)::text,'sha256'),'hex');
+  fingerprint:=encode(extensions.digest(coalesce(p_payload,'{}'::jsonb)::text,'sha256'::text),'hex');
 
   select coalesce(jsonb_agg(jsonb_build_object('product_id',q.wholesale_product_id,'qty',q.qty) order by q.wholesale_product_id),'[]'::jsonb)
   into request_items
