@@ -422,10 +422,10 @@ begin
     if coalesce((item->>'qty')::numeric,0)<0 then
       component_credit:=coalesce(item->>'line_kind','standard')='component_credit';
       if component_credit then
-        if not public.has_pos_permission_v38('process_returns') then raise exception 'Return permission required for a Buyback'; end if;
-        if nullif(item->>'source_document_item_id','') is not null then raise exception 'A Buyback cannot be linked to an earlier invoice'; end if;
+        if not public.has_pos_permission_v38('process_returns') then raise exception 'Return permission required for a Swap'; end if;
+        if nullif(item->>'source_document_item_id','') is not null then raise exception 'A Swap cannot be linked to an earlier invoice'; end if;
         if not exists(select 1 from public.products where id=nullif(item->>'product_id','')::uuid and coalesce(track_inventory,true) and coalesce(inventory_ownership,'owned')='owned') then
-          raise exception 'Buyback requires a normal shop-owned inventory product';
+          raise exception 'Swap requires a normal shop-owned inventory product';
         end if;
       else
         if nullif(item->>'source_document_item_id','') is null then raise exception 'Use Return and select the original invoice before adding a negative item'; end if;
@@ -478,7 +478,7 @@ begin
         insert into public.stock_movements(product_id,document_id,movement_type,qty,unit_cost,notes) values((item->>'product_id')::uuid,doc_id,'return_damaged',abs((item->>'qty')::numeric),coalesce((item->>'unit_cost')::numeric,product_row.avg_cost,0),'Damaged item received in exchange');
       else
         update public.stock_balances set sellable_qty=sellable_qty+abs((item->>'qty')::numeric),updated_at=now() where product_id=(item->>'product_id')::uuid;
-        insert into public.stock_movements(product_id,document_id,movement_type,qty,unit_cost,notes) values((item->>'product_id')::uuid,doc_id,'return_sellable',abs((item->>'qty')::numeric),coalesce((item->>'unit_cost')::numeric,product_row.avg_cost,0),case when coalesce(item->>'line_kind','standard')='component_credit' then 'Component removed / upgrade credit received' else 'Sellable item received in exchange' end);
+        insert into public.stock_movements(product_id,document_id,movement_type,qty,unit_cost,notes) values((item->>'product_id')::uuid,doc_id,'return_sellable',abs((item->>'qty')::numeric),coalesce((item->>'unit_cost')::numeric,product_row.avg_cost,0),case when coalesce(item->>'line_kind','standard')='component_credit' then 'Component removed during upgrade swap' else 'Sellable item received in exchange' end);
       end if;
     end loop;
     result:=jsonb_build_object('id',doc_id,'document_no',doc_no,'total_amount',0,'paid_amount',0,'balance_amount',0,'resulting_outstanding',null,'balance_applied',0,'document_balance',0);

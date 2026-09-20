@@ -1657,7 +1657,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           discountType: item.discount_type || item.discountType || 'none',
           discountValue: Number(item.discount_value || item.discountValue || 0),
           isReturn: Number(item.qty || 0) < 0,
-          isComponentCredit: item.line_kind === 'component_credit' || (Number(item.qty || 0) < 0 && !item.source_document_item_id && item.isComponentCredit === true),
+          // A legitimate return always has an original invoice-item link. Older
+          // Swap rows may predate line_kind, so an unlinked negative row is
+          // safely restored as a Swap when the invoice is reopened.
+          isComponentCredit: item.line_kind === 'component_credit' || (Number(item.qty || 0) < 0 && !item.source_document_item_id),
           returnCondition: item.return_condition || 'sellable',
           sourceDocumentItemId: item.source_document_item_id || '',
           returnReason: item.return_reason || '',
@@ -1692,7 +1695,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         editInvoiceId: isInvoiceEdit ? quote.sourceDocumentId || '' : '',
         editInvoiceOriginalCustomerId: isInvoiceEdit ? quote.customerId || '' : '',
         editInvoiceOutstandingDelta: isInvoiceEdit ? Number(quote.originalOutstandingDelta || 0) : 0,
-        editInvoiceDocumentDate: isInvoiceEdit ? quote.documentDate || '' : '',
+        editInvoiceDocumentDate: isInvoiceEdit ? String(quote.documentDate || '').slice(0, 10) || todayInputDate() : '',
         documentNo: isUnconfirmedEdit || isInvoiceEdit ? quote.sourceDocumentNo || '' : '',
         unconfirmedMode: isUnconfirmedEdit
       };
@@ -2474,9 +2477,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   function addSelectedProductAsComponentCredit() {
     const product = selectedPosProduct;
     if (!product || !can('process_returns')) return;
-    if (product.track_inventory === false) { setMessage('Only inventory-tracked products can be received as a Buyback.'); return; }
-    if (product.is_wholesale_linked === true) { setMessage('Wholesale Catalog items cannot be received as a Buyback. Use a normal Retail product.'); return; }
-    if (product.inventory_ownership === 'consignment') { setMessage('Consignment items cannot be received as a shop-owned Buyback.'); return; }
+    if (product.track_inventory === false) { setMessage('Only inventory-tracked products can be received as a Swap.'); return; }
+    if (product.is_wholesale_linked === true) { setMessage('Wholesale Catalog items cannot be received as a Swap. Use a normal Retail product.'); return; }
+    if (product.inventory_ownership === 'consignment') { setMessage('Consignment items cannot be received as a shop-owned Swap.'); return; }
     const qty = Math.abs(numberValue(posProductDraft.qty));
     const unitPrice = Math.max(numberValue(posProductDraft.unitPrice), 0);
     if (qty <= 0) { setMessage('Quantity must be greater than zero.'); return; }
@@ -2491,16 +2494,16 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     setSelectedPosProduct(null);
     setPosProductDraft({ qty: 1, unitPrice: 0 });
     setMobilePosPanel('bill');
-    setMessage(`${product.name} added as a Buyback. The credit reduces this bill and the removed part will be added to sellable stock.`);
+    setMessage(`${product.name} added as a Swap. The credit reduces this bill and the removed part is added to sellable stock without changing its average cost.`);
   }
 
   function markSelectedItemAsComponentCredit() {
     const selectedItem = activeBill.items.find((item) => item.id === activeBill.selectedItemId);
     if (!selectedItem) { setMessage('Select the removed component in the bill first.'); return; }
-    if (selectedItem.isReturn && !selectedItem.isComponentCredit) { setMessage('An invoice-linked return cannot be changed into a Buyback.'); return; }
-    if (selectedItem.isWholesaleLinked) { setMessage('Wholesale Catalog items cannot be received as a Buyback. Add or use a normal Retail product instead.'); return; }
-    if (selectedItem.inventoryOwnership === 'consignment') { setMessage('Consignment items cannot be received as a shop-owned Buyback.'); return; }
-    if (selectedItem.trackInventory === false) { setMessage('Only inventory-tracked products can be received as a Buyback.'); return; }
+    if (selectedItem.isReturn && !selectedItem.isComponentCredit) { setMessage('An invoice-linked return cannot be changed into a Swap.'); return; }
+    if (selectedItem.isWholesaleLinked) { setMessage('Wholesale Catalog items cannot be received as a Swap. Add or use a normal Retail product instead.'); return; }
+    if (selectedItem.inventoryOwnership === 'consignment') { setMessage('Consignment items cannot be received as a shop-owned Swap.'); return; }
+    if (selectedItem.trackInventory === false) { setMessage('Only inventory-tracked products can be received as a Swap.'); return; }
     const quantity = Math.max(Math.abs(numberValue(selectedItem.qty)), 1);
     const items = activeBill.items.map((item) => item.id === selectedItem.id ? recalcItem({
       ...item,
@@ -2513,7 +2516,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       returnReason: 'Component removed from customer device / upgrade credit'
     }) : item);
     updateActiveBill({ items, paymentLines: [] });
-    setMessage(`${selectedItem.name} marked as a Buyback. Its amount is deducted from this bill and the quantity will be added to sellable stock.`);
+    setMessage(`${selectedItem.name} marked as a Swap. Its amount is deducted from this bill and the quantity is added to sellable stock without changing its average cost.`);
   }
 
   function closeBillById(billId, resetUnconfirmedModes = false) {
@@ -2770,7 +2773,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
     if (isUnconfirmed && activeBill.items.some((item) => item.isComponentCredit)) {
-      setMessage('Buyback lines must be posted as a completed sale/exchange and cannot be kept in a draft.');
+      setMessage('Swap lines must be posted as a completed sale/exchange and cannot be kept in a draft.');
       return;
     }
     const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
@@ -2828,7 +2831,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       document_id: activeBill.editUnconfirmedId || null,
       document_no: activeBill.documentNo,
       customer_id: activeBill.customerId || null,
-      document_date: todayInputDate(),
+      document_date: isEditingInvoice ? activeBill.editInvoiceDocumentDate || todayInputDate() : todayInputDate(),
       cart_discount_type: activeBill.cartDiscountType,
       cart_discount_value: Number(activeBill.cartDiscountValue || 0),
       use_existing_customer_credit: useCreditForSave,
@@ -2882,7 +2885,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       : isConfirmingUnconfirmed
         ? 'confirm_unconfirmed_sale_v63'
         : isEditingInvoice
-          ? 'replace_retail_wholesale_invoice_v81'
+          ? 'replace_retail_wholesale_invoice_v83'
         : 'save_pos_invoice_v74';
     const rpcArgs = isEditingInvoice
       ? { p_document_id: activeBill.editInvoiceId, p_header: payload, p_items: itemsPayload, p_payments: paymentPayload }
@@ -2910,10 +2913,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     } else {
       ({ data, error } = await supabase.rpc(rpcName, rpcArgs));
     }
-    if (error && /save_pos_invoice_v74|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|replace_retail_wholesale_invoice_v81|schema cache|could not find the function/i.test(error.message || '')) {
+    if (error && /save_pos_invoice_v74|save_unconfirmed_sale_v63|confirm_unconfirmed_sale_v63|replace_pos_invoice_v67|replace_retail_wholesale_invoice_v(81|83)|schema cache|could not find the function/i.test(error.message || '')) {
       setSaving(false);
       setMessage(isEditingInvoice
-        ? 'Run migrations 067_sales_invoice_corrections.sql and 081_wholesale_sale_edit_and_cancellation.sql in Retail Supabase before editing finalized sales.'
+        ? 'Run migration 083_sales_invoice_buyback_date_corrections.sql in Retail Supabase before editing finalized sales.'
         : isUnconfirmed || isConfirmingUnconfirmed
         ? 'Run migration 063_party_delete_review_reservations.sql in Supabase before using review sales.'
         : 'Run migration 074_inventory_conditions_reservations_consignment_dashboard.sql in Supabase before saving new sales.');
@@ -2938,7 +2941,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       total_amount: total,
       paid_amount: Math.min(Math.max(total, 0), paidIn),
       balance_amount: Math.max(resultingOutstanding, 0),
-      document_date: new Date().toISOString(),
+      document_date: isEditingInvoice ? activeBill.editInvoiceDocumentDate || todayInputDate() : new Date().toISOString(),
       notes: activeBill.notes || '',
       payment_method_name: linesForSave.map((line) => line.paymentMethodName).filter(Boolean).join(' + '),
       party: selectedCustomer || null,
@@ -3042,8 +3045,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         </div>
       </div>
 
-      <div key={`customer-${activeBill.id}`} className="pos-customer-strip pos-customer-strip-v16 pos-bill-switch-transition">
+      <div key={`customer-${activeBill.id}`} className={`pos-customer-strip pos-customer-strip-v16 pos-bill-switch-transition ${activeBill.editInvoiceId ? 'editing-invoice-date' : ''}`}>
         <label>Invoice No.<input value={activeBill.documentNo || ''} disabled={Boolean(activeBill.editInvoiceId)} title={activeBill.editInvoiceId ? 'The original invoice number is retained during a correction' : ''} placeholder="Assigned on save" onFocus={selectAllText} onChange={(e) => updateActiveBill({ documentNo: e.target.value })} /></label>
+        {activeBill.editInvoiceId && <label>Document date<input type="date" max={todayInputDate()} value={activeBill.editInvoiceDocumentDate || todayInputDate()} onChange={(event) => updateActiveBill({ editInvoiceDocumentDate: event.target.value })} /></label>}
         <div className="pos-customer-picker">
           <label>Customer
             <select value={activeBill.customerId || ''} onChange={(e) => setCustomer(e.target.value)}>
@@ -3096,7 +3100,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         <div key={`bill-${activeBill.id}`} className={`panel-card bill-panel left-bill-panel pos-bill-switch-transition ${mobilePosPanel === 'bill' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
           <div className="pos-line-toolbar">
             <button className="secondary-button pos-delete-line-button" onClick={() => removeItem()}>Delete</button>
-            <button type="button" className="secondary-button component-credit-button" disabled={!activeBill.selectedItemId || !can('process_returns')} title={!can('process_returns') ? 'Return permission required' : 'Buy back a removed/upgraded component and add it to shop stock'} onClick={markSelectedItemAsComponentCredit}>↙ Buyback</button>
+            <button type="button" className="secondary-button component-credit-button" disabled={!activeBill.selectedItemId || !can('process_returns')} title={!can('process_returns') ? 'Return permission required' : 'Add a removed component back to sellable stock at its existing average cost'} onClick={markSelectedItemAsComponentCredit}>↙ Swap</button>
           </div>
 
           <div className="pos-bill-area pos-bill-cards compact-bill-cards">
@@ -3109,7 +3113,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               >
                 <div className="bill-card-main">
                   <strong>{item.item_code}</strong>
-                  <span>{item.name}{item.isComponentCredit && <em className="component-credit-badge">Buyback</em>}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
+                  <span>{item.name}{item.isComponentCredit && <em className="component-credit-badge">Swap</em>}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
                   <b>{money(item.lineTotal)}</b>
                 </div>
                 <div className="bill-card-controls compact-controls">
@@ -3316,7 +3320,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             </section>
             <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
           </div>
-          <div className="modal-actions product-entry-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button>{selectedPosProduct.track_inventory !== false && <button type="button" className="secondary-button component-credit-button" disabled={!can('process_returns') || selectedPosProduct.is_wholesale_linked === true || selectedPosProduct.inventory_ownership === 'consignment'} onClick={addSelectedProductAsComponentCredit}>↙ Buyback</button>}<button type="submit" className="primary-button" disabled={!allowNegativeStock && selectedPosProduct.track_inventory !== false && numberValue(selectedPosProduct.available_qty) <= 0}>Add Item</button></div>
+          <div className="modal-actions product-entry-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button>{selectedPosProduct.track_inventory !== false && <button type="button" className="secondary-button component-credit-button" disabled={!can('process_returns') || selectedPosProduct.is_wholesale_linked === true || selectedPosProduct.inventory_ownership === 'consignment'} onClick={addSelectedProductAsComponentCredit}>↙ Swap</button>}<button type="submit" className="primary-button" disabled={!allowNegativeStock && selectedPosProduct.track_inventory !== false && numberValue(selectedPosProduct.available_qty) <= 0}>Add Item</button></div>
         </form>
       </div>}
 
@@ -9883,6 +9887,14 @@ function StockPage({ onOpenDocuments }) {
   const [importingStock, setImportingStock] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [selectedStockProduct, setSelectedStockProduct] = useState(null);
+  const [movementProduct, setMovementProduct] = useState(null);
+  const [stockMovements, setStockMovements] = useState([]);
+  const [movementBusy, setMovementBusy] = useState(false);
+  const [movementError, setMovementError] = useState('');
+  const [movementPreset, setMovementPreset] = useState('month');
+  const [movementFrom, setMovementFrom] = useState(() => localDateInput(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
+  const [movementTo, setMovementTo] = useState(todayInputDate());
 
   useEffect(() => { loadCategories(); }, []);
   useEffect(() => {
@@ -9891,6 +9903,10 @@ function StockPage({ onOpenDocuments }) {
   }, [selectedCategoryId, stockView, searchBy, search, filterMode, categories.length]);
   useRealtimeRefresh(['products', 'stock_balances', 'stock_movements', 'documents', 'document_items'], loadStock);
   useRealtimeRefresh(['categories'], () => { loadCategories(); loadStock(); });
+
+  useEffect(() => {
+    if (movementProduct) loadStockMovements(movementProduct);
+  }, [movementProduct?.product_id, movementPreset, movementFrom, movementTo]);
 
   async function loadCategories() {
     const { data, error: categoryError } = await supabase.from('categories').select('id, name, parent_id, path').order('path', { ascending: true });
@@ -9939,6 +9955,76 @@ function StockPage({ onOpenDocuments }) {
     if (stockView === 'unavailable') filtered = filtered.filter((row) => numberValue(row.available_qty) <= 0);
     if (stockView === 'inactive') filtered = filtered.filter((row) => row.status === 'inactive' || !row.is_active);
     setRows(filtered);
+  }
+
+  async function loadStockMovements(product = movementProduct) {
+    if (!product?.product_id) return;
+    setMovementBusy(true);
+    setMovementError('');
+    const { data, error: movementLoadError } = await supabase
+      .from('stock_movements')
+      .select('id, product_id, document_id, movement_type, qty, unit_cost, notes, created_at')
+      .eq('product_id', product.product_id)
+      .order('created_at', { ascending: false })
+      .limit(2000);
+    if (movementLoadError) {
+      setStockMovements([]);
+      setMovementError(movementLoadError.message);
+      setMovementBusy(false);
+      return;
+    }
+
+    const documentIds = [...new Set((data || []).map((movement) => movement.document_id).filter(Boolean))];
+    const documentRes = documentIds.length
+      ? await supabase.from('documents').select('id, document_no, document_type, document_date, status').in('id', documentIds)
+      : { data: [], error: null };
+    if (documentRes.error) {
+      setStockMovements([]);
+      setMovementError(documentRes.error.message);
+      setMovementBusy(false);
+      return;
+    }
+    const documentMap = new Map((documentRes.data || []).map((document) => [document.id, document]));
+    const customFirst = movementFrom && movementTo && movementFrom > movementTo ? movementTo : movementFrom;
+    const customLast = movementFrom && movementTo && movementFrom > movementTo ? movementFrom : movementTo;
+    const range = movementPreset === 'all'
+      ? { start: null, end: null }
+      : cashflowDateRange(movementPreset, customFirst, customLast);
+    const filteredMovements = (data || []).map((movement) => ({
+      ...movement,
+      document: documentMap.get(movement.document_id) || null
+    })).filter((movement) => {
+      const effectiveDate = new Date(movement.document?.document_date || movement.created_at);
+      if (range.start && effectiveDate < range.start) return false;
+      if (range.end && effectiveDate >= range.end) return false;
+      return true;
+    });
+    setStockMovements(filteredMovements);
+    setMovementBusy(false);
+  }
+
+  function openStockMovementHistory(product) {
+    if (!product) return;
+    setMovementError('');
+    setStockMovements([]);
+    setMovementProduct(product);
+  }
+
+  function stockMovementLabel(type) {
+    return ({
+      opening: 'Opening stock',
+      purchase_receive: 'Purchase received',
+      sale: 'Sale',
+      return_sellable: 'Return / Swap in',
+      return_damaged: 'Damaged return',
+      stock_adjustment: 'Stock adjustment',
+      reserve: 'Reserved',
+      release_reserve: 'Reservation released',
+      stock_in_transit: 'Added to transit',
+      receive_from_transit: 'Received from transit',
+      damage: 'Moved to damaged',
+      checking: 'Moved to checking'
+    })[type] || String(type || 'Movement').replaceAll('_', ' ');
   }
 
   async function handleStockImport(event) {
@@ -10020,6 +10106,7 @@ function StockPage({ onOpenDocuments }) {
     <section className="products-screen">
       <div className="action-toolbar compact-toolbar">
         <button className="toolbar-button" onClick={() => { loadCategories(); loadStock(); }}><span>↻</span>Refresh</button>
+        <button className="toolbar-button" disabled={!selectedStockProduct} title={selectedStockProduct ? `View stock movements for ${selectedStockProduct.name}` : 'Select a stock item first'} onClick={() => openStockMovementHistory(selectedStockProduct)}><span>↕</span>Movements</button>
         <button className="toolbar-button" onClick={onOpenDocuments}><span>▣</span>Stock adjustment</button>
         <button className="toolbar-button" onClick={onOpenDocuments}><span>⇣</span>Receive purchase</button>
         <button className="toolbar-button" onClick={onOpenDocuments}><span>⏳</span>Transit docs</button>
@@ -10101,7 +10188,7 @@ function StockPage({ onOpenDocuments }) {
                   const isOut = numberValue(row.sellable_qty) <= 0;
                   const isLow = !isOut && numberValue(row.sellable_qty) <= numberValue(row.min_stock_level, 1);
                   return (
-                    <tr key={row.product_id} className={isOut ? 'out-of-stock-row' : isLow ? 'low-stock-row' : ''}>
+                    <tr key={row.product_id} className={`${isOut ? 'out-of-stock-row' : isLow ? 'low-stock-row' : ''} ${selectedStockProduct?.product_id === row.product_id ? 'selected-row' : ''}`.trim()} onClick={() => setSelectedStockProduct(row)} onDoubleClick={() => openStockMovementHistory(row)}>
                       <td><strong>{row.item_code}</strong></td>
                       <td>{row.name}<ProductOriginBadges product={row} compact /></td>
                       <td><span className={row.inventory_ownership === 'consignment' ? 'status-pill consignment-stock' : 'status-pill tracked-stock'}>{row.inventory_ownership === 'consignment' ? `Consignment · ${row.consignment_owner_name || 'owner'}` : 'Shop owned'}</span></td>
@@ -10125,6 +10212,31 @@ function StockPage({ onOpenDocuments }) {
           </div>
         </div>
       </div>
+
+      {movementProduct && <div className="modal-backdrop stock-movement-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMovementProduct(null); }}>
+        <div className="modal-card stock-movement-modal">
+          <div className="section-title-row">
+            <div><span className="eyebrow">Stock movement history</span><h3>{movementProduct.item_code} · {movementProduct.name}</h3><p>Current sellable {numberValue(movementProduct.sellable_qty)} · Reserved {numberValue(movementProduct.reserved_qty)} · Available {numberValue(movementProduct.available_qty)}</p></div>
+            <button type="button" className="secondary-button" onClick={() => setMovementProduct(null)}>Close</button>
+          </div>
+          <div className="stock-movement-range">
+            <label>Date range<select value={movementPreset} onChange={(event) => setMovementPreset(event.target.value)}><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="week">This week</option><option value="month">This month</option><option value="all">All time</option><option value="custom">Custom</option></select></label>
+            {movementPreset === 'custom' && <><label>From<input type="date" value={movementFrom} onChange={(event) => setMovementFrom(event.target.value)} /></label><label>To<input type="date" value={movementTo} onChange={(event) => setMovementTo(event.target.value)} /></label></>}
+            <div className="stock-movement-count"><span>Movements</span><strong>{stockMovements.length}</strong></div>
+          </div>
+          {movementError && <div className="error-box">{movementError}</div>}
+          <div className="table-wrap stock-movement-table-wrap">
+            <table><thead><tr><th>Date</th><th>Movement</th><th>Quantity</th><th>Unit cost</th><th>Document</th><th>Notes</th></tr></thead><tbody>
+              {stockMovements.map((movement) => {
+                const quantity = numberValue(movement.qty);
+                return <tr key={movement.id}><td>{fmtDate(movement.document?.document_date || movement.created_at)}</td><td><span className={`stock-movement-type ${movement.movement_type}`}>{stockMovementLabel(movement.movement_type)}</span></td><td className={quantity > 0 ? 'positive-balance' : quantity < 0 ? 'negative-balance' : ''}><strong>{quantity > 0 ? '+' : ''}{quantity}</strong></td><td>{money(movement.unit_cost)}</td><td>{movement.document ? <><strong>{movement.document.document_no}</strong><small>{documentTypeLabel(movement.document.document_type)} · {movement.document.status}</small></> : '-'}</td><td>{movement.notes || '-'}</td></tr>;
+              })}
+              {!movementBusy && !stockMovements.length && <EmptyRow colSpan={6} text="No stock movements in this date range." />}
+              {movementBusy && <EmptyRow colSpan={6} text="Loading stock movements..." />}
+            </tbody></table>
+          </div>
+        </div>
+      </div>}
     </section>
   );
 }

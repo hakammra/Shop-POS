@@ -183,6 +183,19 @@ label input, label select, label textarea { margin-top: 6px; }
   .pos-page-v16 .bill-card-controls select { min-height: 36px; padding: 7px 8px; font-size: 14px; }
 }
 
+/* Finalized-sale correction adds an editable date without squeezing customer details. */
+@media (min-width: 901px) {
+  .pos-customer-strip-v16.editing-invoice-date {
+    grid-template-columns: 140px 150px minmax(260px, 1fr) minmax(220px, 300px);
+  }
+}
+
+@media (min-width: 1101px) {
+  .pos-page-v16 .pos-customer-strip-v16.editing-invoice-date {
+    grid-template-columns: 145px 155px minmax(340px, 1fr) minmax(320px, 400px);
+  }
+}
+
 @media (max-width: 760px) {
   .documents-screen .document-quick-filters {
     display: grid;
@@ -888,6 +901,49 @@ tr:hover td { background: #303030; }
   color: #ff8f93;
   font-weight: 800;
 }
+.stock-movement-modal {
+  width: min(1040px, calc(100vw - 34px));
+  max-height: min(88vh, 860px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.stock-movement-modal .section-title-row { flex: 0 0 auto; }
+.stock-movement-modal .eyebrow { color: var(--primary); font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.stock-movement-modal .section-title-row h3 { margin: 3px 0; }
+.stock-movement-modal .section-title-row p { margin: 0; color: var(--muted); }
+.stock-movement-range {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 220px)) minmax(120px, 1fr);
+  gap: 10px;
+  align-items: end;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #252525;
+}
+.stock-movement-range label { display: grid; gap: 5px; min-width: 0; font-weight: 700; }
+.stock-movement-count { display: grid; justify-items: end; gap: 3px; }
+.stock-movement-count span { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.stock-movement-count strong { font-size: 24px; }
+.stock-movement-table-wrap { flex: 1 1 auto; min-height: 220px; overflow: auto; }
+.stock-movement-table-wrap table { min-width: 820px; }
+.stock-movement-table-wrap td small { display: block; margin-top: 3px; color: var(--muted); }
+.stock-movement-type {
+  display: inline-flex;
+  padding: 3px 7px;
+  border-left: 3px solid #71808a;
+  background: rgba(113, 128, 138, .12);
+  color: #d7dee2;
+  font-size: 12px;
+  font-weight: 750;
+}
+.stock-movement-type.sale { border-left-color: #d85c5c; color: #ffb0b0; }
+.stock-movement-type.purchase_receive,
+.stock-movement-type.receive_from_transit,
+.stock-movement-type.return_sellable { border-left-color: #45ad6b; color: #a9e1bb; }
+.stock-movement-type.reserve,
+.stock-movement-type.release_reserve { border-left-color: #c89c3d; color: #e8cd8e; }
 .dashboard-return-impact { display: block; margin-top: 5px; color: #d5ad63; font-weight: 700; }
 .dashboard-refund-row td { background: rgba(151, 76, 45, .13); }
 .dashboard-refund-row td:first-child { border-left: 3px solid #d38a55; }
@@ -928,6 +984,11 @@ tr:hover td { background: #303030; }
   .inventory-search-bar { grid-template-columns: 1fr; }
   .product-form-grid, .stock-stats-grid, .mini-stats-row { grid-template-columns: 1fr; }
   .product-form-grid .form-note { grid-column: auto; }
+  .stock-movement-backdrop { padding: 0; align-items: stretch; }
+  .stock-movement-modal { width: 100%; max-height: 100dvh; min-height: 100dvh; border: 0; border-radius: 0; }
+  .stock-movement-modal .section-title-row { align-items: flex-start; }
+  .stock-movement-range { grid-template-columns: 1fr; }
+  .stock-movement-count { justify-items: start; }
 }
 
 /* v5 stock page filters */
