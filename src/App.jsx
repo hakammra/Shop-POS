@@ -1657,6 +1657,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           discountType: item.discount_type || item.discountType || 'none',
           discountValue: Number(item.discount_value || item.discountValue || 0),
           isReturn: Number(item.qty || 0) < 0,
+          isComponentCredit: item.line_kind === 'component_credit' || (Number(item.qty || 0) < 0 && !item.source_document_item_id && item.isComponentCredit === true),
           returnCondition: item.return_condition || 'sellable',
           sourceDocumentItemId: item.source_document_item_id || '',
           returnReason: item.return_reason || '',
@@ -2097,10 +2098,6 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     const alreadyInCart = activeBill.items
       .filter((item) => item.product_id === product.product_id && !item.isReturn && Number(item.qty || 0) > 0)
       .reduce((sum, item) => sum + Number(item.qty || 0), 0);
-    if (!allowNegativeStock && trackInventory && availableQty - alreadyInCart <= 0) {
-      setMessage(`${product.item_code || product.name}: maximum available quantity is ${availableQty}.`);
-      return;
-    }
     setMessage('');
     setSelectedPosProduct(product);
     setPosProductDraft({ qty: 1, unitPrice: Number(product.selling_price || 0) });
@@ -2169,6 +2166,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       discountType: 'amount',
       discountValue: 0,
       isReturn: false,
+      isComponentCredit: false,
       returnCondition: 'sellable',
       availableQty,
       trackInventory,
@@ -2234,6 +2232,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         name: component.name, qty, unitPrice: numberValue(component.selling_price), unitCost: numberValue(component.avg_cost),
         discountType: 'amount', discountValue: lineDiscount,
         isReturn: false, returnCondition: 'sellable', availableQty: numberValue(component.available_qty),
+        isComponentCredit: false,
         trackInventory: component.track_inventory !== false,
         assemblyGroupId: groupId, assemblyId: assembly.id, assemblyCode: assembly.assembly_code,
         assemblyName: assembly.name, lineTotal: 0
@@ -2401,8 +2400,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       const proportionalDiscount = row.discount_type === 'amount' ? roundMoney(numberValue(row.discount_value) * qty / Math.abs(numberValue(row.qty))) : numberValue(row.discount_value);
       const stock = stockMap.get(row.product_id);
       const shared = { product_id: row.product_id, item_code: row.item_code, name: row.description, unitPrice: numberValue(row.unit_price), unitCost: numberValue(row.unit_cost), discountType: row.discount_type || 'none', discountValue: proportionalDiscount, trackInventory: stock?.trackInventory !== false };
-      added.push(recalcItem({ id: createClientId(), ...shared, qty: -qty, isReturn: true, returnCondition: row.damaged ? 'warranty_damaged' : 'sellable', sourceDocumentItemId: row.id, returnReason: row.reason || '', sourceInvoiceNo: returnInvoice.document_no }));
-      if (exchangeSameItem) added.push(recalcItem({ id: createClientId(), ...shared, qty, isReturn: false, returnCondition: 'sellable', availableQty: numberValue(stock?.availableQty), sourceDocumentItemId: null, returnReason: '' }));
+      added.push(recalcItem({ id: createClientId(), ...shared, qty: -qty, isReturn: true, isComponentCredit: false, returnCondition: row.damaged ? 'warranty_damaged' : 'sellable', sourceDocumentItemId: row.id, returnReason: row.reason || '', sourceInvoiceNo: returnInvoice.document_no }));
+      if (exchangeSameItem) added.push(recalcItem({ id: createClientId(), ...shared, qty, isReturn: false, isComponentCredit: false, returnCondition: 'sellable', availableQty: numberValue(stock?.availableQty), sourceDocumentItemId: null, returnReason: '' }));
     });
     updateActiveBill({ items: [...activeBill.items, ...added], customerId: activeBill.customerId || returnInvoice.customer_id || '', selectedItemId: added[0]?.id || '', paymentLines: [], notes: `${activeBill.notes || ''}${activeBill.notes ? '\n' : ''}${exchangeSameItem ? 'Exchange' : 'Return'} from ${returnInvoice.document_no}` });
     setShowReturnLookup(false); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnBusy(false);
@@ -2411,6 +2410,51 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
   function removeItem(itemId = activeBill.selectedItemId) {
     updateActiveBill({ items: activeBill.items.filter((item) => item.id !== itemId), selectedItemId: '' });
+  }
+
+  function addSelectedProductAsComponentCredit() {
+    const product = selectedPosProduct;
+    if (!product || !can('process_returns')) return;
+    if (product.track_inventory === false) { setMessage('Only inventory-tracked products can be received as component credits.'); return; }
+    if (product.is_wholesale_linked === true) { setMessage('Wholesale Catalog items cannot be received as component credits. Use a normal Retail product.'); return; }
+    if (product.inventory_ownership === 'consignment') { setMessage('Consignment items cannot be received as shop-owned component credits.'); return; }
+    const qty = Math.abs(numberValue(posProductDraft.qty));
+    const unitPrice = Math.max(numberValue(posProductDraft.unitPrice), 0);
+    if (qty <= 0) { setMessage('Quantity must be greater than zero.'); return; }
+    const item = recalcItem({
+      id: createClientId(), product_id: product.product_id, item_code: product.item_code, name: product.name,
+      qty: -qty, unitPrice, unitCost: numberValue(product.avg_cost), discountType: 'amount', discountValue: 0,
+      isReturn: true, isComponentCredit: true, returnCondition: 'sellable', sourceDocumentItemId: null,
+      returnReason: 'Component removed from customer device / upgrade credit', availableQty: numberValue(product.available_qty),
+      trackInventory: true, isWholesaleLinked: false, inventoryOwnership: 'owned'
+    });
+    updateActiveBill({ items: [...activeBill.items, item], selectedItemId: item.id, paymentLines: [] });
+    setSelectedPosProduct(null);
+    setPosProductDraft({ qty: 1, unitPrice: 0 });
+    setMobilePosPanel('bill');
+    setMessage(`${product.name} added as a Component Credit. The credit reduces this bill and the removed part will be added to sellable stock.`);
+  }
+
+  function markSelectedItemAsComponentCredit() {
+    const selectedItem = activeBill.items.find((item) => item.id === activeBill.selectedItemId);
+    if (!selectedItem) { setMessage('Select the removed component in the bill first.'); return; }
+    if (selectedItem.isReturn && !selectedItem.isComponentCredit) { setMessage('An invoice-linked return cannot be changed into a component credit.'); return; }
+    if (selectedItem.isWholesaleLinked) { setMessage('Wholesale Catalog items cannot be received as a component credit. Add or use a normal Retail product instead.'); return; }
+    if (selectedItem.inventoryOwnership === 'consignment') { setMessage('Consignment items cannot be received as shop-owned component credits.'); return; }
+    if (selectedItem.trackInventory === false) { setMessage('Only inventory-tracked products can be received as component credits.'); return; }
+    const quantity = Math.max(Math.abs(numberValue(selectedItem.qty)), 1);
+    const items = activeBill.items.map((item) => item.id === selectedItem.id ? recalcItem({
+      ...item,
+      qty: -quantity,
+      isReturn: true,
+      isComponentCredit: true,
+      returnCondition: 'sellable',
+      sourceDocumentItemId: null,
+      sourceInvoiceNo: '',
+      returnReason: 'Component removed from customer device / upgrade credit'
+    }) : item);
+    updateActiveBill({ items, paymentLines: [] });
+    setMessage(`${selectedItem.name} marked as a Component Credit. Its amount is deducted from this bill and the quantity will be added to sellable stock.`);
   }
 
   function closeBill(resetUnconfirmedModes = false) {
@@ -2662,6 +2706,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage('A Reservation Order must be converted directly to a posted sale so its original reservation can be released safely. Turn off Save as draft and save again.');
       return;
     }
+    if (isUnconfirmed && activeBill.items.some((item) => item.isComponentCredit)) {
+      setMessage('Component Credit lines must be posted as a completed sale/exchange. Turn off Save as draft, then save the bill.');
+      return;
+    }
     const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
     const positiveLineTotal = activeBill.items.filter((item) => numberValue(item.qty) > 0).reduce((sum, item) => sum + Math.max(numberValue(item.lineTotal), 0), 0);
     const positiveCartDiscount = activeBill.cartDiscountType === 'percent'
@@ -2735,7 +2783,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       discount_value: Number(item.discountValue || 0),
       return_condition: item.isReturn ? item.returnCondition || 'sellable' : null,
       source_document_item_id: item.isReturn ? item.sourceDocumentItemId || null : null,
-      return_reason: item.isReturn ? item.returnReason || null : null
+      return_reason: item.isReturn ? item.returnReason || null : null,
+      line_kind: item.isComponentCredit ? 'component_credit' : 'standard'
     }));
     const paymentPayload = linesForSave.map((line) => ({
       source_line_id: line.id,
@@ -2984,6 +3033,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         <div key={`bill-${activeBill.id}`} className={`panel-card bill-panel left-bill-panel pos-bill-switch-transition ${mobilePosPanel === 'bill' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
           <div className="pos-line-toolbar">
             <button className="secondary-button" onClick={() => removeItem()}>Delete</button>
+            <button type="button" className="secondary-button component-credit-button" disabled={!activeBill.selectedItemId || !can('process_returns')} title={!can('process_returns') ? 'Return permission required' : 'Credit a removed/upgraded component and add it to shop stock'} onClick={markSelectedItemAsComponentCredit}>↙ Component Credit</button>
           </div>
 
           <div className="pos-bill-area pos-bill-cards compact-bill-cards">
@@ -2991,12 +3041,12 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               <div key={item.id} className={item.assemblyGroupId ? 'pos-assembly-line-wrap' : ''}>
                 {item.assemblyGroupId && activeBill.items[index - 1]?.assemblyGroupId !== item.assemblyGroupId && <div className="pos-assembly-group-header"><span>{'\uD83D\uDDA5\uFE0F'}</span><div><strong>{item.assemblyCode} · {item.assemblyName}</strong><small>Assembly components</small></div></div>}
                 <div
-                className={`pos-bill-card compact ${item.isReturn ? 'return-row' : ''} ${item.inventoryOwnership === 'consignment' ? 'consignment-cart-line' : ''} ${activeBill.selectedItemId === item.id ? 'selected' : ''}`}
+                className={`pos-bill-card compact ${item.isReturn ? 'return-row' : ''} ${item.isComponentCredit ? 'component-credit-row' : ''} ${item.inventoryOwnership === 'consignment' ? 'consignment-cart-line' : ''} ${activeBill.selectedItemId === item.id ? 'selected' : ''}`}
                 onClick={() => updateActiveBill({ selectedItemId: item.id })}
               >
                 <div className="bill-card-main">
                   <strong>{item.item_code}</strong>
-                  <span>{item.name}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
+                  <span>{item.name}{item.isComponentCredit && <em className="component-credit-badge">Component Credit</em>}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
                   <b>{money(item.lineTotal)}</b>
                 </div>
                 <div className="bill-card-controls compact-controls">
@@ -3010,7 +3060,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                     </select>
                   </label>
                   {item.isReturn && (
-                    <label className="wide-control">Return stock
+                    <label className="wide-control">{item.isComponentCredit ? 'Receive as' : 'Return stock'}
                       <select value={item.returnCondition} onChange={(e) => updateItem(item.id, { returnCondition: e.target.value })}>
                         <option value="sellable">Good / Sellable</option>
                         <option value="warranty_damaged">Warranty / Damaged</option>
@@ -3108,7 +3158,6 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 <button
                   key={product.product_id}
                   className={`product-result product-tile ${product.is_wholesale_linked ? 'wholesale-product-tile' : ''} ${productOriginClass(product)} ${unavailable ? 'no-stock-tile' : ''} ${!trackInventory ? 'non-stock-tile' : ''}`}
-                  disabled={unavailable}
                   onClick={() => openPosProductPicker(product)}
                   title={`${product.name} · ${money(product.selling_price)} · ${trackInventory ? (availableQty > 0 ? `Available ${availableQty}` : 'No stock') : 'Non-stock item'}`}
                 >
@@ -3204,7 +3253,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             </section>
             <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
           </div>
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button><button type="submit" className="primary-button">Add Item</button></div>
+          <div className="modal-actions product-entry-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button>{selectedPosProduct.track_inventory !== false && <button type="button" className="secondary-button component-credit-button" disabled={!can('process_returns') || selectedPosProduct.is_wholesale_linked === true || selectedPosProduct.inventory_ownership === 'consignment'} onClick={addSelectedProductAsComponentCredit}>↙ Add as Component Credit</button>}<button type="submit" className="primary-button" disabled={!allowNegativeStock && selectedPosProduct.track_inventory !== false && numberValue(selectedPosProduct.available_qty) <= 0}>Add Item</button></div>
         </form>
       </div>}
 
@@ -3521,6 +3570,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   });
   const [activeDocumentTabId, setActiveDocumentTabId] = useState('view');
   const [busyAction, setBusyAction] = useState(false);
+  const [transitArrivalDocument, setTransitArrivalDocument] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -4007,17 +4057,9 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
   async function convertTransitToPurchase() {
     if (!can('manage_inventory_documents')) { setError('Inventory-document permission required.'); return; }
     if (!selected || selected.document_type !== 'stock_in_transit') return;
-    if (!window.confirm(`Convert ${selected.document_no} to Purchase and add the items to inventory?`)) return;
-    setBusyAction(true);
     setError('');
     setMessage('');
-    const { data, error: convertError } = await supabase.rpc('convert_stock_in_transit_to_purchase', {
-      p_transit_doc_id: selected.id
-    });
-    if (convertError) setError(convertError.message);
-    else setMessage(`Stock In Transit converted to Purchase. New purchase ID: ${String(data || '').slice(0, 8)}`);
-    setBusyAction(false);
-    await loadDocuments();
+    setTransitArrivalDocument(selected);
   }
 
   async function convertQuotationToInvoice() {
@@ -4696,6 +4738,15 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
           );
         })}
       </div>
+      {transitArrivalDocument && <TransitArrivalModal
+        document={transitArrivalDocument}
+        onClose={() => setTransitArrivalDocument(null)}
+        onSaved={async (result) => {
+          setTransitArrivalDocument(null);
+          setMessage(`${transitArrivalDocument.document_no} arrived. Purchase ${result?.document_no || ''} created; ${money(result?.shipping_cost || 0)} posted as shipping/arrival cost.`);
+          await loadDocuments();
+        }}
+      />}
     </section>
   );
 }
@@ -4984,6 +5035,8 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
   const [suppliers, setSuppliers] = useState([]);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [supplierMenuOpen, setSupplierMenuOpen] = useState(false);
+  const [showQuickSupplier, setShowQuickSupplier] = useState(false);
+  const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', email: '', address: '' });
   const [supplierId, setSupplierId] = useState((isDraftForSameType ? savedDraft?.supplierId : '') || document?.supplier_id || '');
   const [partyCustomerId, setPartyCustomerId] = useState((isDraftForSameType ? savedDraft?.partyCustomerId : '') || document?.customer_id || '');
 
@@ -5005,6 +5058,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
   const [shippingMethod, setShippingMethod] = useState((isDraftForSameType ? savedDraft?.shippingMethod : '') || document?.shipping_method || (isTransit ? 'Air Cargo' : 'Local'));
   const [expectedArrivalDate, setExpectedArrivalDate] = useState((isDraftForSameType ? savedDraft?.expectedArrivalDate : '') || document?.expected_arrival_date || '');
   const [notes, setNotes] = useState((isDraftForSameType ? savedDraft?.notes : '') || document?.notes || '');
+  const [transitGoodsTotal, setTransitGoodsTotal] = useState((isDraftForSameType ? savedDraft?.transitGoodsTotal : '') || document?.source_goods_cost_amount || document?.total_amount || '');
   const [lines, setLines] = useState(isDraftForSameType && Array.isArray(savedDraft?.lines) && savedDraft.lines.length ? savedDraft.lines : [emptyPurchaseLine()]);
 
   const [selectedLineProduct, setSelectedLineProduct] = useState(null);
@@ -5013,7 +5067,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const total = lines.reduce((sum, line) => sum + numberValue(line.line_total), 0);
+  const total = isTransit ? numberValue(transitGoodsTotal) : lines.reduce((sum, line) => sum + numberValue(line.line_total), 0);
   const paidOut = paidMethodAmount(paymentLines);
   const paymentLineTotalValue = totalPaymentLines(paymentLines);
   const balance = total - paidOut;
@@ -5051,11 +5105,12 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       shippingMethod,
       expectedArrivalDate,
       notes,
+      transitGoodsTotal,
       lines,
       paymentLines
     };
     window.localStorage.setItem(documentDraftKey(tabId), JSON.stringify(draft));
-  }, [isEditing, tabId, documentType, supplierId, partyCustomerId, documentNo, externalNo, documentDate, shippingMethod, expectedArrivalDate, notes, lines, paymentLines]);
+  }, [isEditing, tabId, documentType, supplierId, partyCustomerId, documentNo, externalNo, documentDate, shippingMethod, expectedArrivalDate, notes, transitGoodsTotal, lines, paymentLines]);
 
   useEffect(() => {
     const timeout = setTimeout(() => loadCategoryProducts(), 200);
@@ -5079,7 +5134,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         description: item.description || '',
         qty: numberValue(item.qty, 1),
         unit_cost: numberValue(item.unit_cost),
-        line_total: numberValue(item.qty, 1) * numberValue(item.unit_cost)
+        line_total: numberValue(item.line_total, numberValue(item.qty, 1) * numberValue(item.unit_cost))
       }));
       setLines(loadedLines.length ? loadedLines : [emptyPurchaseLine()]);
     }
@@ -5263,15 +5318,20 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
   function startAddProductToLines(product) {
     setSelectedLineProduct(product);
-    setLineDraft({ qty: 1, unit_cost: numberValue(product.avg_cost) });
+    setLineDraft({ qty: 1, unit_cost: isTransit ? 0 : numberValue(product.avg_cost) });
   }
 
   function confirmAddProductToLines() {
     if (!selectedLineProduct) return;
     const qty = numberValue(lineDraft.qty);
-    const unitCost = numberValue(lineDraft.unit_cost);
+    const unitCost = isTransit ? 0 : numberValue(lineDraft.unit_cost);
+    const totalCost = qty * unitCost;
     if (qty <= 0) {
       setError('Quantity must be greater than zero.');
+      return;
+    }
+    if (!isTransit && totalCost <= 0) {
+      setError('Purchase cost must be greater than zero.');
       return;
     }
     const newLine = {
@@ -5281,7 +5341,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       description: selectedLineProduct.name,
       qty,
       unit_cost: unitCost,
-      line_total: qty * unitCost
+      line_total: totalCost
     };
     const current = lines.length === 1 && !lines[0].product_id && !lines[0].description ? [] : lines;
     setLines([...current, newLine]);
@@ -5294,7 +5354,12 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     setLines((current) => current.map((line) => {
       if (line.id !== lineId) return line;
       const next = { ...line, ...patch };
-      next.line_total = numberValue(next.qty) * numberValue(next.unit_cost);
+      if (isTransit) {
+        next.unit_cost = 0;
+        next.line_total = 0;
+      } else {
+        next.line_total = numberValue(next.qty) * numberValue(next.unit_cost);
+      }
       return next;
     }));
   }
@@ -5359,6 +5424,11 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       setBusy(false);
       return;
     }
+    if (isTransit && total <= 0) {
+      setError('Enter the total goods amount paid for this shipment. Unit costs will be assigned only when it arrives.');
+      setBusy(false);
+      return;
+    }
 
     if (!supplierId && !partyCustomerId) {
       setSupplierMenuOpen(true);
@@ -5408,23 +5478,27 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       }));
 
       if (isEditing) {
-        const { error: replaceError } = await supabase.rpc('replace_purchase_like_document_v72', {
+        const replaceArgs = {
           p_document_id: document.id,
           p_header: header,
           p_items: itemPayload,
-          p_payments: validPaymentLines
-        });
+          p_payments: validPaymentLines,
+          ...(isTransit ? { p_goods_total: total } : {})
+        };
+        const { error: replaceError } = await supabase.rpc(isTransit ? 'replace_stock_in_transit_v82' : 'replace_purchase_like_document_v72', replaceArgs);
         if (replaceError) throw replaceError;
         setMessage(`${documentTypeLabel(documentType)} updated as ${documentNo}.`);
         onSaved();
         return;
       }
 
-      const { data, error: saveError } = await supabase.rpc('save_purchase_like_document_v65', {
+      const saveArgs = {
         p_header: header,
         p_items: itemPayload,
-        p_payments: validPaymentLines
-      });
+        p_payments: validPaymentLines,
+        ...(isTransit ? { p_goods_total: total } : {})
+      };
+      const { data, error: saveError } = await supabase.rpc(isTransit ? 'save_stock_in_transit_v82' : 'save_purchase_like_document_v65', saveArgs);
       if (saveError) throw saveError;
 
       setMessage(`${documentTypeLabel(documentType)} saved as ${data?.document_no || documentNo}.`);
@@ -5433,8 +5507,10 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     } catch (err) {
       const errorText = err.message || String(err);
       const migrationMissing = /schema cache|could not find the function/i.test(errorText);
-      const migrationHint = isEditing && (/replace_purchase_like_document_v72/i.test(errorText) || migrationMissing)
-        ? ' Run migration 072_purchase_edit_final_stock_validation.sql in Supabase.'
+      const migrationHint = isTransit && (/stock_in_transit_v82/i.test(errorText) || migrationMissing)
+        ? ' Run migration 082_transit_arrival_and_component_credit.sql in Supabase.'
+        : isEditing && (/replace_purchase_like_document_v72/i.test(errorText) || migrationMissing)
+          ? ' Run migration 072_purchase_edit_final_stock_validation.sql in Supabase.'
         : /save_purchase_like_document_v65/i.test(errorText) || migrationMissing
           ? ' Run migration 065_purchase_cashflow_payment_rules.sql in Supabase.'
           : '';
@@ -5494,6 +5570,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
             </select>
           </label>}
           {isTransit && <label>Expected arrival<input type="date" value={expectedArrivalDate} onChange={(e) => setExpectedArrivalDate(e.target.value)} /></label>}
+          {isTransit && <label>Total goods amount paid (LKR) <span className="required-mark">*</span><input type="number" min="0.01" step="0.01" value={transitGoodsTotal} onFocus={selectAllText} onChange={(e) => setTransitGoodsTotal(e.target.value)} placeholder="Complete supplier goods payment" required /></label>}
           <label>Notes<input value={notes} onFocus={selectAllText} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" /></label>
         </div>
 
@@ -5520,7 +5597,9 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
             <div className="table-wrap purchase-items-wrap">
               <table>
                 <thead>
-                  <tr><th>Code</th><th>Name</th><th>Qty</th><th>Unit cost</th><th>Total</th><th></th></tr>
+                  {isTransit
+                    ? <tr><th>Code</th><th>Name</th><th>Expected qty</th><th>Cost</th><th></th></tr>
+                    : <tr><th>Code</th><th>Name</th><th>Qty</th><th>Unit cost</th><th>Total</th><th></th></tr>}
                 </thead>
                 <tbody>
                   {lines.map((line) => (
@@ -5528,8 +5607,9 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
                       <td>{line.item_code || '-'}</td>
                       <td>{line.description || '-'}</td>
                       <td><input className="mini-input" type="number" step="0.001" value={line.qty} onFocus={selectAllText} onChange={(e) => updateLine(line.id, { qty: e.target.value })} /></td>
-                      <td><input className="mini-input" type="number" step="0.01" value={line.unit_cost} onFocus={selectAllText} onChange={(e) => updateLine(line.id, { unit_cost: e.target.value })} /></td>
-                      <td>{money(line.line_total)}</td>
+                      {isTransit
+                        ? <td><span className="muted-text">Assigned at arrival</span></td>
+                        : <><td><input className="mini-input" type="number" step="0.01" value={line.unit_cost} onFocus={selectAllText} onChange={(e) => updateLine(line.id, { unit_cost: e.target.value })} /></td><td>{money(line.line_total)}</td></>}
                       <td><button type="button" className="small-button danger" onClick={() => removeLine(line.id)}>Remove</button></td>
                     </tr>
                   ))}
@@ -5542,12 +5622,12 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         {selectedLineProduct && (
           <div className="modal-backdrop">
             <div className="modal-card item-entry-modal">
-              <div className="item-entry-heading"><div><span>Add purchase item</span><h3>{selectedLineProduct.name}</h3><p>{selectedLineProduct.item_code}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Close</button></div>
+              <div className="item-entry-heading"><div><span>{isTransit ? 'Add transit item' : 'Add purchase item'}</span><h3>{selectedLineProduct.name}</h3><p>{selectedLineProduct.item_code}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Close</button></div>
               <div className="item-entry-fields">
-                <label>Purchase price<input type="number" min="0" step="0.01" value={lineDraft.unit_cost} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, unit_cost: e.target.value })} autoFocus /></label>
                 <label>Quantity<input type="number" min="0.001" step="0.001" value={lineDraft.qty} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, qty: e.target.value })} /></label>
+                {!isTransit && <label>Purchase price / unit<input type="number" min="0.01" step="0.01" value={lineDraft.unit_cost} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, unit_cost: e.target.value })} autoFocus /></label>}
               </div>
-              <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(lineDraft.qty) * numberValue(lineDraft.unit_cost))}</strong></div>
+              <div className="item-entry-total"><span>{isTransit ? 'Cost' : 'Line total'}</span><strong>{isTransit ? 'Assigned when shipment arrives' : money(numberValue(lineDraft.qty) * numberValue(lineDraft.unit_cost))}</strong></div>
               <div className="modal-actions">
                 <button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Cancel</button>
                 <button type="button" className="primary-button" onClick={confirmAddProductToLines}>Add item</button>
@@ -5557,7 +5637,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         )}
 
         <div className="purchase-summary-row purchase-summary-row-v18">
-          <SummaryLine label="Total" value={money(total)} strong />
+          <SummaryLine label={isTransit ? 'Goods paid / ordered' : 'Total'} value={money(total)} strong />
           <SummaryLine label="Paid now" value={money(paidOut)} />
           <SummaryLine label="Purchase balance" value={money(balance)} />
           <SummaryLine label="Previous outstanding" value={`${previousOutstanding < 0 ? '-' : ''}${money(Math.abs(previousOutstanding))}`} />
@@ -5571,14 +5651,14 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
             <div className="modal-card wide-modal purchase-payment-screen">
               <div className="section-title-row">
                 <div>
-                  <h3>Purchase payment</h3>
-                  <p>Use Cash/Bank/Card for money paid out. Use Credit when nothing is paid now or for the remaining unpaid balance.</p>
+                  <h3>{isTransit ? 'Transit goods payment' : 'Purchase payment'}</h3>
+                  <p>{isTransit ? 'Record the supplier goods amount paid now. Shipping and other landed costs are recorded separately when the shipment arrives.' : 'Use Cash/Bank/Card for money paid out. Use Credit when nothing is paid now or for the remaining unpaid balance.'}</p>
                 </div>
                 <button type="button" className="danger-button" onClick={() => setShowPaymentPanel(false)}>Close</button>
               </div>
 
               <div className="payment-screen-summary cards-4">
-                <StatCard label="Purchase total" value={money(total)} />
+                <StatCard label={isTransit ? 'Goods amount' : 'Purchase total'} value={money(total)} />
                 <StatCard label="Paid now" value={money(paidOut)} />
                 <StatCard label="Purchase balance" value={money(balance)} />
                 <StatCard label="Previous outstanding" value={`${previousOutstanding < 0 ? '-' : ''}${money(Math.abs(previousOutstanding))}`} />
@@ -5652,6 +5732,136 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       </form>
     </div>
   );
+}
+
+
+function TransitArrivalModal({ document, onClose, onSaved }) {
+  const [lines, setLines] = useState([]);
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [paymentMethodId, setPaymentMethodId] = useState('');
+  const [arrivalDate, setArrivalDate] = useState(todayInputDate());
+  const [notes, setNotes] = useState('');
+  const [cheque, setCheque] = useState({ cheque_number: '', cheque_date: todayInputDate(), cheque_bank_name: '' });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const goodsCost = numberValue(document?.total_amount);
+  const finalLandedTotal = roundMoney(lines.reduce((sum, line) => sum + numberValue(line.qty) * numberValue(line.final_unit_cost), 0));
+  const shippingCost = roundMoney(finalLandedTotal - goodsCost);
+  const selectedMethod = paymentMethods.find((method) => method.id === paymentMethodId);
+
+  useEffect(() => {
+    let active = true;
+    async function loadArrival() {
+      setLoading(true);
+      const [itemRes, paymentRes] = await Promise.all([
+        supabase.from('document_items').select('id, product_id, item_code, description, qty, unit_cost, line_total').eq('document_id', document.id).order('created_at'),
+        supabase.from('payment_methods').select('*').eq('is_active', true).eq('is_paid_method', true).order('name')
+      ]);
+      if (!active) return;
+      const loadError = itemRes.error || paymentRes.error;
+      if (loadError) setError(loadError.message);
+      else {
+        setLines((itemRes.data || []).map((item) => ({
+          source_item_id: item.id,
+          product_id: item.product_id,
+          item_code: item.item_code || '',
+          description: item.description || item.item_code || 'Product',
+          qty: numberValue(item.qty),
+          original_unit_cost: numberValue(item.unit_cost),
+          final_unit_cost: numberValue(item.unit_cost)
+        })));
+        const methods = sortPaymentMethods(paymentRes.data || []);
+        setPaymentMethods(methods);
+        setPaymentMethodId(methods.find((method) => method.affects_cashflow !== false)?.id || methods[0]?.id || '');
+      }
+      setLoading(false);
+    }
+    loadArrival();
+    return () => { active = false; };
+  }, [document.id]);
+
+  function updateArrivalLine(sourceItemId, value) {
+    setLines((current) => current.map((line) => line.source_item_id === sourceItemId ? { ...line, final_unit_cost: value } : line));
+  }
+
+  async function receiveTransit(event) {
+    event.preventDefault();
+    setError('');
+    if (!lines.length || lines.some((line) => numberValue(line.final_unit_cost) <= 0)) {
+      setError('Enter the final landed unit cost for every product.');
+      return;
+    }
+    if (shippingCost < -0.005) {
+      setError(`The final landed total cannot be below the ${money(goodsCost)} already recorded for the goods.`);
+      return;
+    }
+    if (shippingCost > 0.005 && !selectedMethod) {
+      setError('Select the payment account used for the shipping and other arrival charges.');
+      return;
+    }
+    if (shippingCost > 0.005 && selectedMethod?.requires_cheque_details && (!cheque.cheque_number.trim() || !cheque.cheque_date)) {
+      setError('Enter the cheque number and date for the arrival-cost payment.');
+      return;
+    }
+    setBusy(true);
+    const payment = shippingCost > 0.005 ? {
+      source_line_id: createClientId(),
+      payment_method_id: selectedMethod.id,
+      payment_method_name: selectedMethod.name,
+      amount: shippingCost,
+      direction: 'out',
+      cheque_number: selectedMethod.requires_cheque_details ? cheque.cheque_number.trim() : null,
+      cheque_date: selectedMethod.requires_cheque_details ? cheque.cheque_date : null,
+      cheque_bank_name: selectedMethod.requires_cheque_details ? cheque.cheque_bank_name.trim() || null : null
+    } : {};
+    const { data, error: receiveError } = await supabase.rpc('receive_stock_in_transit_v82', {
+      p_transit_doc_id: document.id,
+      p_arrival_items: lines.map((line) => ({ source_item_id: line.source_item_id, final_unit_cost: numberValue(line.final_unit_cost) })),
+      p_payment: payment,
+      p_arrival_date: arrivalDate,
+      p_notes: notes.trim() || null
+    });
+    setBusy(false);
+    if (receiveError) {
+      const migrationMissing = /receive_stock_in_transit_v82|schema cache|could not find the function/i.test(receiveError.message || '');
+      setError(`${receiveError.message}${migrationMissing ? '. Run migration 082_transit_arrival_and_component_credit.sql in Supabase, then refresh.' : ''}`);
+      return;
+    }
+    onSaved?.(data);
+  }
+
+  return <div className="modal-backdrop transit-arrival-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose?.()}>
+    <form className="modal-card wide-modal transit-arrival-modal" onSubmit={receiveTransit}>
+      <div className="section-title-row">
+        <div><span className="eyebrow">Stock arrival</span><h3>Receive {document.document_no}</h3><p>Enter the final landed cost per unit after freight and all other charges. Only the increase over the goods cost already recorded will be posted as an arrival/shipping payment.</p></div>
+        <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>Close</button>
+      </div>
+      {error && <div className="error-box">{error}</div>}
+      <div className="transit-arrival-summary">
+        <div><small>Goods cost already recorded</small><strong>{money(goodsCost)}</strong></div>
+        <div className={shippingCost < -0.005 ? 'invalid' : 'shipping'}><small>Shipping / extra cost now</small><strong>{money(Math.max(shippingCost, 0))}</strong></div>
+        <div className="final"><small>Final landed total</small><strong>{money(finalLandedTotal)}</strong></div>
+      </div>
+      {loading ? <div className="muted-box">Loading transit items...</div> : <div className="table-wrap transit-arrival-lines">
+        <table><thead><tr><th>Code</th><th>Product</th><th>Qty</th><th>Goods / unit</th><th>Final landed / unit</th><th>Final total</th></tr></thead><tbody>
+          {lines.map((line) => <tr key={line.source_item_id}><td><strong>{line.item_code}</strong></td><td>{line.description}</td><td>{line.qty}</td><td>{numberValue(line.original_unit_cost) > 0 ? money(line.original_unit_cost) : <span className="muted-text">Not assigned</span>}</td><td><input className="table-number-input" type="number" min="0.01" step="0.01" value={line.final_unit_cost} onFocus={selectAllText} onChange={(event) => updateArrivalLine(line.source_item_id, event.target.value)} /></td><td>{money(numberValue(line.qty) * numberValue(line.final_unit_cost))}</td></tr>)}
+        </tbody></table>
+      </div>}
+      <div className="transit-arrival-fields">
+        <label>Arrival date<input type="date" value={arrivalDate} onChange={(event) => setArrivalDate(event.target.value)} required /></label>
+        {shippingCost > 0.005 && <label>Shipping payment account<select value={paymentMethodId} onChange={(event) => setPaymentMethodId(event.target.value)} required>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}{method.affects_cashflow === false ? ' · excluded from Cash In/Out totals' : ''}</option>)}</select></label>}
+        <label className="wide-field">Arrival notes<input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional shipping, clearing, or receiving note" /></label>
+        {shippingCost > 0.005 && selectedMethod?.requires_cheque_details && <>
+          <label>Cheque number<input value={cheque.cheque_number} onChange={(event) => setCheque({ ...cheque, cheque_number: event.target.value })} required /></label>
+          <label>Cheque date<input type="date" value={cheque.cheque_date} onChange={(event) => setCheque({ ...cheque, cheque_date: event.target.value })} required /></label>
+          <label>Bank / branch<input value={cheque.cheque_bank_name} onChange={(event) => setCheque({ ...cheque, cheque_bank_name: event.target.value })} /></label>
+        </>}
+      </div>
+      <div className="modal-actions"><button type="button" className="secondary-button" disabled={busy} onClick={onClose}>Cancel</button><button className="primary-button" disabled={loading || busy || shippingCost < -0.005}>{busy ? 'Receiving stock...' : 'Mark Arrived & Create Purchase'}</button></div>
+    </form>
+  </div>;
 }
 
 
@@ -9232,6 +9442,7 @@ function InventoryDocumentsPage() {
   const [formMode, setFormMode] = useState(null);
   const [previewId, setPreviewId] = useState('');
   const [busy, setBusy] = useState(false);
+  const [transitArrivalDocument, setTransitArrivalDocument] = useState(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -9262,14 +9473,10 @@ function InventoryDocumentsPage() {
     if (itemError) setError(itemError.message); else setItems(data || []);
   }
 
-  async function convertTransit() {
+  function convertTransit() {
     if (!selected || selected.document_type !== 'stock_in_transit') return;
-    if (!window.confirm(`Convert ${selected.document_no} to a Purchase and receive its stock?`)) return;
-    setBusy(true); setError(''); setMessage('');
-    const { data, error: convertError } = await supabase.rpc('convert_stock_in_transit_to_purchase', { p_transit_doc_id: selected.id });
-    setBusy(false);
-    if (convertError) setError(convertError.message);
-    else { setMessage(`Purchase ${data?.document_no || ''} created and stock received.`); await loadInventoryDocuments(); }
+    setError(''); setMessage('');
+    setTransitArrivalDocument(selected);
   }
 
   async function deletePurchaseLike() {
@@ -9361,6 +9568,16 @@ function InventoryDocumentsPage() {
         </div>
       </div>
       {previewId && <DocumentPreviewModal documentId={previewId} onClose={() => setPreviewId('')} />}
+      {transitArrivalDocument && <TransitArrivalModal
+        document={transitArrivalDocument}
+        onClose={() => setTransitArrivalDocument(null)}
+        onSaved={async (result) => {
+          const transitNo = transitArrivalDocument.document_no;
+          setTransitArrivalDocument(null);
+          setMessage(`${transitNo} arrived. Purchase ${result?.document_no || ''} created; ${money(result?.shipping_cost || 0)} posted as shipping/arrival cost.`);
+          await loadInventoryDocuments();
+        }}
+      />}
     </section>
   );
 }
