@@ -1915,17 +1915,76 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     if (openPanel) setShowWholesaleAdmin(true);
   }
 
-  async function retryWholesaleTransfer(transferId) {
-    setWholesaleBusy(true); setMessage('');
-    const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
-      body: { action: 'retry', transfer_id: transferId }
+  async function showSavedInvoiceReceiptForDocument(invoiceSummary, sourceBill = null) {
+    const documentId = invoiceSummary?.id;
+    if (!documentId) throw new Error('The completed invoice ID was not returned.');
+
+    const [documentRes, itemRes, flowRes] = await Promise.all([
+      supabase.from('documents').select('*').eq('id', documentId).maybeSingle(),
+      supabase.from('document_items').select('*').eq('document_id', documentId).order('created_at'),
+      supabase.from('cashflow_entries').select('id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name)').eq('document_id', documentId).order('created_at')
+    ]);
+    if (documentRes.error) throw documentRes.error;
+    if (!documentRes.data) throw new Error('The completed invoice could not be loaded.');
+
+    let party = customers.find((row) => row.id === documentRes.data.customer_id) || null;
+    if (documentRes.data.customer_id) {
+      const partyRes = await supabase.from('customers').select('*').eq('id', documentRes.data.customer_id).maybeSingle();
+      if (!partyRes.error && partyRes.data) party = partyRes.data;
+    }
+    const sourcePaymentNames = (sourceBill?.paymentLines || []).map((line) => line.paymentMethodName).filter(Boolean);
+    const flowPaymentNames = (flowRes.data || []).map((flow) => flow.payment_methods?.name || flow.account_name).filter(Boolean);
+    const documentPaymentName = paymentMethods.find((method) => method.id === documentRes.data.payment_method_id)?.name;
+    const paymentNames = [...new Set([...sourcePaymentNames, ...flowPaymentNames, documentPaymentName].filter(Boolean))];
+    const partyOutstandingAfter = party
+      ? numberValue(party.due_balance) - numberValue(party.store_credit_balance)
+      : null;
+    const savedDocument = {
+      ...invoiceSummary,
+      ...documentRes.data,
+      payment_method_name: paymentNames.join(' + '),
+      party,
+      party_outstanding_after: partyOutstandingAfter
+    };
+    setSavedInvoiceReceipt({
+      document: savedDocument,
+      items: !itemRes.error && itemRes.data ? itemRes.data : [],
+      flows: !flowRes.error && flowRes.data ? flowRes.data : []
     });
-    if (error || !data?.success) setMessage(readableError(data?.error || error, 'Wholesale transfer retry failed.'));
-    else setMessage(`Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}.`);
-    await loadPendingWholesaleTransfers(false);
-    productSearchCacheRef.current.clear();
-    await loadProducts({ force: true });
-    setWholesaleBusy(false);
+    return savedDocument;
+  }
+
+  async function retryWholesaleTransfer(transferId) {
+    const sourceBill = bills.find((bill) => bill.id === transferId) || null;
+    setWholesaleBusy(true); setMessage('');
+    try {
+      const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
+        body: { action: 'retry', transfer_id: transferId }
+      });
+      if (error || !data?.success) {
+        setMessage(readableError(data?.error || error, 'Wholesale transfer retry failed.'));
+      } else {
+        let receiptError = null;
+        try {
+          await showSavedInvoiceReceiptForDocument(data.invoice, sourceBill);
+        } catch (errorLoadingReceipt) {
+          receiptError = errorLoadingReceipt;
+        }
+        if (sourceBill) closeBillById(transferId, true);
+        setShowWholesaleAdmin(false);
+        setMessage(receiptError
+          ? `Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}, but its receipt actions could not be loaded: ${readableError(receiptError, 'Unknown receipt error')}`
+          : `Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}.`);
+      }
+      await loadPendingWholesaleTransfers(false);
+      productSearchCacheRef.current.clear();
+      await loadCustomers();
+      await loadProducts({ force: true });
+    } catch (retryError) {
+      setMessage(readableError(retryError, 'Wholesale transfer retry failed.'));
+    } finally {
+      setWholesaleBusy(false);
+    }
   }
 
   async function loadSavedDrafts(openPanel = true) {
@@ -2415,9 +2474,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
   function addSelectedProductAsComponentCredit() {
     const product = selectedPosProduct;
     if (!product || !can('process_returns')) return;
-    if (product.track_inventory === false) { setMessage('Only inventory-tracked products can be received as component credits.'); return; }
-    if (product.is_wholesale_linked === true) { setMessage('Wholesale Catalog items cannot be received as component credits. Use a normal Retail product.'); return; }
-    if (product.inventory_ownership === 'consignment') { setMessage('Consignment items cannot be received as shop-owned component credits.'); return; }
+    if (product.track_inventory === false) { setMessage('Only inventory-tracked products can be received as a Buyback.'); return; }
+    if (product.is_wholesale_linked === true) { setMessage('Wholesale Catalog items cannot be received as a Buyback. Use a normal Retail product.'); return; }
+    if (product.inventory_ownership === 'consignment') { setMessage('Consignment items cannot be received as a shop-owned Buyback.'); return; }
     const qty = Math.abs(numberValue(posProductDraft.qty));
     const unitPrice = Math.max(numberValue(posProductDraft.unitPrice), 0);
     if (qty <= 0) { setMessage('Quantity must be greater than zero.'); return; }
@@ -2432,16 +2491,16 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     setSelectedPosProduct(null);
     setPosProductDraft({ qty: 1, unitPrice: 0 });
     setMobilePosPanel('bill');
-    setMessage(`${product.name} added as a Component Credit. The credit reduces this bill and the removed part will be added to sellable stock.`);
+    setMessage(`${product.name} added as a Buyback. The credit reduces this bill and the removed part will be added to sellable stock.`);
   }
 
   function markSelectedItemAsComponentCredit() {
     const selectedItem = activeBill.items.find((item) => item.id === activeBill.selectedItemId);
     if (!selectedItem) { setMessage('Select the removed component in the bill first.'); return; }
-    if (selectedItem.isReturn && !selectedItem.isComponentCredit) { setMessage('An invoice-linked return cannot be changed into a component credit.'); return; }
-    if (selectedItem.isWholesaleLinked) { setMessage('Wholesale Catalog items cannot be received as a component credit. Add or use a normal Retail product instead.'); return; }
-    if (selectedItem.inventoryOwnership === 'consignment') { setMessage('Consignment items cannot be received as shop-owned component credits.'); return; }
-    if (selectedItem.trackInventory === false) { setMessage('Only inventory-tracked products can be received as component credits.'); return; }
+    if (selectedItem.isReturn && !selectedItem.isComponentCredit) { setMessage('An invoice-linked return cannot be changed into a Buyback.'); return; }
+    if (selectedItem.isWholesaleLinked) { setMessage('Wholesale Catalog items cannot be received as a Buyback. Add or use a normal Retail product instead.'); return; }
+    if (selectedItem.inventoryOwnership === 'consignment') { setMessage('Consignment items cannot be received as a shop-owned Buyback.'); return; }
+    if (selectedItem.trackInventory === false) { setMessage('Only inventory-tracked products can be received as a Buyback.'); return; }
     const quantity = Math.max(Math.abs(numberValue(selectedItem.qty)), 1);
     const items = activeBill.items.map((item) => item.id === selectedItem.id ? recalcItem({
       ...item,
@@ -2454,21 +2513,25 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       returnReason: 'Component removed from customer device / upgrade credit'
     }) : item);
     updateActiveBill({ items, paymentLines: [] });
-    setMessage(`${selectedItem.name} marked as a Component Credit. Its amount is deducted from this bill and the quantity will be added to sellable stock.`);
+    setMessage(`${selectedItem.name} marked as a Buyback. Its amount is deducted from this bill and the quantity will be added to sellable stock.`);
   }
 
-  function closeBill(resetUnconfirmedModes = false) {
-    if (bills.length === 1) {
+  function closeBillById(billId, resetUnconfirmedModes = false) {
+    const remainingBills = bills.filter((bill) => bill.id !== billId);
+    if (remainingBills.length === 0) {
       const fresh = emptyBill('Bill 1');
       setBills([fresh]);
       setActiveBillId(fresh.id);
       return;
     }
-    const remaining = bills
-      .filter((bill) => bill.id !== activeBill.id)
+    const remaining = remainingBills
       .map((bill) => resetUnconfirmedModes ? { ...bill, unconfirmedMode: Boolean(bill.editUnconfirmedId) } : bill);
     setBills(remaining);
-    setActiveBillId(remaining[0].id);
+    if (activeBillId === billId || !remaining.some((bill) => bill.id === activeBillId)) setActiveBillId(remaining[0].id);
+  }
+
+  function closeBill(resetUnconfirmedModes = false) {
+    closeBillById(activeBill.id, resetUnconfirmedModes);
   }
 
   function voidCurrentBill() {
@@ -2692,7 +2755,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
 
   async function saveInvoice(paymentLinesOverride = null, options = {}) {
     const linesForSave = paymentLinesOverride || paymentLines;
-    const isUnconfirmed = activeBill.unconfirmedMode === true;
+    const isUnconfirmed = options.saveAsDraft === true || activeBill.unconfirmedMode === true;
     const isConfirmingUnconfirmed = !isUnconfirmed && activeBill.sourceDocumentType === 'unconfirmed_sale' && activeBill.sourceDocumentId;
     const isEditingInvoice = !isUnconfirmed && Boolean(activeBill.editInvoiceId);
     const useCreditForSave = options.useExistingCustomerCredit ?? useExistingCustomerCredit;
@@ -2703,11 +2766,11 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       return;
     }
     if (activeBill.sourceReservationId && isUnconfirmed) {
-      setMessage('A Reservation Order must be converted directly to a posted sale so its original reservation can be released safely. Turn off Save as draft and save again.');
+      setMessage('A Reservation Order already reserves its stock and must be confirmed directly as a posted sale.');
       return;
     }
     if (isUnconfirmed && activeBill.items.some((item) => item.isComponentCredit)) {
-      setMessage('Component Credit lines must be posted as a completed sale/exchange. Turn off Save as draft, then save the bill.');
+      setMessage('Buyback lines must be posted as a completed sale/exchange and cannot be kept in a draft.');
       return;
     }
     const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
@@ -2919,6 +2982,16 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     : [paymentMethodByName('Cash'), primaryBankMethod, paymentMethodByName('Credit')])
     .filter((method, index, rows) => method && rows.findIndex((row) => row?.id === method.id) === index);
   const currentTarget = currentBillTarget();
+  const saveCommandIsDraft = activeBill.unconfirmedMode === true || (
+    !activeBill.editInvoiceId
+    && !activeBill.sourceReservationId
+    && activeBill.sourceDocumentType !== 'unconfirmed_sale'
+  );
+  const saveCommandLabel = activeBill.sourceDocumentType === 'unconfirmed_sale' && !activeBill.unconfirmedMode
+    ? 'Confirm Sale'
+    : activeBill.editInvoiceId
+      ? 'Save Changes'
+      : 'Save Draft';
   const remainingCurrent = Math.max(currentTarget.amount - paymentLineTotal(), 0);
   const modalNet = paymentNetForBalance(paymentDraft);
   const modalProjectedOutstanding = currentOutstanding + total - modalNet.paidIn + modalNet.refundOut;
@@ -2939,7 +3012,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             <button className="pos-action return-action" disabled={!can('process_returns')} title={!can('process_returns') ? 'Permission required' : ''} onClick={() => { setShowReturnLookup(true); setReturnInvoice(null); setReturnItems([]); setReturnInvoiceMatches([]); setReturnSearch(''); setReturnPartyFilter(activeBill.customerId ? 'eligible' : 'walkin'); }}>↩<span>Return</span></button>
             <button className="pos-action" disabled={!can('create_quotes')} title={!can('create_quotes') ? 'Permission required' : ''} onClick={saveCurrentBillAsQuotation}>Q<span>Quote</span></button>
             <button className="pos-action pos-drafts-action" onClick={() => loadSavedDrafts(true)} disabled={savedDraftsBusy}>▤<span>Drafts</span></button>
-            <button className="pos-action" onClick={() => saveInvoice()} disabled={saving}>✓<span>{saving ? 'Saving...' : activeBill.unconfirmedMode ? 'Save Draft' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirm Sale' : activeBill.editInvoiceId ? 'Save Changes' : 'Save Sale'}</span></button>
+            <button className="pos-action" onClick={() => saveInvoice(null, { saveAsDraft: saveCommandIsDraft })} disabled={saving} title={saveCommandIsDraft ? 'Save as a shared draft and reserve its stock without posting stock, payments, cashflow, or customer balances' : ''}>✓<span>{saving ? 'Saving...' : saveCommandLabel}</span></button>
           </div>
         </div>
         <div className="pos-command-group payment-command-group">
@@ -2965,16 +3038,6 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           <button className="tab add-tab" onClick={addBill}>+ New Bill</button>
         </div>
         <div className="pos-bill-row-actions">
-          <label className={`pos-unconfirmed-toggle ${activeBill.unconfirmedMode ? 'active' : ''}`} title="Save as a shared draft. Items are reserved, but stock, cashflow and customer balances are not posted until confirmation.">
-            <input
-              type="checkbox"
-              checked={activeBill.unconfirmedMode === true}
-              disabled={Boolean(activeBill.editUnconfirmedId || activeBill.editInvoiceId || activeBill.sourceDocumentType === 'unconfirmed_sale')}
-              onChange={(event) => updateActiveBill({ unconfirmedMode: event.target.checked })}
-            />
-            <span className="pos-unconfirmed-icon" aria-hidden="true">◇</span>
-            <span className="pos-unconfirmed-label">{activeBill.editUnconfirmedId ? 'Editing draft' : activeBill.sourceDocumentType === 'unconfirmed_sale' ? 'Confirming draft' : 'Save as draft'}</span>
-          </label>
           <button className="danger-button void-bill-button" disabled={!can('void_sales')} title={!can('void_sales') ? 'Permission required' : ''} onClick={voidCurrentBill}>Void Bill</button>
         </div>
       </div>
@@ -3032,8 +3095,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       >
         <div key={`bill-${activeBill.id}`} className={`panel-card bill-panel left-bill-panel pos-bill-switch-transition ${mobilePosPanel === 'bill' ? 'mobile-panel-active' : 'mobile-panel-hidden'}`}>
           <div className="pos-line-toolbar">
-            <button className="secondary-button" onClick={() => removeItem()}>Delete</button>
-            <button type="button" className="secondary-button component-credit-button" disabled={!activeBill.selectedItemId || !can('process_returns')} title={!can('process_returns') ? 'Return permission required' : 'Credit a removed/upgraded component and add it to shop stock'} onClick={markSelectedItemAsComponentCredit}>↙ Component Credit</button>
+            <button className="secondary-button pos-delete-line-button" onClick={() => removeItem()}>Delete</button>
+            <button type="button" className="secondary-button component-credit-button" disabled={!activeBill.selectedItemId || !can('process_returns')} title={!can('process_returns') ? 'Return permission required' : 'Buy back a removed/upgraded component and add it to shop stock'} onClick={markSelectedItemAsComponentCredit}>↙ Buyback</button>
           </div>
 
           <div className="pos-bill-area pos-bill-cards compact-bill-cards">
@@ -3046,7 +3109,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               >
                 <div className="bill-card-main">
                   <strong>{item.item_code}</strong>
-                  <span>{item.name}{item.isComponentCredit && <em className="component-credit-badge">Component Credit</em>}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
+                  <span>{item.name}{item.isComponentCredit && <em className="component-credit-badge">Buyback</em>}{item.isWholesaleLinked && <em className="wholesale-inline-badge">Wholesale JIT</em>}{item.inventoryOwnership === 'consignment' && <em className="product-origin-badge consignment compact">Consignment</em>}</span>
                   <b>{money(item.lineTotal)}</b>
                 </div>
                 <div className="bill-card-controls compact-controls">
@@ -3253,7 +3316,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
             </section>
             <div className="item-entry-total"><span>Line total</span><strong>{money(numberValue(posProductDraft.qty) * numberValue(posProductDraft.unitPrice))}</strong></div>
           </div>
-          <div className="modal-actions product-entry-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button>{selectedPosProduct.track_inventory !== false && <button type="button" className="secondary-button component-credit-button" disabled={!can('process_returns') || selectedPosProduct.is_wholesale_linked === true || selectedPosProduct.inventory_ownership === 'consignment'} onClick={addSelectedProductAsComponentCredit}>↙ Add as Component Credit</button>}<button type="submit" className="primary-button" disabled={!allowNegativeStock && selectedPosProduct.track_inventory !== false && numberValue(selectedPosProduct.available_qty) <= 0}>Add Item</button></div>
+          <div className="modal-actions product-entry-actions"><button type="button" className="secondary-button" onClick={() => setSelectedPosProduct(null)}>Cancel</button>{selectedPosProduct.track_inventory !== false && <button type="button" className="secondary-button component-credit-button" disabled={!can('process_returns') || selectedPosProduct.is_wholesale_linked === true || selectedPosProduct.inventory_ownership === 'consignment'} onClick={addSelectedProductAsComponentCredit}>↙ Buyback</button>}<button type="submit" className="primary-button" disabled={!allowNegativeStock && selectedPosProduct.track_inventory !== false && numberValue(selectedPosProduct.available_qty) <= 0}>Add Item</button></div>
         </form>
       </div>}
 

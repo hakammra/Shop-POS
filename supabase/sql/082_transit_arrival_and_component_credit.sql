@@ -422,10 +422,10 @@ begin
     if coalesce((item->>'qty')::numeric,0)<0 then
       component_credit:=coalesce(item->>'line_kind','standard')='component_credit';
       if component_credit then
-        if not public.has_pos_permission_v38('process_returns') then raise exception 'Return permission required for a Component Credit'; end if;
-        if nullif(item->>'source_document_item_id','') is not null then raise exception 'A Component Credit cannot be linked to an earlier invoice'; end if;
+        if not public.has_pos_permission_v38('process_returns') then raise exception 'Return permission required for a Buyback'; end if;
+        if nullif(item->>'source_document_item_id','') is not null then raise exception 'A Buyback cannot be linked to an earlier invoice'; end if;
         if not exists(select 1 from public.products where id=nullif(item->>'product_id','')::uuid and coalesce(track_inventory,true) and coalesce(inventory_ownership,'owned')='owned') then
-          raise exception 'Component Credit requires a normal shop-owned inventory product';
+          raise exception 'Buyback requires a normal shop-owned inventory product';
         end if;
       else
         if nullif(item->>'source_document_item_id','') is null then raise exception 'Use Return and select the original invoice before adding a negative item'; end if;

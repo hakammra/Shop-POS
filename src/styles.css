@@ -1316,6 +1316,16 @@ tr.selected-row td {
 .transit-arrival-fields .wide-field { grid-column: span 2; }
 .component-credit-button { color: #ffd37b; border-color: rgba(214, 166, 45, .65); }
 .component-credit-button:disabled { color: var(--muted); border-color: var(--line); }
+.pos-delete-line-button {
+  border-color: rgba(225, 91, 91, .65);
+  background: rgba(122, 39, 39, .18);
+  color: #ff9f9f;
+}
+.pos-delete-line-button:hover:not(:disabled) {
+  border-color: #e15b5b;
+  background: rgba(154, 47, 47, .32);
+  color: #ffd1d1;
+}
 .component-credit-row { box-shadow: inset 3px 0 #d6a62d; }
 .component-credit-badge {
   display: inline-flex;
