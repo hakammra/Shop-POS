@@ -7443,6 +7443,7 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
 
 async function shareAccountingDocumentOnWhatsApp(document, items = [], flows = [], companySettings = DEFAULT_COMPANY_SETTINGS) {
   const filename = `${safePdfFilename(document?.document_no || 'invoice')}.pdf`;
+  const sharePdfOnly = document?.document_type === 'invoice';
   const text = `${companySettings?.shop_name || 'Computer Shop'} ${customerDocumentTypeLabel(document?.document_type).toLowerCase()} ${document?.document_no || ''} · ${money(document?.total_amount)}`;
   const shareProbe = new File([''], filename, { type: 'application/pdf' });
   const canNativeShareFile = !!(navigator.share && navigator.canShare?.({ files: [shareProbe] }));
@@ -7455,7 +7456,7 @@ async function shareAccountingDocumentOnWhatsApp(document, items = [], flows = [
   const file = new File([blob], filename, { type: 'application/pdf' });
 
   if (canNativeShareFile) {
-    await navigator.share({ title: document?.document_no || 'Sales invoice', text, files: [file] });
+    await navigator.share(sharePdfOnly ? { files: [file] } : { title: document?.document_no || 'Document', text, files: [file] });
     return 'Invoice shared. Choose WhatsApp and then search for the recipient.';
   }
 
@@ -7467,10 +7468,14 @@ async function shareAccountingDocumentOnWhatsApp(document, items = [], flows = [
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 30000);
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`${text}\nThe PDF has been downloaded—attach it to this WhatsApp chat.`)}`;
+  const whatsappUrl = sharePdfOnly
+    ? 'https://wa.me/'
+    : `https://wa.me/?text=${encodeURIComponent(`${text}\nThe PDF has been downloaded—attach it to this WhatsApp chat.`)}`;
   if (whatsappWindow) whatsappWindow.location.replace(whatsappUrl);
   else window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
-  return 'WhatsApp opened and the invoice PDF was downloaded. Choose a chat, then attach the downloaded PDF.';
+  return sharePdfOnly
+    ? 'WhatsApp opened and the invoice PDF was downloaded without a message. Choose a chat, then attach the PDF.'
+    : 'WhatsApp opened and the document PDF was downloaded. Choose a chat, then attach the downloaded PDF.';
 }
 
 function whatsappDateTime(value) {
