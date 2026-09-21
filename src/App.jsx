@@ -2606,6 +2606,22 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     return { paidIn, refundOut };
   }
 
+  function setCustomerCreditUsage(enabled) {
+    const nextTarget = currentBillTarget(enabled).amount;
+    let remaining = nextTarget;
+    const adjustedLines = paymentDraft.reduce((rows, line) => {
+      if (remaining <= 0.005) return rows;
+      const amount = Math.min(Math.max(numberValue(line.amount), 0), remaining);
+      if (amount <= 0.005) return rows;
+      rows.push({ ...line, amount: roundMoney(amount) });
+      remaining = roundMoney(remaining - amount);
+      return rows;
+    }, []);
+    updateActiveBill({ useExistingCustomerCredit: enabled, paymentLines: adjustedLines });
+    setPaymentDraft(adjustedLines);
+    setLineAmountInput('');
+  }
+
   function paymentMethodByName(name) {
     const clean = name.toLowerCase();
     return visiblePaymentMethods.find((method) => method.name.toLowerCase() === clean)
@@ -2944,6 +2960,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       document_date: isEditingInvoice ? activeBill.editInvoiceDocumentDate || todayInputDate() : new Date().toISOString(),
       notes: activeBill.notes || '',
       payment_method_name: linesForSave.map((line) => line.paymentMethodName).filter(Boolean).join(' + '),
+      customer_credit_applied: numberValue(data?.balance_applied, saveTarget.balanceUsed),
       party: selectedCustomer || null,
       party_outstanding_after: isUnconfirmed ? null : resultingOutstanding,
       unconfirmed_payments: isUnconfirmed ? paymentPayload : []
@@ -3352,12 +3369,6 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 <SummaryLine label="Discount" value={money(cartDiscount)} />
                 <SummaryLine label="Current bill" value={money(total)} strong />
                 {selectedCustomer && <SummaryLine label={currentOutstanding < 0 ? 'Available customer credit' : 'Previous outstanding'} value={`${currentOutstanding < 0 ? '-' : ''}${money(Math.abs(currentOutstanding))}`} />}
-                {selectedCustomer && currentOutstanding < 0 && total > 0 && (
-                  <label className="pos-credit-choice payment-credit-choice">
-                    <input type="checkbox" checked={useExistingCustomerCredit} onChange={(event) => { updateActiveBill({ useExistingCustomerCredit: event.target.checked, paymentLines: [] }); setPaymentDraft([]); }} />
-                    Use customer credit for this bill only
-                  </label>
-                )}
                 {selectedCustomer && currentOutstanding > 0 && total < 0 && (
                   <label className="pos-credit-choice payment-credit-choice">
                     <input type="checkbox" checked={useExistingCustomerCredit} onChange={(event) => { updateActiveBill({ useExistingCustomerCredit: event.target.checked, paymentLines: [] }); setPaymentDraft([]); }} />
@@ -3381,8 +3392,19 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
               </div>
 
               <div className="payment-method-large-grid">
+                {selectedCustomer && currentOutstanding < 0 && total > 0 && (
+                  <button
+                    type="button"
+                    className={`payment-method-tile customer-credit${useExistingCustomerCredit ? ' active' : ''}`}
+                    aria-pressed={useExistingCustomerCredit}
+                    onClick={() => setCustomerCreditUsage(!useExistingCustomerCredit)}
+                  >
+                    Customer Credit
+                    <small>{useExistingCustomerCredit ? `${money(balanceUsedForCurrentBill)} applied · click to remove` : `${money(Math.min(Math.abs(currentOutstanding), Math.abs(total)))} available`}</small>
+                  </button>
+                )}
                 {visiblePaymentMethods.map((method) => (
-                  <button key={method.id} className={method.is_paid_method === false ? 'payment-method-tile credit' : 'payment-method-tile'} onClick={() => addPaymentLine(method)}>
+                  <button type="button" key={method.id} className={method.is_paid_method === false ? 'payment-method-tile credit' : 'payment-method-tile'} onClick={() => addPaymentLine(method)}>
                     {method.name}
                     <small>{method.is_paid_method === false ? 'Add unpaid balance' : 'Receive / refund'}</small>
                   </button>
@@ -3415,6 +3437,14 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 <table>
                   <thead><tr><th>Method</th><th>Direction</th><th>Amount</th><th></th></tr></thead>
                   <tbody>
+                    {selectedCustomer && useExistingCustomerCredit && balanceUsedForCurrentBill > 0 && (
+                      <tr className="customer-credit-payment-line">
+                        <td><strong>Customer Credit</strong><small className="payment-line-detail">Applied from the customer&rsquo;s available balance</small></td>
+                        <td>Applied</td>
+                        <td><strong>{money(balanceUsedForCurrentBill)}</strong></td>
+                        <td><button type="button" className="link-button" onClick={() => setCustomerCreditUsage(false)}>Remove</button></td>
+                      </tr>
+                    )}
                     {paymentDraft.map((line) => (
                       <tr key={line.id}>
                         <td>{line.paymentMethodName}{line.isPaidMethod === false ? ' / Credit' : ''}{line.chequeNumber && <small className="payment-line-detail">Cheque {line.chequeNumber} · {line.chequeDate}</small>}</td>
@@ -3423,7 +3453,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                         <td><button className="link-button" onClick={() => setPaymentDraft((rows) => rows.filter((row) => row.id !== line.id))}>Remove</button></td>
                       </tr>
                     ))}
-                    {paymentDraft.length === 0 && <tr><td colSpan="4" className="empty-cell">Select a payment type to add a line.</td></tr>}
+                    {paymentDraft.length === 0 && !(useExistingCustomerCredit && balanceUsedForCurrentBill > 0) && <tr><td colSpan="4" className="empty-cell">Select a payment type to add a line.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -7117,6 +7147,11 @@ function documentPaymentSummary(document, flows = []) {
   }
 
   if (!grouped.size && document?.payment_method_name && numberValue(document?.paid_amount) > 0) grouped.set(document.payment_method_name, Math.abs(numberValue(document.paid_amount)));
+  const noteCreditMatch = String(document?.notes || '').match(/Existing outstanding balance applied to this document:\s*([\d,.]+)/i);
+  const customerCreditApplied = Math.abs(numberValue(document?.customer_credit_applied, noteCreditMatch?.[1] || 0));
+  if (customerCreditApplied > 0.005) {
+    grouped.set('Customer Credit', roundMoney(numberValue(grouped.get('Customer Credit')) + customerCreditApplied));
+  }
   return [...grouped.entries()].map(([label, amount]) => ({ label, amount }));
 }
 

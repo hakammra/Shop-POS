@@ -2510,6 +2510,12 @@ tr.selected-row td {
 .payment-method-tile:hover { transform: translateY(-1px); border-color: var(--accent); background: #3a3a3a; }
 .payment-method-tile small { color: var(--muted); font-size: .78rem; font-weight: 500; }
 .payment-method-tile.credit { border-color: rgba(255,193,7,.45); }
+.payment-method-tile.customer-credit { border-color: rgba(41,171,226,.62); background: #263a43; }
+.payment-method-tile.customer-credit:hover { background: #2b4652; }
+.payment-method-tile.customer-credit.active { border-color: #4bc2ef; background: #174e65; box-shadow: inset 0 0 0 1px rgba(75,194,239,.28); }
+.payment-method-tile.customer-credit.active small { color: #d9f5ff; }
+.customer-credit-payment-line td { background: rgba(41,171,226,.08); border-color: rgba(41,171,226,.28); }
+.customer-credit-payment-line strong { color: #8cddfb; }
 .payment-screen-summary { background: #262626; border: 1px solid var(--border); padding: 12px; margin-bottom: 12px; }
 .payment-custom-row { display: grid; grid-template-columns: minmax(220px, 320px) 1fr; gap: 12px; align-items: end; margin-bottom: 12px; }
 .payment-custom-row small { color: var(--muted); }
