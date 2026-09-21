@@ -7299,20 +7299,20 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
   pdf.line(margin, margin + 21, pageWidth - margin, margin + 21);
 
   const partyName = documentPartyDisplayName(document);
-  const partyInfo = [document.party?.phone, document.party?.address].filter(Boolean).join(' | ');
+  const supplierDocumentTypes = ['purchase', 'stock_in_transit', 'stock_receiving', 'supplier_payment', 'consignment_intake', 'consignment_return'];
+  const customerDocumentTypes = ['invoice', 'unconfirmed_sale', 'refund', 'quotation', 'reservation', 'customer_payment', 'trade_in', 'job', 'cod_order', 'online_order'];
+  const partyLabel = supplierDocumentTypes.includes(document.document_type)
+    ? 'Supplier'
+    : customerDocumentTypes.includes(document.document_type)
+      ? 'Customer'
+      : 'Party';
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(9);
   const metaY = margin + 27;
   pdf.text(`Date: ${fmtDate(document.document_date || document.created_at)}`, margin, metaY);
   pdf.text(`Status: ${document.document_type === 'unconfirmed_sale' ? paidStatusLabel(document) : document.status || '-'}`, pageWidth / 2, metaY);
-  pdf.text(`Customer / Supplier: ${partyName}`, margin, metaY + 5);
+  pdf.text(`${partyLabel}: ${partyName}`, margin, metaY + 5);
   let cursorY = metaY + 10;
-  if (partyInfo) {
-    pdf.setTextColor(82, 96, 105);
-    pdf.text(pdf.splitTextToSize(partyInfo, pageWidth - margin * 2), margin, cursorY);
-    cursorY += 5;
-    pdf.setTextColor(23, 32, 42);
-  }
   if (document.notes) {
     const noteLines = pdf.splitTextToSize(`Notes: ${document.notes}`, pageWidth - margin * 2);
     pdf.setFillColor(244, 248, 250);
