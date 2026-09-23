@@ -331,6 +331,27 @@ function readableError(value, fallback = 'Something went wrong.') {
   return text === '[object Object]' ? fallback : text;
 }
 
+async function readableFunctionError(error, data, fallback = 'Edge Function request failed.') {
+  if (data?.error) return readableError(data.error, fallback);
+  const response = error?.context;
+  if (response && typeof response.clone === 'function') {
+    try {
+      const body = await response.clone().json();
+      const detail = readableError(body?.error || body?.message || body, '');
+      if (detail) return detail;
+    } catch {
+      try {
+        const detail = (await response.clone().text()).trim();
+        if (detail) return detail;
+      } catch {
+        // Keep the original function error below.
+      }
+    }
+    if (response.status) return `${fallback} (HTTP ${response.status}).`;
+  }
+  return readableError(error, fallback);
+}
+
 const DEFAULT_COMPANY_SETTINGS = {
   id: true,
   shop_name: 'Computer Shop',
@@ -2011,7 +2032,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         body: { action: 'dismiss_pending', transfer_id: transfer.id }
       });
       if (error || !data?.success || !data?.cancelled) {
-        setMessage(readableError(data?.error || error, 'Wholesale transfer cancellation failed.'));
+        const detail = await readableFunctionError(error, data, 'Wholesale transfer cancellation failed');
+        setMessage(/Unsupported bridge action/i.test(detail)
+          ? 'The deployed Retail bridge is outdated. Deploy the current retail-wholesale-bridge Edge Function, then try Remove again.'
+          : detail);
       } else {
         renewBillAfterWholesaleCancellation(transfer.id);
         setMessage(`Pending Wholesale transfer ${transfer.retail_sale_reference} removed. If its POS bill was open, it is ready to save as a new sale.`);
@@ -7365,7 +7389,7 @@ async function downloadAccountingDocumentPdf(document, items = [], flows = [], c
     if (settings.show_item_code) headers.push('Code');
     headers.push('Description', 'Qty', 'Unit price', 'Discount', 'Total');
     const rows = items.map((item) => {
-      const descriptionDetails = [item.description || '-', settings.show_serial_number && item.serial_number ? `Serial: ${item.serial_number}` : '', settings.show_warranty && item.warranty ? `Warranty: ${item.warranty}` : ''].filter(Boolean).join('\n');
+      const descriptionDetails = [customerFacingItemDescription(item.description) || '-', settings.show_serial_number && item.serial_number ? `Serial: ${item.serial_number}` : '', settings.show_warranty && item.warranty ? `Warranty: ${item.warranty}` : ''].filter(Boolean).join('\n');
       const row = [];
       if (settings.show_item_code) row.push(item.item_code || '-');
       row.push(descriptionDetails, String(numberValue(item.qty)), money(item.unit_price || item.unit_cost), numberValue(item.discount_value) ? item.discount_type === 'percent' ? `${numberValue(item.discount_value)}%` : money(item.discount_value) : '-', money(item.line_total));
@@ -8535,6 +8559,10 @@ function priceFromMarkup(cost, markup) {
   const m = numberValue(markup);
   const calculated = c + (c * m / 100);
   return calculated > 0 ? Math.ceil((calculated - 0.0000001) / 50) * 50 : 0;
+}
+
+function customerFacingItemDescription(description) {
+  return String(description || '').replace(/^\[ASM-\d+\s+[^\]]+\]\s+/i, '');
 }
 
 function formatPercent(value) {
