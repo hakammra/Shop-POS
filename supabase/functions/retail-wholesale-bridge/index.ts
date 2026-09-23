@@ -89,6 +89,9 @@ function validateWholesaleResponse(response: any, transfer: any) {
 
 async function continueTransfer(userClient: any, admin: any, bridgeSecret: string, transferId: string) {
   let transfer = await loadTransfer(admin, transferId);
+  if (['cancel_pending', 'wholesale_cancelled', 'cancelled'].includes(transfer.status)) {
+    throw new Error('This Wholesale transfer is being cancelled and cannot be retried as a sale.');
+  }
   await admin.from('retail_wholesale_transfers').update({
     attempt_count: Number(transfer.attempt_count || 0) + 1,
     last_error: null,
@@ -148,6 +151,8 @@ async function continueCancellation(userClient: any, admin: any, bridgeSecret: s
       status: 'wholesale_cancelled',
       next_step: 'retail_cancel',
       wholesale_cancellation_response: wholesaleCancellation,
+      wholesale_document_id: wholesaleCancellation.wholesale_document_id || transfer.wholesale_document_id,
+      wholesale_document_no: wholesaleCancellation.wholesale_document_no || transfer.wholesale_document_no,
       last_error: null,
       updated_at: new Date().toISOString()
     }).eq('id', transferId);
@@ -158,6 +163,47 @@ async function continueCancellation(userClient: any, admin: any, bridgeSecret: s
   const { data, error } = await userClient.rpc('finalize_retail_wholesale_cancellation_v81', { p_transfer_id: transfer.id });
   if (error) throw error;
   await refreshCatalog(admin, bridgeSecret);
+  return data;
+}
+
+async function continuePendingCancellation(userClient: any, admin: any, bridgeSecret: string, transferId: string) {
+  let transfer = await loadTransfer(admin, transferId);
+  if (transfer.status === 'cancelled') {
+    return { cancelled: true, already_cancelled: true, document_no: transfer.retail_sale_reference };
+  }
+  if (transfer.retail_invoice_document_id || transfer.retail_purchase_document_id) {
+    throw new Error('This transfer has posted Retail documents. Cancel its sales invoice from Documents.');
+  }
+
+  if (transfer.status !== 'wholesale_cancelled') {
+    const wholesaleCancellation = await callWholesale(bridgeSecret, {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'cancel_pending',
+        idempotency_key: transfer.idempotency_key,
+        retail_sale_reference: transfer.retail_sale_reference
+      })
+    });
+    const { error: storeError } = await admin.from('retail_wholesale_transfers').update({
+      status: 'wholesale_cancelled',
+      next_step: 'retail_cancel',
+      wholesale_cancellation_response: wholesaleCancellation,
+      wholesale_document_id: wholesaleCancellation.wholesale_document_id || transfer.wholesale_document_id,
+      wholesale_document_no: wholesaleCancellation.wholesale_document_no || transfer.wholesale_document_no,
+      last_error: null,
+      updated_at: new Date().toISOString()
+    }).eq('id', transferId);
+    if (storeError) throw storeError;
+    transfer = await loadTransfer(admin, transferId);
+  }
+
+  const { data, error } = await userClient.rpc('finalize_pending_retail_wholesale_cancellation_v84', {
+    p_transfer_id: transfer.id
+  });
+  if (error) throw error;
+  try { await refreshCatalog(admin, bridgeSecret); } catch {
+    // Cancellation is complete; catalog refresh can be retried separately.
+  }
   return data;
 }
 
@@ -200,8 +246,24 @@ Deno.serve(async (request) => {
       if (!transferId) throw new Error('Transfer ID is required.');
       const transfer = await loadTransfer(admin, transferId);
       const result = ['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step)
-        ? await continueCancellation(userClient, admin, bridgeSecret, transferId)
+        ? transfer.retail_invoice_document_id
+          ? await continueCancellation(userClient, admin, bridgeSecret, transferId)
+          : await continuePendingCancellation(userClient, admin, bridgeSecret, transferId)
         : await continueTransfer(userClient, admin, bridgeSecret, transferId);
+      return json({ success: true, ...result });
+    }
+
+    if (action === 'dismiss_pending') {
+      transferId = String(body?.transfer_id || '');
+      if (!transferId) throw new Error('Transfer ID is required.');
+      const { data: prepared, error: prepareError } = await userClient.rpc(
+        'prepare_pending_retail_wholesale_cancellation_v84', { p_transfer_id: transferId }
+      );
+      if (prepareError) throw prepareError;
+      pendingTransfer = true;
+      const result = prepared?.already_cancelled
+        ? { cancelled: true, already_cancelled: true }
+        : await continuePendingCancellation(userClient, admin, bridgeSecret, transferId);
       return json({ success: true, ...result });
     }
 
@@ -240,7 +302,17 @@ Deno.serve(async (request) => {
         const transfer = await loadTransfer(admin, transferId);
         pendingTransfer = true;
         const cancellationFlow = requestedAction === 'cancel' || ['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step);
-        if (cancellationFlow && transfer.status !== 'cancelled') {
+        if (requestedAction === 'dismiss_pending'
+            || (requestedAction === 'retry' && !transfer.retail_invoice_document_id
+              && ['cancel_pending', 'wholesale_cancelled', 'cancelled'].includes(transfer.status))) {
+          await admin.from('retail_wholesale_transfers').update({
+            last_error: errorMessage.slice(0, 2000),
+            updated_at: new Date().toISOString()
+          }).eq('id', transferId);
+        } else if (['cancel_pending', 'wholesale_cancelled', 'cancelled'].includes(transfer.status)
+            && requestedAction === 'checkout') {
+          // A sale request that races with cancellation must not overwrite it.
+        } else if (cancellationFlow && transfer.status !== 'cancelled') {
           await admin.from('retail_wholesale_transfers').update({
             status: transfer.status === 'wholesale_cancelled' ? 'wholesale_cancelled' : 'failed',
             next_step: transfer.status === 'wholesale_cancelled' ? 'retail_cancel' : 'wholesale_cancel',

@@ -1966,6 +1966,9 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       });
       if (error || !data?.success) {
         setMessage(readableError(data?.error || error, 'Wholesale transfer retry failed.'));
+      } else if (data.cancelled) {
+        renewBillAfterWholesaleCancellation(transferId);
+        setMessage(`Wholesale transfer removed. ${sourceBill ? 'The POS bill is still available as a new sale.' : ''}`);
       } else {
         let receiptError = null;
         try {
@@ -1985,6 +1988,39 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       await loadProducts({ force: true });
     } catch (retryError) {
       setMessage(readableError(retryError, 'Wholesale transfer retry failed.'));
+    } finally {
+      setWholesaleBusy(false);
+    }
+  }
+
+  function renewBillAfterWholesaleCancellation(transferId) {
+    if (!bills.some((bill) => bill.id === transferId)) return;
+    const replacementId = createClientId();
+    setBills((current) => current.map((bill) => bill.id === transferId
+      ? { ...bill, id: replacementId, documentNo: '' }
+      : bill));
+    if (activeBillId === transferId) setActiveBillId(replacementId);
+  }
+
+  async function cancelPendingWholesaleTransfer(transfer) {
+    if (!window.confirm(`Remove pending Wholesale transfer ${transfer.retail_sale_reference}? If Wholesale already posted an invoice, it will be cancelled and its stock restored. The unsaved POS bill will remain available.`)) return;
+    setWholesaleBusy(true);
+    setMessage('');
+    try {
+      const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
+        body: { action: 'dismiss_pending', transfer_id: transfer.id }
+      });
+      if (error || !data?.success || !data?.cancelled) {
+        setMessage(readableError(data?.error || error, 'Wholesale transfer cancellation failed.'));
+      } else {
+        renewBillAfterWholesaleCancellation(transfer.id);
+        setMessage(`Pending Wholesale transfer ${transfer.retail_sale_reference} removed. If its POS bill was open, it is ready to save as a new sale.`);
+        productSearchCacheRef.current.clear();
+        await loadProducts({ force: true });
+      }
+      await loadPendingWholesaleTransfers(false);
+    } catch (cancelError) {
+      setMessage(readableError(cancelError, 'Wholesale transfer cancellation failed.'));
     } finally {
       setWholesaleBusy(false);
     }
@@ -3509,7 +3545,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 <td>{transfer.wholesale_document_no || 'Not posted yet'}</td>
                 <td>{transfer.requested_by || '-'}</td>
                 <td className="wholesale-error-cell">{transfer.last_error || '-'}</td>
-                <td><button type="button" className="primary-button" disabled={wholesaleBusy} onClick={() => retryWholesaleTransfer(transfer.id)}>Retry</button></td>
+                <td><div className="wholesale-transfer-actions">
+                  <button type="button" className="primary-button" disabled={wholesaleBusy} onClick={() => retryWholesaleTransfer(transfer.id)}>{['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step) ? 'Finish removal' : 'Retry'}</button>
+                  {!['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step) && <button type="button" className="danger-button" disabled={wholesaleBusy} onClick={() => cancelPendingWholesaleTransfer(transfer)}>Remove</button>}
+                </div></td>
               </tr>)}
             </tbody></table></div>
           )}
@@ -3986,7 +4025,7 @@ function DocumentsPage({ permissions = {}, isAdmin = false, assistantTarget = nu
       const [itemRes, flowRes, partyRes] = await Promise.all([
         supabase.from('document_items').select('*').eq('document_id', selected.id).order('created_at'),
         supabase.from('cashflow_entries').select('id, entry_type, account_name, amount, description, created_at, payment_method_id, payment_methods(name)').eq('document_id', selected.id).order('created_at'),
-        selected.customer_id ? supabase.from('customers').select('id, name, phone, address').eq('id', selected.customer_id).maybeSingle() : Promise.resolve({ data: null, error: null })
+        selected.customer_id ? supabase.from('customers').select('id, name, phone, address, due_balance, store_credit_balance').eq('id', selected.customer_id).maybeSingle() : Promise.resolve({ data: null, error: null })
       ]);
       if (itemRes.error) throw itemRes.error;
       if (flowRes.error) throw flowRes.error;

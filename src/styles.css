@@ -2356,6 +2356,8 @@ tr.selected-row td {
 .wholesale-status.failed { border-color: #d55353; color: #ffb1b1; }
 .wholesale-status.wholesale_posted { border-color: var(--primary); color: #9edfff; }
 .wholesale-error-cell { max-width: 300px; white-space: normal; color: #efb0b0; }
+.wholesale-transfer-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wholesale-transfer-actions button { min-width: 76px; }
 @media (max-width: 900px) {
   .pos-drafts-modal { width: 100%; max-height: 94dvh; }
   .pos-drafts-modal .section-title-row,
