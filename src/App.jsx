@@ -3654,7 +3654,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
     const returnLines = (itemRes.data || []).filter((line) => numberValue(line.qty) < 0 || numberValue(line.line_total) < 0);
     const returnsRevenue = returnLines.reduce((sum, line) => sum + Math.abs(numberValue(line.line_total)), 0);
     const returnsCost = returnLines.reduce((sum, line) => sum + Math.abs(numberValue(line.qty)) * numberValue(line.unit_cost), 0);
-    const flowRows = (cashRes.data || []).filter((row) => row.payment_methods?.affects_cashflow !== false);
+    const flowRows = (cashRes.data || []).filter((row) => row.payment_methods?.affects_cashflow !== false && row.documents?.document_type !== 'account_transfer');
     const lowStock = (stockRes.data || []).filter((row) => numberValue(row.available_qty) <= numberValue(row.min_stock_level)).sort((a, b) => numberValue(a.available_qty) - numberValue(b.available_qty)).slice(0, 6);
     setStats({
       products: productsRes.count || 0, customers: customersRes.count || 0, suppliers: suppliersRes.count || 0, documents: docsRes.count || 0,
@@ -11154,6 +11154,7 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
 function CashflowPage() {
   const [entries, setEntries] = useState([]);
   const [paymentMethods, setPaymentMethods] = useState([]);
+  const [transferPaymentMethods, setTransferPaymentMethods] = useState([]);
   const [cashAccounts, setCashAccounts] = useState([]);
   const [companySettings, setCompanySettings] = useState(DEFAULT_COMPANY_SETTINGS);
   const [filters, setFilters] = useState({ search: '', type: 'all', documentType: 'all', paymentMethodId: 'all', datePreset: 'today', dateFrom: '', dateTo: '' });
@@ -11272,14 +11273,19 @@ function CashflowPage() {
       .from('payment_methods')
       .select('*')
       .eq('is_active', true)
-      .eq('affects_cashflow', true)
       .order('name');
     if (methodError) setError(methodError.message);
     else {
       const ordered = sortPaymentMethods(data || []);
-      setPaymentMethods(ordered);
-      if (ordered.length) setManualForm((form) => ({ ...form, payment_method_id: form.payment_method_id || ordered[0].id }));
-      const transferable = ordered.filter((method) => ['cash', 'bank'].includes(method.account_kind));
+      const cashflowMethods = ordered.filter((method) => method.affects_cashflow !== false);
+      const transferable = ordered.filter((method) => method.is_paid_method !== false);
+      setPaymentMethods(cashflowMethods);
+      setTransferPaymentMethods(transferable);
+      setManualForm((form) => ({
+        ...form,
+        payment_method_id: cashflowMethods.some((method) => method.id === form.payment_method_id)
+          ? form.payment_method_id : cashflowMethods[0]?.id || ''
+      }));
       setTransferForm((form) => ({
         ...form,
         from_payment_method_id: transferable.some((method) => method.id === form.from_payment_method_id) ? form.from_payment_method_id : transferable[0]?.id || '',
@@ -11376,7 +11382,7 @@ function CashflowPage() {
     setShowTransfer(false);
     setTransferForm((form) => ({ ...form, amount: '', description: '', transfer_date: todayInputDate() }));
     setMessage(`${data?.document_no}: ${money(data?.amount)} transferred from ${data?.from_account} to ${data?.to_account}.`);
-    loadEntries(); loadCashAccounts();
+    await Promise.all([loadEntries(), loadCashAccounts(), loadRegisterState()]);
   }
 
   async function exportCashflow(mode) {
@@ -11455,7 +11461,7 @@ function CashflowPage() {
     other: cashflowContributions.cash_in.other - cashflowContributions.cash_out.other
   };
   const rangeLabel = filters.datePreset === 'today' ? 'Today' : filters.datePreset === 'yesterday' ? 'Yesterday' : filters.datePreset === 'week' ? 'This week' : filters.datePreset === 'month' ? 'This month' : filters.datePreset === 'custom' ? 'Custom range' : 'All time';
-  const transferableMethods = paymentMethods.filter((method) => ['cash', 'bank'].includes(method.account_kind));
+  const transferableMethods = transferPaymentMethods;
   const paymentAccountCategory = (account) => account.is_paid_method === false ? 'credit' : ['cash', 'bank'].includes(account.account_kind) ? account.account_kind : 'other';
   const paymentAccountCategoryOrder = { cash: 1, bank: 2, credit: 3, other: 4 };
   const orderedCashAccounts = [...cashAccounts].sort((left, right) => {
@@ -11597,8 +11603,9 @@ function CashflowPage() {
             <div className={`payment-account-history-summary ${category}`}><span>{category === 'credit' ? 'Recorded credit activity' : 'Current balance'}</span><strong className={numberValue(displayedAmount) < 0 ? 'negative-balance' : ''}>{signedMoney(displayedAmount)}</strong><small>{numberValue(selectedPaymentAccount.usage_count)} recorded use{numberValue(selectedPaymentAccount.usage_count) === 1 ? '' : 's'}{selectedPaymentAccount.is_active ? '' : ' · Inactive payment type'}</small></div>
             {paymentAccountHistoryError && <div className="error-box">{paymentAccountHistoryError}</div>}
             {paymentAccountHistoryLoading ? <div className="muted-box">Loading transactions...</div> : <div className="table-wrap payment-account-history-table"><table><thead><tr><th>Date</th><th>Direction</th><th>Document</th><th>Type</th><th>Description</th><th>Amount</th><th></th></tr></thead><tbody>{paymentAccountHistory.map((entry) => {
-              const directionLabel = entry.entry_type === 'non_cash' ? 'Credit / account' : `${selectedPaymentAccount.affects_cashflow === false ? 'Account' : 'Cash'} ${entry.entry_type === 'cash_out' ? 'out' : 'in'}`;
-              return <tr key={entry.id}><td>{new Date(entry.created_at).toLocaleString('en-LK')}</td><td><span className={`cash-direction-pill ${entry.entry_type}`}>{directionLabel}</span></td><td>{entry.documents?.document_no || '-'}</td><td>{documentTypeLabel(entry.documents?.document_type)}</td><td className="description-cell">{entry.description || '-'}</td><td className={entry.entry_type === 'cash_out' ? 'negative-balance' : entry.entry_type === 'cash_in' ? 'positive-balance' : ''}><strong>{entry.entry_type === 'cash_out' ? '-' : entry.entry_type === 'cash_in' ? '+' : ''}{money(entry.amount)}</strong></td><td><button type="button" className="small-button" disabled={!entry.document_id} onClick={() => { if (entry.document_id) { setSelectedPaymentAccount(null); setPreviewDocumentId(entry.document_id); } }}>View</button></td></tr>;
+              const directionLabel = entry.entry_type === 'non_cash' ? 'Credit / account' : entry.documents?.document_type === 'account_transfer' ? `Transfer ${entry.entry_type === 'cash_out' ? 'out' : 'in'}` : `${selectedPaymentAccount.affects_cashflow === false ? 'Account' : 'Cash'} ${entry.entry_type === 'cash_out' ? 'out' : 'in'}`;
+              const entryDate = entry.documents?.document_type === 'account_transfer' ? entry.documents.document_date || entry.created_at : entry.created_at;
+              return <tr key={entry.id}><td>{entry.documents?.document_type === 'account_transfer' ? fmtDate(entryDate) : new Date(entryDate).toLocaleString('en-LK')}</td><td><span className={`cash-direction-pill ${entry.entry_type}`}>{directionLabel}</span></td><td>{entry.documents?.document_no || '-'}</td><td>{documentTypeLabel(entry.documents?.document_type)}</td><td className="description-cell">{entry.description || '-'}</td><td className={entry.entry_type === 'cash_out' ? 'negative-balance' : entry.entry_type === 'cash_in' ? 'positive-balance' : ''}><strong>{entry.entry_type === 'cash_out' ? '-' : entry.entry_type === 'cash_in' ? '+' : ''}{money(entry.amount)}</strong></td><td><button type="button" className="small-button" disabled={!entry.document_id} onClick={() => { if (entry.document_id) { setSelectedPaymentAccount(null); setPreviewDocumentId(entry.document_id); } }}>View</button></td></tr>;
             })}{!paymentAccountHistory.length && <EmptyRow colSpan={7} text="No transactions have been recorded for this payment type yet." />}</tbody></table></div>}
             {paymentAccountHistory.length >= 250 && <small className="muted-text">Showing the latest 250 transactions.</small>}
           </div>
@@ -11636,7 +11643,7 @@ function CashflowPage() {
       {showTransfer && (
         <div className="modal-backdrop">
           <div className="modal-card cash-transfer-modal">
-            <div className="section-title-row"><div><h3>Transfer Money</h3><p>Move money between Cash, Bank 1, Bank 2, or another bank account. This does not create income or expense.</p></div><button type="button" className="secondary-button" onClick={() => setShowTransfer(false)}>Close</button></div>
+            <div className="section-title-row"><div><h3>Transfer Money</h3><p>Move money between paid payment accounts. Both account histories update; Cash In, Cash Out and income/expense totals do not.</p></div><button type="button" className="secondary-button" onClick={() => setShowTransfer(false)}>Close</button></div>
             <form onSubmit={saveAccountTransfer}>
               <div className="cash-transfer-grid">
                 <label>From account<select value={transferForm.from_payment_method_id} onChange={(e) => { const fromId = e.target.value; const toId = transferForm.to_payment_method_id === fromId ? transferableMethods.find((method) => method.id !== fromId)?.id || '' : transferForm.to_payment_method_id; setTransferForm({ ...transferForm, from_payment_method_id: fromId, to_payment_method_id: toId }); }}>{transferableMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select><small>Available: {sourceAccount ? signedMoney(sourceAccount.balance) : '-'}</small></label>
@@ -11645,7 +11652,7 @@ function CashflowPage() {
                 <label>Amount<input type="number" min="0.01" step="0.01" value={transferForm.amount} onFocus={selectAllText} onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })} required /></label>
                 <label className="wide-field">Description<input value={transferForm.description} onChange={(e) => setTransferForm({ ...transferForm, description: e.target.value })} placeholder="Example: Daily cash deposit" /></label>
               </div>
-              <div className="cash-transfer-effect"><div><span>Source</span><strong>-{money(transferForm.amount)}</strong></div><div><span>Destination</span><strong>+{money(transferForm.amount)}</strong></div><div><span>Total cash change</span><strong>{money(0)}</strong></div></div>
+              <div className="cash-transfer-effect"><div><span>Source account</span><strong>-{money(transferForm.amount)}</strong></div><div><span>Destination account</span><strong>+{money(transferForm.amount)}</strong></div><div><span>Combined balance change</span><strong>{money(0)}</strong></div></div>
               <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setShowTransfer(false)}>Cancel</button><button className="primary-button">Save Transfer</button></div>
             </form>
           </div>
@@ -12163,7 +12170,8 @@ function ReportsPage() {
     if (activeReport === 'jobs_repairs') { const rows = documents.filter((row) => row.document_type === 'job'); return { title: 'Jobs & Repairs', description: 'Repair jobs received and their current status.', totals: [['Jobs', rows.length], ['Open', rows.filter((row) => !['completed', 'cancelled'].includes(row.job_status || row.status)).length], ['Completed', rows.filter((row) => (row.job_status || row.status) === 'completed').length]], columns: [{ key: 'date', label: 'Received', render: (row) => fmtDate(row.document_date) }, { key: 'job_no', label: 'Job Number', render: (row) => row.job_no || row.document_no }, { key: 'customer', label: 'Customer', render: (row) => customerMap.get(row.customer_id)?.name || '-' }, { key: 'status', label: 'Job Status', render: (row) => (row.job_status || row.status || '').replace('_', ' ') }, { key: 'notes', label: 'Notes' }], rows }; }
     if (activeReport === 'inventory_documents') { const rows = documents.filter((row) => ['stock_in_transit', 'stock_adjustment', 'stock_condition_transfer', 'consignment_intake', 'consignment_return', 'trade_in'].includes(row.document_type)); return { title: 'Inventory Documents', description: 'Transit, adjustment, stock-condition, consignment, and trade-in documents.', totals: [['Documents', rows.length], ['Value', money(rows.reduce((sum, row) => sum + numberValue(row.total_amount), 0))]], columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Document' }, { key: 'type', label: 'Type', render: (row) => documentTypeLabel(row.document_type) }, { key: 'party', label: 'Customer / Supplier', render: (row) => customerMap.get(row.customer_id)?.name || supplierMap.get(row.supplier_id)?.name || '-' }, { key: 'status', label: 'Status' }, { key: 'total', label: 'Value', render: (row) => money(row.total_amount) }], rows }; }
     if (activeReport === 'stock_movement') return { title: 'Stock Movement', description: 'Every stock quantity change recorded during the period.', totals: [['Movements', stockMovements.length], ['Quantity Movement', stockMovements.reduce((sum, row) => sum + numberValue(row.qty), 0)]], columns: [{ key: 'date', label: 'Date', render: (row) => new Date(row.created_at).toLocaleString('en-LK') }, { key: 'document', label: 'Document', render: (row) => row.documents?.document_no || '-' }, { key: 'type', label: 'Movement', render: (row) => String(row.movement_type || '').replaceAll('_', ' ') }, { key: 'code', label: 'Code', render: (row) => row.products?.item_code || '-' }, { key: 'product', label: 'Product', render: (row) => row.products?.name || '-' }, { key: 'qty', label: 'Qty' }, { key: 'unit_cost', label: 'Unit Cost', render: (row) => money(row.unit_cost) }, { key: 'value', label: 'Value', render: (row) => money(numberValue(row.qty) * numberValue(row.unit_cost)) }], rows: stockMovements };
-    const cashIn = filteredCashflows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0); const cashOut = filteredCashflows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0); return { title: 'Transaction History', description: 'Cash, bank, card, credit, customer payments, supplier payments, expenses, and other income.', totals: [['Cash In', money(cashIn)], ['Cash Out', money(cashOut)], ['Net', signedMoney(cashIn - cashOut)], ['Entries', filteredCashflows.length]], columns: [{ key: 'date', label: 'Date', render: (row) => new Date(row.created_at).toLocaleString('en-LK') }, { key: 'direction', label: 'Type', render: (row) => row.entry_type.replace('_', ' ') }, { key: 'method', label: 'Payment Type', render: (row) => row.payment_methods?.name || row.account_name || '-' }, { key: 'document', label: 'Document', render: (row) => documentMap.get(row.document_id)?.document_no || '-' }, { key: 'document_type', label: 'Document Type', render: (row) => documentTypeLabel(documentMap.get(row.document_id)?.document_type) }, { key: 'description', label: 'Description' }, { key: 'amount', label: 'Amount', render: (row) => `${row.entry_type === 'cash_out' ? '-' : row.entry_type === 'cash_in' ? '+' : ''}${money(row.amount)}`, className: (row) => row.entry_type === 'cash_out' ? 'negative-balance' : row.entry_type === 'cash_in' ? 'positive-balance' : '' }], rows: filteredCashflows };
+    const externalCashflows = filteredCashflows.filter((row) => documentMap.get(row.document_id)?.document_type !== 'account_transfer');
+    const cashIn = externalCashflows.filter((row) => row.entry_type === 'cash_in').reduce((sum, row) => sum + numberValue(row.amount), 0); const cashOut = externalCashflows.filter((row) => row.entry_type === 'cash_out').reduce((sum, row) => sum + numberValue(row.amount), 0); return { title: 'Transaction History', description: 'Cash, bank, card, credit, customer payments, supplier payments, expenses, and other income. Transfers appear in the rows but are excluded from Cash In and Cash Out totals.', totals: [['Cash In', money(cashIn)], ['Cash Out', money(cashOut)], ['Net', signedMoney(cashIn - cashOut)], ['Entries', filteredCashflows.length]], columns: [{ key: 'date', label: 'Date', render: (row) => new Date(row.created_at).toLocaleString('en-LK') }, { key: 'direction', label: 'Type', render: (row) => row.entry_type.replace('_', ' ') }, { key: 'method', label: 'Payment Type', render: (row) => row.payment_methods?.name || row.account_name || '-' }, { key: 'document', label: 'Document', render: (row) => documentMap.get(row.document_id)?.document_no || '-' }, { key: 'document_type', label: 'Document Type', render: (row) => documentTypeLabel(documentMap.get(row.document_id)?.document_type) }, { key: 'description', label: 'Description' }, { key: 'amount', label: 'Amount', render: (row) => `${row.entry_type === 'cash_out' ? '-' : row.entry_type === 'cash_in' ? '+' : ''}${money(row.amount)}`, className: (row) => row.entry_type === 'cash_out' ? 'negative-balance' : row.entry_type === 'cash_in' ? 'positive-balance' : '' }], rows: filteredCashflows };
   }
 
   const selectedReport = activeReport ? buildReport() : null;
@@ -13110,7 +13118,7 @@ function PaymentTypesPage() {
             />
             Affects cash/bank cashflow
           </label>
-          {form.is_paid_method && <><label>Payment account type</label><select value={form.account_kind} disabled={form.requires_cheque_details} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">You can change this while editing. Active cash and bank types with Affects Cashflow enabled can be used for transfers.</small></>}
+          {form.is_paid_method && <><label>Payment account type</label><select value={form.account_kind} disabled={form.requires_cheque_details} onChange={(e) => setForm({ ...form, account_kind: e.target.value })}><option value="cash">Cash drawer</option><option value="bank">Bank account</option><option value="other">Other payment account</option></select><small className="muted-text">You can change this while editing. Any active paid payment type can be used for transfers; Affects Cashflow does not control transfer eligibility.</small></>}
           <label className="checkbox-label"><input type="checkbox" checked={form.requires_cheque_details} onChange={(e) => setForm({ ...form, requires_cheque_details: e.target.checked, is_paid_method: true, affects_cashflow: true, account_kind: e.target.checked ? 'bank' : form.account_kind })} /> Require cheque number and date</label>
           <button className="primary-button full-width">{editingId ? 'Save Changes' : 'Save'}</button>
         </form>
