@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './lib/supabaseClient';
 import { createPartyTransactionHistoryPdf } from './lib/partyTransactionHistoryPdf';
 import { BALANCE_APPLIED_KEY, UNPAID_BALANCE_KEY, buildPaymentAllocationRows, signedPaymentAmount } from './lib/reportPaymentAllocation';
+import { buildProfitMarginSummary } from './lib/profitMarginReport';
+import { applyPostingCosts, productIdsNeedingCostRefresh } from './lib/saleCostSnapshots';
 import * as XLSX from 'xlsx';
 import Storefront from './Storefront';
 
@@ -1676,6 +1678,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
           qty: Number(item.qty || 0),
           unitPrice: Number(item.unit_price || item.unitPrice || 0),
           unitCost: Number(item.unit_cost || item.unitCost || 0),
+          originalSaleItemId: isInvoiceEdit ? item.id : null,
           discountType: item.discount_type || item.discountType || 'none',
           discountValue: Number(item.discount_value || item.discountValue || 0),
           isReturn: Number(item.qty || 0) < 0,
@@ -2853,23 +2856,6 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setMessage('Swap lines must be posted as a completed sale/exchange and cannot be kept in a draft.');
       return;
     }
-    const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
-    const positiveLineTotal = activeBill.items.filter((item) => numberValue(item.qty) > 0).reduce((sum, item) => sum + Math.max(numberValue(item.lineTotal), 0), 0);
-    const positiveCartDiscount = activeBill.cartDiscountType === 'percent'
-      ? positiveLineTotal * numberValue(activeBill.cartDiscountValue) / 100
-      : Math.max(numberValue(activeBill.cartDiscountValue), 0);
-    const billDiscountFactor = positiveLineTotal > 0 ? Math.max(positiveLineTotal - Math.min(positiveCartDiscount, positiveLineTotal), 0) / positiveLineTotal : 1;
-    const belowMinimum = minimumProfitPercent > 0 ? activeBill.items.find((item) => {
-      const qty = numberValue(item.qty);
-      const cost = numberValue(item.unitCost);
-      if (qty <= 0 || cost <= 0) return false;
-      const effectiveUnitPrice = Math.max(numberValue(item.lineTotal), 0) * billDiscountFactor / qty;
-      return effectiveUnitPrice + 0.005 < cost * (1 + minimumProfitPercent / 100);
-    }) : null;
-    if (belowMinimum) {
-      setMessage(`${belowMinimum.name} cannot be sold below ${money(numberValue(belowMinimum.unitCost) * (1 + minimumProfitPercent / 100))} after discounts (${minimumProfitPercent}% above cost).`);
-      return;
-    }
     if (!isUnconfirmed && !linesForSave.length && saveTarget.amount > 0.005) {
       openPaymentPanel();
       setMessage('Select payment details before saving.');
@@ -2901,9 +2887,42 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setShowCustomerPanel(true);
       return;
     }
-    if ((appSettings.confirm_pos_sale || isEditingInvoice) && !window.confirm(`${isUnconfirmed ? 'Save this shared draft' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : isEditingInvoice ? `Replace ${activeBill.documentNo} and reapply all stock, payment and balance effects` : 'Save this invoice'} for ${money(total)}?`)) return;
-
     setSaving(true);
+    let postingItems = activeBill.items;
+    if (!isUnconfirmed) {
+      const productIds = productIdsNeedingCostRefresh(activeBill.items);
+      if (productIds.length) {
+        const { data: costRows, error: costError } = await supabase.from('products').select('id, avg_cost').in('id', productIds);
+        if (costError || costRows?.length !== productIds.length) {
+          setSaving(false);
+          setMessage(costError ? readableError(costError, 'Could not verify current product costs.') : 'Could not verify the cost of every item. Refresh products and try again.');
+          return;
+        }
+        postingItems = applyPostingCosts(activeBill.items, costRows);
+      }
+    }
+    const minimumProfitPercent = Math.max(numberValue(appSettings.minimum_profit_percent, 5), 0);
+    const positiveLineTotal = postingItems.filter((item) => numberValue(item.qty) > 0).reduce((sum, item) => sum + Math.max(numberValue(item.lineTotal), 0), 0);
+    const positiveCartDiscount = activeBill.cartDiscountType === 'percent'
+      ? positiveLineTotal * numberValue(activeBill.cartDiscountValue) / 100
+      : Math.max(numberValue(activeBill.cartDiscountValue), 0);
+    const billDiscountFactor = positiveLineTotal > 0 ? Math.max(positiveLineTotal - Math.min(positiveCartDiscount, positiveLineTotal), 0) / positiveLineTotal : 1;
+    const belowMinimum = minimumProfitPercent > 0 ? postingItems.find((item) => {
+      const qty = numberValue(item.qty);
+      const cost = numberValue(item.unitCost);
+      if (qty <= 0 || cost <= 0) return false;
+      const effectiveUnitPrice = Math.max(numberValue(item.lineTotal), 0) * billDiscountFactor / qty;
+      return effectiveUnitPrice + 0.005 < cost * (1 + minimumProfitPercent / 100);
+    }) : null;
+    if (belowMinimum) {
+      setSaving(false);
+      setMessage(`${belowMinimum.name} cannot be sold below ${money(numberValue(belowMinimum.unitCost) * (1 + minimumProfitPercent / 100))} after discounts (${minimumProfitPercent}% above cost).`);
+      return;
+    }
+    if ((appSettings.confirm_pos_sale || isEditingInvoice) && !window.confirm(`${isUnconfirmed ? 'Save this shared draft' : isConfirmingUnconfirmed ? 'Confirm and post this sale' : isEditingInvoice ? `Replace ${activeBill.documentNo} and reapply all stock, payment and balance effects` : 'Save this invoice'} for ${money(total)}?`)) {
+      setSaving(false);
+      return;
+    }
     const payload = {
       document_id: activeBill.editUnconfirmedId || null,
       document_no: activeBill.documentNo,
@@ -2915,7 +2934,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       source_reservation_id: activeBill.sourceReservationId || null,
       notes: activeBill.notes || ''
     };
-    const itemsPayload = activeBill.items.map((item) => ({
+    const itemsPayload = postingItems.map((item) => ({
       product_id: item.product_id,
       item_code: item.item_code,
       description: item.assemblyCode ? `[${item.assemblyCode} ${item.assemblyName}] ${item.name}` : item.name,
@@ -12082,14 +12101,7 @@ function ReportsPage() {
     && (!supplierId || row.supplier_id === supplierId));
   const purchaseDocumentIds = new Set(purchaseDocuments.map((row) => row.id));
   const purchaseItems = items.filter((row) => purchaseDocumentIds.has(row.document_id));
-  const salesRevenue = salesItems.reduce((sum, row) => sum + numberValue(row.line_total), 0);
-  const salesCost = salesItems.reduce((sum, row) => sum + numberValue(row.qty) * numberValue(row.unit_cost), 0);
-  const salesProfit = salesRevenue - salesCost;
-  const returnItems = salesItems.filter((row) => numberValue(row.qty) < 0 || numberValue(row.line_total) < 0);
-  const returnedSales = returnItems.reduce((sum, row) => sum + Math.abs(numberValue(row.line_total)), 0);
-  const returnedCost = returnItems.reduce((sum, row) => sum + Math.abs(numberValue(row.qty)) * numberValue(row.unit_cost), 0);
-  const returnedProfitImpact = returnedSales - returnedCost;
-  const productPerformance = reportGroup(salesItems, (row) => row.product_id || `${row.item_code}|${row.description}`, (row, key) => ({ id: key, item_code: row.item_code || '-', description: row.description || '-', qty: 0, sales: 0, cost: 0 }), (current, row) => { current.qty += numberValue(row.qty); current.sales += numberValue(row.line_total); current.cost += numberValue(row.qty) * numberValue(row.unit_cost); }).sort((a, b) => b.sales - a.sales);
+  const { salesRevenue, salesCost, salesProfit, returnedSales, returnedProfitImpact, productPerformance } = buildProfitMarginSummary(salesItems);
   const purchasedProducts = reportGroup(purchaseItems, (row) => row.product_id || `${row.item_code}|${row.description}`, (row, key) => ({ id: key, item_code: row.item_code || '-', description: row.description || '-', qty: 0, value: 0 }), (current, row) => { current.qty += numberValue(row.qty); current.value += numberValue(row.line_total) || numberValue(row.qty) * numberValue(row.unit_cost); }).sort((a, b) => b.value - a.value);
   const invoicePaymentFlows = documentFlows.filter((flow) => {
     const doc = documentMap.get(flow.document_id);
@@ -12148,12 +12160,12 @@ function ReportsPage() {
       { key: 'total', label: 'Total', render: (row) => reportAmount(row.total_amount), className: 'report-number' }
     ];
     if (activeReport === 'profit_margin') return {
-      title: 'Profit & Margin', printTitle: 'PROFIT', description: 'Net sales and cost for documents recorded in this period. Returns reduce this period’s sales, cost and gross profit; they do not rewrite the original sale month.', totals: [['Net Sales', money(salesRevenue)], ['Returned Sales', money(returnedSales)], ['Return Profit Impact', signedMoney(-returnedProfitImpact)], ['Gross Profit', money(salesProfit)]],
+      title: 'Profit & Margin', printTitle: 'PROFIT', description: 'Net sales and saved sale-line costs for the selected dates. Later product cost changes do not recalculate older sales. Returns affect the period in which they are recorded.', totals: [['Net Sales', money(salesRevenue)], ['Returned Sales', money(returnedSales)], ['Return Profit Impact', signedMoney(-returnedProfitImpact)], ['Gross Profit', money(salesProfit)]],
       columns: [
         { key: 'item_code', label: 'Code' },
         { key: 'description', label: 'Product' },
         { key: 'qty', label: 'Quantity', render: (row) => reportAmount(row.qty), className: 'report-number' },
-        { key: 'cost', label: 'Cost', render: (row) => reportAmount(row.cost), className: 'report-number' },
+        { key: 'cost', label: 'Cost at sale', render: (row) => reportAmount(row.cost), className: 'report-number' },
         { key: 'sales', label: 'Total', render: (row) => reportAmount(row.sales), className: 'report-number' },
         { key: 'profit', label: 'Profit', render: (row) => reportAmount(row.sales - row.cost), className: 'report-number' },
         { key: 'margin', label: 'Margin', render: (row) => row.sales ? formatPercent(((row.sales - row.cost) / row.sales) * 100) : '0.00%', className: 'report-number' }
