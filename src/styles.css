@@ -4204,6 +4204,7 @@ body.pos-resizing {
 .report-calendar-icon::after { content: ''; position: absolute; top: -5px; left: 5px; width: 12px; height: 7px; border-left: 2px solid #e3e7e9; border-right: 2px solid #e3e7e9; }
 .report-filter-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding-top: 3px; }
 .report-filter-actions button { min-height: 48px; }
+.report-filter-actions button:last-child { grid-column: 1 / -1; }
 .report-filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -4373,19 +4374,23 @@ body.pos-resizing {
   body:has(.report-view-page) .report-page-layout,
   body:has(.report-view-page) .report-page-main { display: block !important; }
   body:has(.report-view-page) .report-output { padding: 0 !important; overflow: visible !important; border: 0 !important; background: #fff !important; color: #111 !important; }
-  body:has(.report-view-page) .aronium-report-sheet { width: auto !important; min-height: 277mm !important; margin: 0 !important; padding: 0 0 12mm !important; overflow: visible !important; box-shadow: none !important; }
+  body:has(.report-view-page) .aronium-report-sheet { width: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; box-shadow: none !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body:has(.report-view-page) .aronium-report-header h1 { font-size: 17pt !important; }
+  body:has(.report-view-page) .aronium-report-meta dl { font-size: 9pt !important; }
+  body:has(.report-view-page) .report-totals-row span { font-size: 8pt !important; }
+  body:has(.report-view-page) .report-totals-row strong { font-size: 11pt !important; }
   body:has(.report-view-page) .report-totals-row { background: #fff !important; color: #111 !important; }
   body:has(.report-view-page) .report-totals-row span { color: #555 !important; }
   body:has(.report-view-page) .report-result-table { max-height: none !important; overflow: visible !important; }
-  body:has(.report-view-page) .report-result-table table { min-width: 0 !important; color: #111 !important; }
+  body:has(.report-view-page) .report-result-table table { min-width: 0 !important; color: #111 !important; font-size: 9pt !important; }
   body:has(.report-view-page) .report-result-table thead { display: table-header-group; }
   body:has(.report-view-page) .report-result-table tfoot { display: table-row-group; }
   body:has(.report-view-page) .report-result-table tr { break-inside: avoid; page-break-inside: avoid; }
   body:has(.report-view-page) .report-result-table th { position: static !important; background: #fff !important; color: #111 !important; }
   body:has(.report-view-page) .report-result-table td { color: #111 !important; }
   body:has(.report-view-page) .report-result-table th,
-  body:has(.report-view-page) .report-result-table td { border-color: #aeb5b9 !important; }
-  body:has(.report-view-page) .aronium-report-footer { position: absolute; right: 0; bottom: 0; left: 0; }
+  body:has(.report-view-page) .report-result-table td { padding: 1.5mm 1.8mm !important; border-color: #aeb5b9 !important; }
+  body:has(.report-view-page) .aronium-report-footer { position: static; margin-top: 8mm; }
 }
 
 /* Trusted device, PIN unlock, and staff permission management */
