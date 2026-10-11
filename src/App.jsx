@@ -180,6 +180,7 @@ const STOCK_FILTERS = [
 ];
 
 const DOCUMENT_DRAFT_TABS_KEY = 'computer_shop_document_draft_tabs_v18';
+const PRODUCT_FORM_DRAFT_KEY = 'computer_shop_product_form_draft_v1';
 const POS_DRAFTS_KEY = 'computer_shop_pos_bill_drafts_v16';
 const QUOTE_TO_POS_KEY = 'computer_shop_quote_to_pos_invoice_v23';
 const REALTIME_SYNC_EVENT = 'shop-pos:database-change';
@@ -5181,6 +5182,13 @@ function selectAllText(event) {
   event.target.select();
 }
 
+function addDocumentItemOnEnter(event, addItem) {
+  if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.target?.tagName !== 'INPUT') return;
+  event.preventDefault();
+  event.stopPropagation();
+  addItem();
+}
+
 function emptyPurchaseLine() {
   return {
     id: createClientId(),
@@ -5525,7 +5533,6 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
     };
     const current = lines.length === 1 && !lines[0].product_id && !lines[0].description ? [] : lines;
     setLines([...current, newLine]);
-    setProductSearch('');
     setSelectedLineProduct(null);
     setLineDraft({ qty: 1, unit_cost: 0 });
   }
@@ -5757,7 +5764,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         <div className="document-edit-layout">
           <div className="document-product-tree-panel">
             <div className="inventory-search-bar compact-search">
-              <input value={productSearch} onFocus={selectAllText} onChange={(e) => setProductSearch(e.target.value)} placeholder="Product code / name / barcode" />
+              <input value={productSearch} onFocus={selectAllText} onClick={selectAllText} onChange={(e) => setProductSearch(e.target.value)} placeholder="Product code / name / barcode" />
               <button type="button" className="secondary-button" onClick={() => { setProductSearch(''); setSelectedCategoryId('all'); }}>Clear</button>
             </div>
             <DocumentProductTree
@@ -5801,7 +5808,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
         {selectedLineProduct && (
           <div className="modal-backdrop">
-            <div className="modal-card item-entry-modal">
+            <div className="modal-card item-entry-modal" onKeyDown={(event) => addDocumentItemOnEnter(event, confirmAddProductToLines)}>
               <div className="item-entry-heading"><div><span>{isTransit ? 'Add transit item' : 'Add purchase item'}</span><h3>{selectedLineProduct.name}</h3><p>{selectedLineProduct.item_code}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Close</button></div>
               <div className="item-entry-fields">
                 <label>Quantity<input type="number" min="0.001" step="0.001" value={lineDraft.qty} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, qty: e.target.value })} /></label>
@@ -6634,7 +6641,6 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
     };
     const current = lines.length === 1 && !lines[0].product_id && !lines[0].description ? [] : lines;
     setLines([...current, newLine]);
-    setProductSearch('');
     setSelectedLineProduct(null);
     setLineDraft({ qty: 1, unit_price: 0, unit_cost: 0, discount_type: 'amount', discount_value: 0 });
   }
@@ -6797,7 +6803,7 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
         <div className="document-edit-layout">
           <div className="document-product-tree-panel">
             <div className="inventory-search-bar compact-search">
-              <input value={productSearch} onFocus={selectAllText} onChange={(e) => setProductSearch(e.target.value)} placeholder="Product code / name / barcode" />
+              <input value={productSearch} onFocus={selectAllText} onClick={selectAllText} onChange={(e) => setProductSearch(e.target.value)} placeholder="Product code / name / barcode" />
               <button type="button" className="secondary-button" onClick={() => { setProductSearch(''); setSelectedCategoryId('all'); }}>Clear</button>
             </div>
             <DocumentProductTree
@@ -6841,7 +6847,7 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
 
         {selectedLineProduct && (
           <div className="modal-backdrop">
-            <div className="modal-card item-entry-modal">
+            <div className="modal-card item-entry-modal" onKeyDown={(event) => addDocumentItemOnEnter(event, confirmAddProductToQuote)}>
               <div className="item-entry-heading"><div><span>Add {isReservation ? 'reservation' : 'quotation'} item</span><h3>{selectedLineProduct.name}</h3><p>{selectedLineProduct.item_code}{isReservation ? ` · Available ${numberValue(selectedLineProduct.available_qty)}` : ''}</p></div><button type="button" className="secondary-button" onClick={() => setSelectedLineProduct(null)}>Close</button></div>
               <div className="item-entry-fields">
                 <label>Selling price<input type="number" min="0" step="0.01" value={lineDraft.unit_price} onFocus={selectAllText} onChange={(e) => setLineDraft({ ...lineDraft, unit_price: e.target.value })} autoFocus /></label>
@@ -8884,6 +8890,10 @@ function AssembliesManager() {
 }
 
 function ProductsPage({ assistantTarget = null } = {}) {
+  const [savedProductDraft] = useState(() => {
+    const draft = safeReadJson(PRODUCT_FORM_DRAFT_KEY, null);
+    return draft?.form && typeof draft.form === 'object' ? draft : null;
+  });
   const [productSection, setProductSection] = useState('products');
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -8892,14 +8902,25 @@ function ProductsPage({ assistantTarget = null } = {}) {
   const [searchBy, setSearchBy] = useState('any');
   const [search, setSearch] = useState('');
   const [filterMode, setFilterMode] = useState('category');
-  const [showForm, setShowForm] = useState(false);
-  const [editingProduct, setEditingProduct] = useState(null);
+  const [showForm, setShowForm] = useState(Boolean(savedProductDraft));
+  const [editingProduct, setEditingProduct] = useState(savedProductDraft?.editingProductId ? { product_id: savedProductDraft.editingProductId } : null);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [form, setForm] = useState(emptyProductForm());
+  const [form, setForm] = useState(() => savedProductDraft ? { ...emptyProductForm(), ...savedProductDraft.form } : emptyProductForm());
   const [updateImportStock, setUpdateImportStock] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (showForm) {
+      window.localStorage.setItem(PRODUCT_FORM_DRAFT_KEY, JSON.stringify({
+        form,
+        editingProductId: editingProduct?.product_id || null
+      }));
+    } else {
+      window.localStorage.removeItem(PRODUCT_FORM_DRAFT_KEY);
+    }
+  }, [showForm, form, editingProduct?.product_id]);
 
   useEffect(() => { loadCategories(); loadConsignmentOwners(); }, []);
   useEffect(() => {
@@ -8916,7 +8937,6 @@ function ProductsPage({ assistantTarget = null } = {}) {
     setSearchBy('code');
     setSearch(assistantTarget.item_code || assistantTarget.name || '');
     setFilterMode('search');
-    setShowForm(false);
   }, [assistantTarget?.nonce]);
 
   useEffect(() => {
@@ -8970,6 +8990,7 @@ function ProductsPage({ assistantTarget = null } = {}) {
   }
 
   async function openNewProduct() {
+    if (showForm && !window.confirm('Discard the unfinished product form and start a new product?')) return;
     setEditingProduct(null);
     setMessage('');
     setError('');
@@ -8999,6 +9020,7 @@ function ProductsPage({ assistantTarget = null } = {}) {
   }
 
   function openEditProduct(product) {
+    if (showForm && !window.confirm('Discard the unfinished product form and edit this product?')) return;
     setEditingProduct(product);
     setForm({
       id: product.product_id,
