@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './lib/supabaseClient';
 import { createPartyTransactionHistoryPdf } from './lib/partyTransactionHistoryPdf';
 import { BALANCE_APPLIED_KEY, UNPAID_BALANCE_KEY, buildPaymentAllocationRows, signedPaymentAmount } from './lib/reportPaymentAllocation';
+import { buildBalancePaymentRows } from './lib/balancePaymentReport';
 import { buildProfitMarginSummary } from './lib/profitMarginReport';
 import { applyPostingCosts, productIdsNeedingCostRefresh } from './lib/saleCostSnapshots';
 import * as XLSX from 'xlsx';
@@ -11952,6 +11953,7 @@ const REPORT_LIBRARY = [
     { id: 'profit_margin', label: 'Profit & Margin' },
     { id: 'payment_types', label: 'Payment Types' },
     { id: 'payment_types_customers', label: 'Payment Types by Customers' },
+    { id: 'customer_balance_payments', label: 'Customer Balance Payments' },
     { id: 'sales_customers', label: 'Sales by Customers' },
     { id: 'invoice_list', label: 'Invoice List' },
     { id: 'unpaid_sales', label: 'Unpaid Sales' }
@@ -11959,6 +11961,7 @@ const REPORT_LIBRARY = [
   { title: 'Purchase', reports: [
     { id: 'purchase_payment_types', label: 'Purchase Payment Types' },
     { id: 'purchase_payment_types_suppliers', label: 'Purchase Payment Types by Suppliers' },
+    { id: 'purchase_balance_payments', label: 'Purchase Balance Payments' },
     { id: 'supplier_cash_payments', label: 'Supplier Money Paid by Type' },
     { id: 'purchased_products', label: 'Purchased Products' },
     { id: 'purchase_invoices', label: 'Purchase Invoice List' },
@@ -11979,7 +11982,8 @@ const REPORT_LIBRARY = [
 
 const CUSTOMER_REPORT_FILTERS = new Set(['profit_margin', 'payment_types_customers', 'sales_customers', 'invoice_list', 'unpaid_sales', 'transaction_history']);
 const SUPPLIER_REPORT_FILTERS = new Set(['purchase_payment_types', 'purchase_payment_types_suppliers', 'supplier_cash_payments', 'purchased_products', 'purchase_invoices', 'unpaid_purchases']);
-const PAYMENT_REPORT_FILTERS = new Set(['payment_types', 'payment_types_customers', 'purchase_payment_types', 'purchase_payment_types_suppliers', 'supplier_cash_payments', 'transaction_history']);
+const BALANCE_REPORT_FILTERS = new Set(['customer_balance_payments', 'purchase_balance_payments']);
+const PAYMENT_REPORT_FILTERS = new Set(['payment_types', 'payment_types_customers', 'customer_balance_payments', 'purchase_payment_types', 'purchase_payment_types_suppliers', 'purchase_balance_payments', 'supplier_cash_payments', 'transaction_history']);
 
 function reportGroup(rows, keyForRow, seedForRow, addRow) {
   return Array.from(rows.reduce((map, row) => {
@@ -12089,7 +12093,7 @@ function ReportsPage() {
       const documentIds = rows.map((row) => row.id);
       const batches = [];
       for (let index = 0; index < documentIds.length; index += 200) batches.push(documentIds.slice(index, index + 200));
-      const financialIds = rows.filter((row) => ['invoice', 'refund', 'purchase', 'purchase_return'].includes(row.document_type)).map((row) => row.id);
+      const financialIds = rows.filter((row) => ['invoice', 'refund', 'purchase', 'purchase_return', 'customer_payment', 'supplier_payment'].includes(row.document_type)).map((row) => row.id);
       const flowBatches = [];
       for (let index = 0; index < financialIds.length; index += 200) flowBatches.push(financialIds.slice(index, index + 200));
       const [itemResults, flowResults] = await Promise.all([
@@ -12168,6 +12172,9 @@ function ReportsPage() {
     paymentMethodId
   });
   const salesCustomerRows = reportGroup(salesDocuments, (row) => row.customer_id || 'walk-in', (row, key) => ({ id: key, customer: customerMap.get(row.customer_id)?.name || 'Walk-in', invoices: 0, total: 0, paid: 0, balance: 0 }), (current, row) => { current.invoices += 1; current.total += numberValue(row.total_amount); current.paid += numberValue(row.paid_amount); current.balance += numberValue(row.balance_amount); }).sort((a, b) => b.total - a.total);
+  const settlementPartyName = (document) => customerMap.get(document.customer_id)?.name || supplierMap.get(document.supplier_id)?.name || 'Unknown profile';
+  const customerBalancePaymentRows = buildBalancePaymentRows({ documents, flows: documentFlows, side: 'sales', partyName: settlementPartyName, partyId: customerId, paymentMethodId });
+  const purchaseBalancePaymentRows = buildBalancePaymentRows({ documents, flows: documentFlows, side: 'purchase', partyName: settlementPartyName, partyId: customerId, paymentMethodId });
   const filteredCashflows = cashflows.filter((flow) => { const doc = documentMap.get(flow.document_id); if (flow.entry_type !== 'non_cash' && flow.payment_methods?.affects_cashflow === false) return false; if (customerId && doc?.customer_id !== customerId) return false; if (paymentMethodId && flow.payment_method_id !== paymentMethodId) return false; return true; });
 
   function supplierName(row) { return supplierMap.get(row.supplier_id)?.name || customerMap.get(row.customer_id)?.name || '-'; }
@@ -12196,6 +12203,14 @@ function ReportsPage() {
       rows: productPerformance
     };
     if (activeReport === 'payment_types') return { title: 'Payment Types', description: 'Payment entries attached to sales documents dated in this period. Existing customer credit and unpaid balances appear separately in Payment Types by Customers.', totals: [['Collected', money(paymentTypeRows.reduce((sum, row) => sum + row.collected, 0))], ['Refunded', money(paymentTypeRows.reduce((sum, row) => sum + row.refunded, 0))], ['Credit', money(paymentTypeRows.reduce((sum, row) => sum + row.credit, 0))]], columns: [{ key: 'method', label: 'Payment Type' }, { key: 'transactions', label: 'Entries' }, { key: 'collected', label: 'Collected', render: (row) => money(row.collected) }, { key: 'refunded', label: 'Refunded', render: (row) => money(row.refunded) }, { key: 'credit', label: 'Credit', render: (row) => money(row.credit) }, { key: 'net', label: 'Net Collected', render: (row) => money(row.collected - row.refunded) }], rows: paymentTypeRows };
+    if (activeReport === 'customer_balance_payments') return {
+      title: 'Customer Balance Payments',
+      description: 'Payments received against customer balances during the selected period. Uses the payment-document date; original invoice payments and refunds are excluded.',
+      totals: [['Payments', customerBalancePaymentRows.length], ['Received', money(customerBalancePaymentRows.reduce((sum, row) => sum + row.amount, 0))]],
+      columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Payment Document' }, { key: 'party', label: 'Customer' }, { key: 'method', label: 'Payment Type' }, { key: 'amount', label: 'Received', render: (row) => money(row.amount), className: 'report-number' }],
+      footer: { method: 'Total Received', amount: money(customerBalancePaymentRows.reduce((sum, row) => sum + row.amount, 0)) },
+      rows: customerBalancePaymentRows
+    };
     if (activeReport === 'payment_types_customers') {
       const columns = [
         { key: 'party', label: 'Customer' },
@@ -12221,6 +12236,18 @@ function ReportsPage() {
       return { title: 'Payment Types by Customers', printTitle: 'PAYMENT TYPES BY CUSTOMERS', description: 'Sale-date allocation. Customer credit used settles an earlier balance without new cash; unpaid/balance is not cash. Later customer payments are separate transactions.', totals: paymentMethodId ? [] : [['Net Sales', money(salesRevenue)], ['Allocated', money(allocatedTotal)], ['Difference', signedMoney(roundMoney(salesRevenue - allocatedTotal))]], columns, footer, rows: paymentCustomerRows };
     }
     if (activeReport === 'purchase_payment_types') return { title: 'Purchase Payment Types', description: 'Payment entries attached to purchase documents dated in this period. Later supplier payments are separate transactions.', totals: [['Paid', money(purchasePaymentTypeRows.reduce((sum, row) => sum + row.paid, 0))], ['Refunded', money(purchasePaymentTypeRows.reduce((sum, row) => sum + row.refunded, 0))], ['Credit', money(purchasePaymentTypeRows.reduce((sum, row) => sum + row.credit, 0))]], columns: [{ key: 'method', label: 'Payment Type' }, { key: 'transactions', label: 'Entries' }, { key: 'paid', label: 'Paid', render: (row) => money(row.paid), className: 'report-number' }, { key: 'refunded', label: 'Refunded', render: (row) => money(row.refunded), className: 'report-number' }, { key: 'credit', label: 'Credit / unpaid', render: (row) => money(row.credit), className: 'report-number' }, { key: 'net', label: 'Net Paid', render: (row) => money(row.paid - row.refunded), className: 'report-number' }], rows: purchasePaymentTypeRows };
+    if (activeReport === 'purchase_balance_payments') {
+      const supplierPaid = purchaseBalancePaymentRows.filter((row) => row.kind === 'Supplier balance paid').reduce((sum, row) => sum + row.amount, 0);
+      const customerCreditPaid = purchaseBalancePaymentRows.filter((row) => row.kind === 'Customer credit paid').reduce((sum, row) => sum + row.amount, 0);
+      return {
+        title: 'Purchase Balance Payments',
+        description: 'Later payouts against supplier balances, plus customer-credit payouts (including shared customer/supplier profiles). Customer-credit payouts may be refunds rather than purchase settlements, so they are shown separately. Direct purchase payments are excluded.',
+        totals: [['Supplier Balances Paid', money(supplierPaid)], ['Customer Credit Paid', money(customerCreditPaid)], ['Total Paid', money(supplierPaid + customerCreditPaid)]],
+        columns: [{ key: 'date', label: 'Date', render: (row) => fmtDate(row.document_date) }, { key: 'document_no', label: 'Payment Document' }, { key: 'party', label: 'Customer / Supplier' }, { key: 'kind', label: 'Payment For' }, { key: 'method', label: 'Payment Type' }, { key: 'amount', label: 'Paid', render: (row) => money(row.amount), className: 'report-number' }],
+        footer: { method: 'Total Paid', amount: money(supplierPaid + customerCreditPaid) },
+        rows: purchaseBalancePaymentRows
+      };
+    }
     if (activeReport === 'supplier_cash_payments') return { title: 'Supplier Money Paid by Type', description: 'Actual payment-account money moved during this period for purchases, stock in transit, and later supplier settlements. Credit entries are excluded.', totals: [['Money Paid', money(supplierMoneyRows.reduce((sum, row) => sum + row.paid, 0))], ['Refunds Received', money(supplierMoneyRows.reduce((sum, row) => sum + row.refunded, 0))], ['Net Paid', money(supplierMoneyRows.reduce((sum, row) => sum + row.paid - row.refunded, 0))]], columns: [{ key: 'method', label: 'Payment Type' }, { key: 'entries', label: 'Entries' }, { key: 'paid', label: 'Paid', render: (row) => money(row.paid), className: 'report-number' }, { key: 'refunded', label: 'Refunds', render: (row) => money(row.refunded), className: 'report-number' }, { key: 'net', label: 'Net Paid', render: (row) => money(row.paid - row.refunded), className: 'report-number' }], rows: supplierMoneyRows };
     if (activeReport === 'purchase_payment_types_suppliers') {
       const columns = [
@@ -12277,7 +12304,7 @@ function ReportsPage() {
   const reportPartyLabel = SUPPLIER_REPORT_FILTERS.has(activeReport)
     ? (supplierId ? supplierMap.get(supplierId)?.name || 'Selected supplier' : 'All')
     : (customerId ? customerMap.get(customerId)?.name || 'Selected customer' : 'All');
-  const reportPartyTitle = SUPPLIER_REPORT_FILTERS.has(activeReport) ? 'Supplier' : 'Customer';
+  const reportPartyTitle = SUPPLIER_REPORT_FILTERS.has(activeReport) ? 'Supplier' : BALANCE_REPORT_FILTERS.has(activeReport) ? 'Customer / Supplier' : 'Customer';
   const cleanSearch = reportSearch.trim().toLowerCase();
   const visibleGroups = REPORT_LIBRARY.map((group) => ({ ...group, reports: group.reports.filter((report) => `${group.title} ${report.label}`.toLowerCase().includes(cleanSearch)) })).filter((group) => group.reports.length);
 
@@ -12368,6 +12395,7 @@ function ReportsPage() {
             <label>Period<select value={periodPreset} onChange={(event) => setPeriodPreset(event.target.value)}><option value="this_month">This Month</option><option value="last_month">Last Month</option><option value="custom">Custom Range</option></select></label>
             {periodPreset === 'custom' && <><label>From<input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To<input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} /></label></>}
             {CUSTOMER_REPORT_FILTERS.has(activeReport) && <label>Customer<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">All customers</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ''}</option>)}</select></label>}
+            {BALANCE_REPORT_FILTERS.has(activeReport) && <label>Customer / Supplier<select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">All profiles</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ''}</option>)}</select></label>}
             {SUPPLIER_REPORT_FILTERS.has(activeReport) && <label>Supplier<select value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">All suppliers</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>}
             {PAYMENT_REPORT_FILTERS.has(activeReport) && <label>Payment Type<select value={paymentMethodId} onChange={(event) => setPaymentMethodId(event.target.value)}><option value="">All payment types</option>{paymentMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}</select></label>}
           </div>
