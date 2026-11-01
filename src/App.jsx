@@ -6749,7 +6749,6 @@ function QuotationDocumentForm({ document = null, documentType = 'quotation', ta
         customer_id: customerId || null,
         supplier_id: null,
         payment_method_id: null,
-        payment_method_name: null,
         total_amount: total,
         paid_amount: isReservation ? numberValue(advanceAmount) : 0,
         balance_amount: total - (isReservation ? numberValue(advanceAmount) : 0),
