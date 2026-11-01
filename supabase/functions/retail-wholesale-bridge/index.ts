@@ -78,13 +78,38 @@ async function loadTransfer(admin: any, transferId: string) {
   return data;
 }
 
+async function loadReplacement(admin: any, replacementId: string) {
+  const { data, error } = await admin
+    .from('retail_wholesale_replacements')
+    .select('*')
+    .eq('id', replacementId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Retail wholesale invoice replacement was not found.');
+  return data;
+}
+
 function validateWholesaleResponse(response: any, transfer: any) {
-  if (!response?.wholesale_document_id || !response?.wholesale_document_no || !Array.isArray(response?.lines)) {
+  const saleLines = transfer.wholesale_request?.items || [];
+  const requestedReturns = transfer.wholesale_request?.returns || [];
+  if (!Array.isArray(response?.lines)
+    || (saleLines.length > 0 && (!response?.wholesale_document_id || !response?.wholesale_document_no))) {
     throw new Error('Wholesale returned an incomplete transfer response.');
   }
   if (response.idempotency_key !== transfer.idempotency_key) throw new Error('Wholesale idempotency key did not match the Retail transfer.');
   if (response.retail_sale_reference !== transfer.retail_sale_reference) throw new Error('Wholesale sale reference did not match the Retail transfer.');
   if (response.payment_status !== 'credit') throw new Error('Wholesale transfer was not posted as credit.');
+  if (!Array.isArray(response.returns) || response.returns.length !== requestedReturns.length) {
+    throw new Error('Wholesale did not confirm every returned item.');
+  }
+  for (const requested of requestedReturns) {
+    const confirmed = response.returns.find((row: any) => row.source_retail_item_id === requested.source_retail_item_id);
+    if (!confirmed || confirmed.wholesale_product_id !== requested.wholesale_product_id
+      || Number(confirmed.qty) !== Number(requested.qty)
+      || confirmed.condition !== requested.condition || !confirmed.credit_document_id) {
+      throw new Error('Wholesale return confirmation does not match the original Retail item.');
+    }
+  }
 }
 
 async function continueTransfer(userClient: any, admin: any, bridgeSecret: string, transferId: string) {
@@ -99,10 +124,37 @@ async function continueTransfer(userClient: any, admin: any, bridgeSecret: strin
   }).eq('id', transferId);
 
   if (!transfer.wholesale_response) {
-    const wholesaleResponse = await callWholesale(bridgeSecret, {
-      method: 'POST',
-      body: JSON.stringify(transfer.wholesale_request)
-    });
+    const saleLines = transfer.wholesale_request?.items || [];
+    const requestedReturns = transfer.wholesale_request?.returns || [];
+    const saleResponse = saleLines.length
+      ? await callWholesale(bridgeSecret, {
+        method: 'POST', body: JSON.stringify({ ...transfer.wholesale_request, action: 'post_sale' })
+      })
+      : {
+        success: true, idempotency_key: transfer.idempotency_key,
+        retail_sale_reference: transfer.retail_sale_reference, payment_status: 'credit',
+        wholesale_document_id: null, wholesale_document_no: null,
+        wholesale_customer_id: null, transfer_total: 0, lines: []
+      };
+    const returns = [];
+    for (const item of requestedReturns) {
+      const result = await callWholesale(bridgeSecret, {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'post_return',
+          idempotency_key: `retail-return:${transfer.id}:${item.source_retail_item_id}`,
+          retail_sale_reference: transfer.retail_sale_reference,
+          source_retail_item_id: item.source_retail_item_id,
+          original_retail_sale_reference: item.original_retail_sale_reference,
+          original_wholesale_document_id: item.original_wholesale_document_id,
+          wholesale_product_id: item.wholesale_product_id,
+          qty: item.qty,
+          condition: item.condition
+        })
+      });
+      returns.push(result);
+    }
+    const wholesaleResponse = { ...saleResponse, returns };
     validateWholesaleResponse(wholesaleResponse, transfer);
     const { error: storeError } = await admin.from('retail_wholesale_transfers').update({
       status: 'wholesale_posted',
@@ -120,13 +172,16 @@ async function continueTransfer(userClient: any, admin: any, bridgeSecret: strin
     transfer = await loadTransfer(admin, transferId);
   }
 
-  const { data, error } = await userClient.rpc('post_retail_wholesale_transfer_v76', { p_transfer_id: transferId });
+  const { data, error } = await userClient.rpc('post_retail_wholesale_exchange_v87', { p_transfer_id: transferId });
   if (error) throw error;
   return data;
 }
 
 async function continueCancellation(userClient: any, admin: any, bridgeSecret: string, transferId: string) {
   let transfer = await loadTransfer(admin, transferId);
+  if ((transfer.wholesale_request?.returns || []).length) {
+    throw new Error('This exchange includes a Wholesale return. It cannot be cancelled independently; contact an administrator for a coordinated correction.');
+  }
   await admin.from('retail_wholesale_transfers').update({
     attempt_count: Number(transfer.attempt_count || 0) + 1,
     last_error: null,
@@ -207,11 +262,72 @@ async function continuePendingCancellation(userClient: any, admin: any, bridgeSe
   return data;
 }
 
+async function continueReplacement(userClient: any, admin: any, bridgeSecret: string, replacementId: string) {
+  let replacement = await loadReplacement(admin, replacementId);
+  await admin.from('retail_wholesale_replacements').update({
+    status: replacement.status === 'completed' ? 'completed' : 'pending',
+    attempt_count: Number(replacement.attempt_count || 0) + 1,
+    last_error: null,
+    updated_at: new Date().toISOString()
+  }).eq('id', replacementId);
+  replacement = await loadReplacement(admin, replacementId);
+
+  if (replacement.status === 'completed') {
+    const { data: invoice, error: invoiceError } = await admin
+      .from('documents')
+      .select('id, document_no')
+      .eq('id', replacement.replacement_invoice_document_id)
+      .maybeSingle();
+    if (invoiceError) throw invoiceError;
+    if (!invoice) throw new Error('The completed replacement invoice could not be found.');
+    return { invoice, replacement_id: replacement.id, already_posted: true };
+  }
+
+  if (replacement.next_step === 'cancel_original') {
+    await continueCancellation(userClient, admin, bridgeSecret, replacement.original_transfer_id);
+    const { error: prepareError } = await userClient.rpc('prepare_retail_wholesale_replacement_transfer_v88', {
+      p_replacement_id: replacement.id
+    });
+    if (prepareError) throw prepareError;
+    replacement = await loadReplacement(admin, replacementId);
+  } else if (replacement.next_step === 'prepare_replacement') {
+    const { error: prepareError } = await userClient.rpc('prepare_retail_wholesale_replacement_transfer_v88', {
+      p_replacement_id: replacement.id
+    });
+    if (prepareError) throw prepareError;
+    replacement = await loadReplacement(admin, replacementId);
+  }
+
+  if (replacement.next_step === 'post_replacement') {
+    if (!replacement.replacement_transfer_id) throw new Error('The replacement Wholesale transfer was not prepared.');
+    const result = await continueTransfer(userClient, admin, bridgeSecret, replacement.replacement_transfer_id);
+    const invoiceId = String(result?.invoice?.id || '');
+    if (!invoiceId) throw new Error('The replacement Retail invoice ID was not returned.');
+    const { error: finalizeError } = await userClient.rpc('finalize_retail_wholesale_replacement_v88', {
+      p_replacement_id: replacement.id,
+      p_invoice_document_id: invoiceId
+    });
+    if (finalizeError) throw finalizeError;
+    return { ...result, replacement_id: replacement.id, replaced: true };
+  }
+
+  if (replacement.next_step === 'post_retail_only') {
+    const { data, error } = await userClient.rpc('post_retail_wholesale_replacement_without_catalog_v88', {
+      p_replacement_id: replacement.id
+    });
+    if (error) throw error;
+    return { ...data, replaced: true };
+  }
+
+  throw new Error(`Wholesale invoice replacement cannot continue from ${replacement.next_step}.`);
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return json({ success: false, error: 'Method not allowed.' }, 405);
 
   let transferId = '';
+  let replacementId = '';
   let admin: any = null;
   let pendingTransfer = false;
   let requestedAction = 'checkout';
@@ -242,6 +358,12 @@ Deno.serve(async (request) => {
     if (action === 'retry') {
       const { error: authorizationError } = await userClient.rpc('authorize_retail_wholesale_admin_v76');
       if (authorizationError) throw authorizationError;
+      replacementId = String(body?.replacement_id || '');
+      if (replacementId) {
+        pendingTransfer = true;
+        const result = await continueReplacement(userClient, admin, bridgeSecret, replacementId);
+        return json({ success: true, ...result });
+      }
       transferId = String(body?.transfer_id || '');
       if (!transferId) throw new Error('Transfer ID is required.');
       const transfer = await loadTransfer(admin, transferId);
@@ -250,6 +372,35 @@ Deno.serve(async (request) => {
           ? await continueCancellation(userClient, admin, bridgeSecret, transferId)
           : await continuePendingCancellation(userClient, admin, bridgeSecret, transferId)
         : await continueTransfer(userClient, admin, bridgeSecret, transferId);
+      return json({ success: true, ...result });
+    }
+
+    if (action === 'replace') {
+      const retailInvoiceId = String(body?.retail_invoice_document_id || '');
+      replacementId = String(body?.replacement_id || '');
+      if (!retailInvoiceId || !replacementId || !body?.payload) {
+        throw new Error('Retail invoice ID, replacement ID and corrected payload are required.');
+      }
+      await refreshCatalog(admin, bridgeSecret);
+      const { data: prepared, error: prepareError } = await userClient.rpc('prepare_retail_wholesale_replacement_v88', {
+        p_document_id: retailInvoiceId,
+        p_replacement_id: replacementId,
+        p_payload: body.payload
+      });
+      if (prepareError) throw prepareError;
+      if (prepared?.requires_replacement !== true) {
+        replacementId = '';
+        const { data, error } = await userClient.rpc('replace_retail_wholesale_invoice_v83', {
+          p_document_id: retailInvoiceId,
+          p_header: body.payload.header,
+          p_items: body.payload.items,
+          p_payments: body.payload.payments
+        });
+        if (error) throw error;
+        return json({ success: true, invoice: data, replaced: false });
+      }
+      pendingTransfer = true;
+      const result = await continueReplacement(userClient, admin, bridgeSecret, replacementId);
       return json({ success: true, ...result });
     }
 
@@ -287,7 +438,7 @@ Deno.serve(async (request) => {
 
     // This refresh is intentionally performed immediately before checkout.
     await refreshCatalog(admin, bridgeSecret);
-    const { error: prepareError } = await userClient.rpc('prepare_retail_wholesale_transfer_v76', {
+    const { error: prepareError } = await userClient.rpc('prepare_retail_wholesale_exchange_v87', {
       p_transfer_id: transferId,
       p_payload: body.payload
     });
@@ -297,7 +448,21 @@ Deno.serve(async (request) => {
     return json({ success: true, ...result });
   } catch (error) {
     const errorMessage = messageOf(error);
-    if (admin && transferId) {
+    if (admin && replacementId) {
+      try {
+        const replacement = await loadReplacement(admin, replacementId);
+        pendingTransfer = replacement.status !== 'completed';
+        if (replacement.status !== 'completed') {
+          await admin.from('retail_wholesale_replacements').update({
+            status: 'failed',
+            last_error: errorMessage.slice(0, 2000),
+            updated_at: new Date().toISOString()
+          }).eq('id', replacementId);
+        }
+      } catch {
+        // Preparation may have failed before a durable replacement was created.
+      }
+    } else if (admin && transferId) {
       try {
         const transfer = await loadTransfer(admin, transferId);
         pendingTransfer = true;
@@ -331,6 +496,12 @@ Deno.serve(async (request) => {
         // Preparing the outbox may itself have failed, so there may be no row to mark.
       }
     }
-    return json({ success: false, pending: pendingTransfer, transfer_id: transferId || null, error: errorMessage });
+    return json({
+      success: false,
+      pending: pendingTransfer,
+      transfer_id: transferId || null,
+      replacement_id: replacementId || null,
+      error: errorMessage
+    });
   }
 });

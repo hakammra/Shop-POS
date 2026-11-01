@@ -119,6 +119,7 @@ const DOCUMENT_TYPES = [
   { value: 'quotation', label: 'Quotation' },
   { value: 'reservation', label: 'Reservation Order' },
   { value: 'purchase', label: 'Purchase' },
+  { value: 'purchase_return', label: 'Wholesale Purchase Return' },
   { value: 'stock_in_transit', label: 'Stock in Transit' },
   { value: 'stock_adjustment', label: 'Stock Adjustment' },
   { value: 'stock_condition_transfer', label: 'Stock Condition Transfer' },
@@ -1984,12 +1985,17 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
     return savedDocument;
   }
 
-  async function retryWholesaleTransfer(transferId) {
+  async function retryWholesaleTransfer(entry) {
+    const transferId = typeof entry === 'string' ? entry : entry?.id;
+    const isReplacement = typeof entry === 'object' && entry?.kind === 'replacement';
     const sourceBill = bills.find((bill) => bill.id === transferId) || null;
     setWholesaleBusy(true); setMessage('');
     try {
       const { data, error } = await supabase.functions.invoke('retail-wholesale-bridge', {
-        body: { action: 'retry', transfer_id: transferId }
+        body: {
+          action: 'retry',
+          ...(isReplacement ? { replacement_id: transferId } : { transfer_id: transferId })
+        }
       });
       if (error || !data?.success) {
         setMessage(readableError(data?.error || error, 'Wholesale transfer retry failed.'));
@@ -2005,9 +2011,10 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
         }
         if (sourceBill) closeBillById(transferId, true);
         setShowWholesaleAdmin(false);
+        const operationLabel = isReplacement ? 'Wholesale invoice correction' : 'Wholesale transfer';
         setMessage(receiptError
-          ? `Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}, but its receipt actions could not be loaded: ${readableError(receiptError, 'Unknown receipt error')}`
-          : `Wholesale transfer completed as Retail invoice ${data.invoice?.document_no || ''}.`);
+          ? `${operationLabel} completed as Retail invoice ${data.invoice?.document_no || ''}, but its receipt actions could not be loaded: ${readableError(receiptError, 'Unknown receipt error')}`
+          : `${operationLabel} completed as Retail invoice ${data.invoice?.document_no || ''}.`);
       }
       await loadPendingWholesaleTransfers(false);
       productSearchCacheRef.current.clear();
@@ -2962,11 +2969,11 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       cheque_bank_name: line.chequeBankName || null
     }));
 
-    const positiveProductIds = [...new Set(itemsPayload.filter((item) => item.product_id && Number(item.qty || 0) > 0).map((item) => item.product_id))];
-    const { data: wholesaleLinks, error: wholesaleLinkError } = positiveProductIds.length
-      ? await supabase.from('retail_wholesale_product_links').select('retail_product_id, wholesale_product_id, is_enabled').in('retail_product_id', positiveProductIds).eq('is_enabled', true)
+    const catalogProductIds = [...new Set(itemsPayload.filter((item) => item.product_id && Number(item.qty || 0) !== 0).map((item) => item.product_id))];
+    const { data: wholesaleLinks, error: wholesaleLinkError } = catalogProductIds.length
+      ? await supabase.from('retail_wholesale_product_links').select('retail_product_id, wholesale_product_id, is_enabled').in('retail_product_id', catalogProductIds)
       : { data: [], error: null };
-    const hasWholesaleItems = (wholesaleLinks || []).length > 0 || activeBill.items.some((item) => item.isWholesaleLinked && Number(item.qty || 0) > 0);
+    const hasWholesaleItems = (wholesaleLinks || []).length > 0 || activeBill.items.some((item) => item.isWholesaleLinked && Number(item.qty || 0) !== 0);
     if (wholesaleLinkError && hasWholesaleItems) {
       setSaving(false);
       setMessage('Run migration 076_retail_wholesale_bridge.sql before selling Wholesale Catalog items.');
@@ -2976,6 +2983,21 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       setSaving(false);
       setMessage('Wholesale Catalog items must be completed as a posted sale. They cannot be saved as a draft or converted from a reservation.');
       return;
+    }
+
+    let wholesaleEditInfo = null;
+    if (isEditingInvoice) {
+      const { data: editInfo, error: editInfoError } = await supabase.rpc('get_retail_wholesale_invoice_v81', {
+        p_document_id: activeBill.editInvoiceId
+      });
+      if (editInfoError) {
+        setSaving(false);
+        setMessage(/get_retail_wholesale_invoice_v81|schema cache|could not find the function/i.test(editInfoError.message || '')
+          ? 'Run migration 081_wholesale_sale_edit_and_cancellation.sql in Retail Supabase before editing finalized sales.'
+          : editInfoError.message);
+        return;
+      }
+      wholesaleEditInfo = editInfo;
     }
 
     const rpcName = isUnconfirmed
@@ -2992,7 +3014,27 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       : { p_header: payload, p_items: itemsPayload, p_payments: paymentPayload };
     let data;
     let error;
-    if (hasWholesaleItems && !isEditingInvoice) {
+    if (isEditingInvoice && wholesaleEditInfo?.is_wholesale === true) {
+      const bridgeResult = await supabase.functions.invoke('retail-wholesale-bridge', {
+        body: {
+          action: 'replace',
+          retail_invoice_document_id: activeBill.editInvoiceId,
+          replacement_id: activeBill.id,
+          payload: { header: payload, items: itemsPayload, payments: paymentPayload }
+        }
+      });
+      error = bridgeResult.error;
+      if (!error && bridgeResult.data?.success) data = bridgeResult.data.invoice;
+      else if (!error) error = bridgeResult.data?.error || { message: 'Wholesale invoice correction could not be completed.' };
+      if (error) {
+        const detail = readableError(error, 'Wholesale invoice correction could not be completed.');
+        setSaving(false);
+        setMessage(`${/prepare_retail_wholesale_replacement_v88|retail_wholesale_replacements|Unsupported bridge action|schema cache|could not find/i.test(detail)
+          ? 'Run migration 088_wholesale_invoice_replacements.sql and deploy the current retail-wholesale-bridge Edge Function. '
+          : ''}${detail}${bridgeResult.data?.pending ? ' The correction is saved for retry; an administrator can open Pending Wholesale transfers on the POS.' : ''}`);
+        return;
+      }
+    } else if (hasWholesaleItems && !isEditingInvoice) {
       const bridgeResult = await supabase.functions.invoke('retail-wholesale-bridge', {
         body: {
           action: 'checkout',
@@ -3579,7 +3621,7 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
       {showWholesaleAdmin && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowWholesaleAdmin(false); }}>
         <div className="modal-card wholesale-pending-modal">
           <div className="section-title-row">
-            <div><h3>Pending Wholesale transfers</h3><p>Safe retries reuse the original idempotency key. If Wholesale already posted, only the Retail step is retried.</p></div>
+            <div><h3>Pending Wholesale transfers and corrections</h3><p>Safe retries resume from the recorded step. Completed Wholesale actions are never posted twice.</p></div>
             <button type="button" className="secondary-button" onClick={() => setShowWholesaleAdmin(false)}>Close</button>
           </div>
           {pendingWholesaleTransfers.length === 0 ? <div className="muted-box">No pending Wholesale integrations.</div> : (
@@ -3592,8 +3634,8 @@ function POSScreen({ permissions = {}, isAdmin = false, appSettings = DEFAULT_AP
                 <td>{transfer.requested_by || '-'}</td>
                 <td className="wholesale-error-cell">{transfer.last_error || '-'}</td>
                 <td><div className="wholesale-transfer-actions">
-                  <button type="button" className="primary-button" disabled={wholesaleBusy} onClick={() => retryWholesaleTransfer(transfer.id)}>{['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step) ? 'Finish removal' : 'Retry'}</button>
-                  {!['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step) && <button type="button" className="danger-button" disabled={wholesaleBusy} onClick={() => cancelPendingWholesaleTransfer(transfer)}>Remove</button>}
+                  <button type="button" className="primary-button" disabled={wholesaleBusy} onClick={() => retryWholesaleTransfer(transfer)}>{transfer.kind === 'replacement' ? 'Retry correction' : ['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step) ? 'Finish removal' : 'Retry'}</button>
+                  {transfer.kind !== 'replacement' && !['wholesale_cancel', 'retail_cancel'].includes(transfer.next_step) && <button type="button" className="danger-button" disabled={wholesaleBusy} onClick={() => cancelPendingWholesaleTransfer(transfer)}>Remove</button>}
                 </div></td>
               </tr>)}
             </tbody></table></div>
@@ -3686,7 +3728,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       sales, cogs, grossProfit: sales - cogs, invoices: salesDocuments.length,
       refundDocuments: profitRows.filter((row) => row.hasReturn).length,
       returnsRevenue, returnsCost, returnsProfitImpact: returnsRevenue - returnsCost,
-      purchaseValue: (rangeDocsRes.data || []).filter((row) => row.document_type === 'purchase').reduce((sum, row) => sum + numberValue(row.total_amount), 0),
+      purchaseValue: (rangeDocsRes.data || []).filter((row) => ['purchase', 'purchase_return'].includes(row.document_type)).reduce((sum, row) => sum + numberValue(row.total_amount), 0),
       transitValue: (rangeDocsRes.data || []).filter((row) => row.document_type === 'stock_in_transit' && row.status !== 'converted').reduce((sum, row) => sum + numberValue(row.total_amount), 0),
       pendingCheques: (chequeRes.data || []).length,
       outstanding: (outstandingRes.data || []).reduce((sum, row) => sum + numberValue(row.balance_amount), 0), lowStock,
@@ -3707,7 +3749,7 @@ function Dashboard({ onNavigate, canViewOnlineOrders = false } = {}) {
       <article className="dashboard-metric cogs"><span>Net cost of goods sold</span><strong>{money(stats.cogs)}</strong><small>Sales cost minus returned-item cost</small><i>−</i></article>
       <article className={`dashboard-metric profit ${stats.grossProfit < 0 ? 'negative' : ''}`}><span>Gross profit</span><strong>{money(stats.grossProfit)}</strong><small>{margin.toFixed(1)}% margin · return profit impact {signedMoney(-stats.returnsProfitImpact)}</small><i>=</i></article>
       <article className="dashboard-metric cash"><span>Realized cash + bank</span><strong>{signedMoney(stats.cashIn - stats.cashOut)}</strong><small>{money(stats.cashIn)} in · {money(stats.cashOut)} out</small><i>⇅</i></article>
-      <article className="dashboard-metric purchases"><span>Purchase value</span><strong>{money(stats.purchaseValue)}</strong><small>Received purchases in this range</small><i>↓</i></article>
+      <article className="dashboard-metric purchases"><span>Net purchase value</span><strong>{money(stats.purchaseValue)}</strong><small>Received purchases less Wholesale returns in this range</small><i>↓</i></article>
       <article className="dashboard-metric transit"><span>Stock in transit</span><strong>{money(stats.transitValue)}</strong><small>Open transit documents in this range</small><i>⌛</i></article>
       <article className="dashboard-metric cheques"><span>Pending cheques</span><strong>{stats.pendingCheques}</strong><small>Received, issued, or deposited in this range</small><i>▤</i></article>
       <article className="dashboard-metric credit"><span>Customer outstanding</span><strong>{money(stats.outstanding)}</strong><small>Current open invoice balances</small><i>◷</i></article>
@@ -5357,18 +5399,18 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
 
   async function loadSuppliersAndPayments() {
     const [supplierRes, customerRes, paymentRes] = await Promise.all([
-      supabase.from('suppliers').select('id, name, phone, address').order('name', { ascending: true }).limit(1000),
+      supabase.from('suppliers').select('id, name, phone, address, party_profile_id').order('name', { ascending: true }).limit(1000),
       supabase.from('customers').select('id, name, phone, address, is_customer, is_supplier, due_balance, store_credit_balance').order('name', { ascending: true }).limit(1500),
       supabase.from('payment_methods').select('*').eq('is_active', true).order('name')
     ]);
 
     const customers = customerRes.data || [];
     const supplierRows = supplierRes.data || [];
-    const byKey = new Map();
+    const byProfileId = new Map();
+    const choices = [];
 
     for (const customer of customers) {
-      const key = `${(customer.name || '').trim().toLowerCase()}|${customer.phone || ''}`;
-      byKey.set(key, {
+      const choice = {
         name: customer.name,
         phone: customer.phone,
         address: customer.address,
@@ -5380,20 +5422,24 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
         store_credit_balance: customer.store_credit_balance || 0,
         is_supplier: customer.is_supplier,
         is_customer: customer.is_customer
-      });
+      };
+      byProfileId.set(customer.id, choice);
+      choices.push(choice);
     }
 
     for (const supplier of supplierRows) {
-      const key = `${(supplier.name || '').trim().toLowerCase()}|${supplier.phone || ''}`;
-      const current = byKey.get(key);
+      const current = byProfileId.get(supplier.party_profile_id);
       if (current) {
-        byKey.set(key, { ...current, source: 'merged', supplier_id: supplier.id, name: current.name || supplier.name, phone: current.phone || supplier.phone, address: current.address || supplier.address });
+        current.source = 'merged';
+        current.supplier_id = supplier.id;
+        current.phone = current.phone || supplier.phone;
+        current.address = current.address || supplier.address;
       } else {
-        byKey.set(key, { ...supplier, source: 'supplier', supplier_id: supplier.id, customer_id: '', label: supplier.name, due_balance: 0, store_credit_balance: 0 });
+        choices.push({ ...supplier, source: 'supplier', supplier_id: supplier.id, customer_id: '', label: supplier.name, due_balance: 0, store_credit_balance: 0 });
       }
     }
 
-    const uniqueChoices = [...byKey.values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const uniqueChoices = choices.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (supplierRes.error) setError(supplierRes.error.message);
     if (customerRes.error) setError(customerRes.error.message);
     setSuppliers(uniqueChoices);
@@ -5432,11 +5478,19 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       if (!supplierRowId) {
         const { data, error: createError } = await supabase
           .from('suppliers')
-          .insert({ name: choice.name, phone: choice.phone || null, address: choice.address || null })
+          .insert({ name: choice.name, phone: choice.phone || null, address: choice.address || null, party_profile_id: customerId })
           .select('id, name, phone, address')
           .single();
         if (createError) throw createError;
         supplierRowId = data.id;
+      } else if (!choice.party_profile_id && !choice.customer_id) {
+        const { error: linkError } = await supabase.from('suppliers').update({ party_profile_id: customerId }).eq('id', supplierRowId);
+        if (linkError) throw linkError;
+      }
+
+      if (choice.customer_id && !choice.is_supplier) {
+        const { error: roleError } = await supabase.from('customers').update({ is_supplier: true }).eq('id', customerId);
+        if (roleError) throw roleError;
       }
 
       setSupplierId(supplierRowId);
@@ -5460,7 +5514,7 @@ function PurchaseDocumentForm({ documentType: requestedDocumentType, document = 
       setError(customerError.message);
       return;
     }
-    const { data, error: supplierError } = await supabase.from('suppliers').insert({ name: cleanName, phone: quickSupplier.phone.trim() || null, email: quickSupplier.email.trim() || null, address: quickSupplier.address.trim() || null }).select('id, name, phone, address').single();
+    const { data, error: supplierError } = await supabase.from('suppliers').insert({ name: cleanName, phone: quickSupplier.phone.trim() || null, email: quickSupplier.email.trim() || null, address: quickSupplier.address.trim() || null, party_profile_id: customer.id }).select('id, name, phone, address').single();
     if (supplierError) setError(supplierError.message);
     else {
       const choice = { ...data, source: 'supplier', supplier_id: data.id, customer_id: customer.id, label: data.name };
@@ -10689,13 +10743,33 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
         if (insertError) throw insertError;
       }
 
+      const { data: savedProfiles, error: profileReloadError } = await supabase
+        .from('customers')
+        .select('id, name, phone')
+        .limit(3000);
+      if (profileReloadError) throw profileReloadError;
+      const profilesByKey = new Map();
+      (savedProfiles || []).forEach((profile) => {
+        const key = importKey(profile);
+        if (!profilesByKey.has(key)) profilesByKey.set(key, []);
+        profilesByKey.get(key).push(profile.id);
+      });
+      const supplierImportCounts = new Map();
+      payloads.filter((payload) => payload.is_supplier).forEach((payload) => {
+        const key = importKey(payload);
+        supplierImportCounts.set(key, (supplierImportCounts.get(key) || 0) + 1);
+      });
       const supplierPayloads = payloads
         .filter((payload) => payload.is_supplier)
-        .map(({ name, phone, address }) => ({ name, phone, address }));
+        .map(({ name, phone, address }) => {
+          const key = importKey({ name, phone });
+          const matchingProfiles = profilesByKey.get(key) || [];
+          return { name, phone, address, ...(matchingProfiles.length === 1 && supplierImportCounts.get(key) === 1 ? { party_profile_id: matchingProfiles[0] } : {}) };
+        });
       if (supplierPayloads.length) {
         const { data: existingSuppliers, error: supplierLoadError } = await supabase
           .from('suppliers')
-          .select('id, name, phone')
+          .select('id, name, phone, party_profile_id')
           .order('created_at', { ascending: true })
           .limit(3000);
         if (supplierLoadError) throw supplierLoadError;
@@ -10703,13 +10777,16 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
         (existingSuppliers || []).forEach((supplier) => {
           const key = importKey(supplier);
           if (!existingSuppliersByKey.has(key)) existingSuppliersByKey.set(key, []);
-          existingSuppliersByKey.get(key).push(supplier.id);
+          existingSuppliersByKey.get(key).push(supplier);
         });
         const supplierUpdates = [];
         const supplierInserts = [];
         supplierPayloads.forEach((payload) => {
-          const existingId = existingSuppliersByKey.get(importKey(payload))?.shift();
-          if (existingId) supplierUpdates.push({ id: existingId, ...payload });
+          const existingSupplier = existingSuppliersByKey.get(importKey(payload))?.shift();
+          if (existingSupplier?.party_profile_id && payload.party_profile_id && existingSupplier.party_profile_id !== payload.party_profile_id) {
+            throw new Error(`Supplier ${payload.name} is already linked to a different profile. Review it before importing.`);
+          }
+          if (existingSupplier) supplierUpdates.push({ id: existingSupplier.id, ...payload, ...(existingSupplier.party_profile_id ? { party_profile_id: existingSupplier.party_profile_id } : {}) });
           else supplierInserts.push(payload);
         });
         for (const batch of chunkRows(supplierUpdates)) {
@@ -10750,19 +10827,15 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
 
   async function loadTransactions(partyId) {
     setError('');
-    const profile = rows.find((row) => row.id === partyId);
-    let supplierIds = [];
-    if (profile) {
-      const { data: supplierMatches, error: supplierMatchError } = await supabase
-        .from('suppliers')
-        .select('id, name, phone')
-        .ilike('name', profile.name || '');
-      if (!supplierMatchError) {
-        supplierIds = (supplierMatches || [])
-          .filter((supplier) => !profile.phone || !supplier.phone || supplier.phone === profile.phone)
-          .map((supplier) => supplier.id);
-      }
+    const { data: supplierMatches, error: supplierMatchError } = await supabase
+      .from('suppliers')
+      .select('id')
+      .eq('party_profile_id', partyId);
+    if (supplierMatchError) {
+      setError(supplierMatchError.message);
+      return;
     }
+    const supplierIds = (supplierMatches || []).map((supplier) => supplier.id);
 
     const { data: customerDocs, error: docError } = await supabase
       .from('documents')
@@ -10829,7 +10902,12 @@ function CustomersSuppliersPage({ isAdmin = false, customerTarget = null, onCust
     if (insertError) setError(insertError.message);
     else {
       if (payload.is_supplier) {
-        await supabase.from('suppliers').insert({ name: payload.name, phone: payload.phone, address: payload.address });
+        const { error: supplierError } = await supabase.from('suppliers').insert({ name: payload.name, phone: payload.phone, address: payload.address, party_profile_id: data.id });
+        if (supplierError) {
+          setError(`Profile saved, but the supplier record could not be linked: ${supplierError.message}`);
+          await loadRows();
+          return;
+        }
       }
       setForm({ name: '', phone: '', address: '', is_customer: true, is_supplier: false });
       setRows((current) => [...current, data].sort((a, b) => a.name.localeCompare(b.name)));
